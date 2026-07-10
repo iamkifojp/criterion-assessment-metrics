@@ -196,6 +196,25 @@ different data models.**
 - Its job is *reading and presenting*: recency-weighted grade suggestions,
   inclusion toggles, trend charts, report cards.
 
+**⚠ Invariant: the boot load-guard never runs demo state onto a real DB.** The
+persistence layer mirrors every in-memory change straight to disk, so if the
+app booted the demo gradebook while *pointed at* a real (but momentarily
+unreadable) database, the next autosave would overwrite a year of grades. The
+guard closes that hole. At boot, `diagnose_db_load(db_path())` (`app.py`)
+classifies the configured path via `db_file_state()` (`engine/persistence.py`,
+which distinguishes **absent / ok / unreadable** — a distinction the plain
+`load_database` `None` contract hides) and refuses to proceed silently when the
+file **exists but is unreadable/malformed**, when it **parses but yields no
+students/assignments despite carrying real bytes** (`> EMPTY_DB_MAX_BYTES`), or
+when it is **absent and its parent folder/volume is itself missing** (an
+unplugged drive, an unmounted cloud folder, a disconnected share — *not* a first
+run). Any of these sets `st.session_state["db_load_blocked"] = {reason, path}`;
+`persist()` then refuses every write and a full-width **read-only quarantine**
+banner names the path and the fix (restart after repairing the file/path). Only
+an **absent file inside an existing folder** is treated as a legitimate first
+run (start empty, create on first save). This is wipe-mechanism 2 in
+[CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
+
 **⚠ The class *name* is a primary key, spread across many stores.** A class is
 identified by its name string, and that same string keys: the class entry in
 `classes`, `rosters`, `archived_students`, `unit_plans`, every assignment's

@@ -298,6 +298,37 @@ def load_database(path: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def db_file_state(path: str) -> str:
+    """Classify a database path *without* committing to a full load.
+
+    Returns one of:
+
+    - ``"absent"``     — nothing exists at ``path``.
+    - ``"unreadable"`` — a file is present but cannot be opened or parsed as a
+      JSON object (a malformed save, a transient lock, or a cloud
+      Files-On-Demand placeholder that has not finished downloading).
+    - ``"ok"``         — a file is present and parses as a JSON object.
+
+    ``load_database`` deliberately collapses "absent" and "unreadable" into a
+    single ``None`` return, which makes it impossible for a caller to tell "no
+    database here yet" (a legitimate first run) from "a database is here but we
+    could not read it" (do **not** overwrite it with demo state). This helper
+    restores that distinction for callers that need it — chiefly the boot
+    load-guard — while leaving the ``None`` contract of ``load_database``
+    untouched for everyone else.
+    """
+    if not path or not os.path.exists(path):
+        return "absent"
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, ValueError):
+        return "unreadable"
+    if not isinstance(payload, dict):
+        return "unreadable"
+    return "ok"
+
+
 # --------------------------------------------------------------------------
 # Per-class finalized term summaries (cloud "class folder" files)
 # --------------------------------------------------------------------------

@@ -68,6 +68,7 @@ from engine import (
     DEFAULT_DB_FILENAME,
     save_database,
     load_database,
+    db_file_state,
     unit_plan_to_dict,
     unit_plan_from_dict,
     Evidence,
@@ -182,6 +183,57 @@ def db_folder() -> str:
     grading caches, finalized term summaries), so all of a class's data
     travels together inside the one cloud-synced directory."""
     return os.path.dirname(os.path.abspath(db_path())) or BASE_DIR
+
+
+# A freshly-created, genuinely-empty database file is tiny (schema envelope +
+# empty gradebook, a few hundred bytes). A real year of grades is hundreds of
+# KB. So a file that carries appreciably more than an empty envelope yet
+# deserializes to zero students AND zero assignments is damaged, not a legit
+# first-run file — the boot guard quarantines it rather than letting the demo
+# session overwrite it. Generous on purpose (see Phase 1 of
+# docs/CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
+EMPTY_DB_MAX_BYTES = 4096
+
+
+def diagnose_db_load(path: str) -> Optional[dict]:
+    """Decide whether the boot hydrate may safely run against ``path``.
+
+    Returns ``None`` when it is safe to proceed with the normal load-or-start-
+    empty behaviour, or a ``{"reason": ..., "path": ...}`` dict when the app
+    must **not** silently fall back to demo state on top of a real (but
+    currently unreadable / unavailable) database. Wipe mechanism 2 in
+    docs/CROSS_DEVICE_AND_DB_SAFETY_PLAN.md: an unreadable file, an empty-but-
+    heavy file, or a configured path whose storage is gone must never be
+    replaced by the demo gradebook via the next autosave.
+
+    Reasons: ``"unreadable"`` (file present, cannot be parsed), ``"empty-load"``
+    (parses but yields no students/assignments despite carrying real bytes),
+    ``"storage-missing"`` (the file is absent *and* its parent folder / volume
+    is not currently accessible — an unplugged drive, an unmounted cloud folder,
+    a disconnected share).
+    """
+    state = db_file_state(path)
+    if state == "unreadable":
+        return {"reason": "unreadable", "path": path}
+    if state == "ok":
+        loaded = load_database(path)
+        if loaded and not (loaded["gradebook"].students
+                           or loaded["gradebook"].assignments):
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            if size > EMPTY_DB_MAX_BYTES:
+                return {"reason": "empty-load", "path": path}
+        return None
+    # state == "absent": an absent file in an existing folder is a legitimate
+    # first run (start empty, create on first save). An absent file whose parent
+    # folder / volume is itself missing is NOT a first run — never seed a fresh
+    # DB onto a reassigned drive letter or a not-yet-synced cloud folder.
+    parent = os.path.dirname(os.path.abspath(path))
+    if os.path.isdir(parent):
+        return None
+    return {"reason": "storage-missing", "path": path}
 
 
 def _safe_dirname(name: str) -> str:
@@ -412,6 +464,9 @@ def init_state() -> None:
         "staging": {},           # sig -> staged-file record (uncommitted)
         "archived": set(),       # soft-deleted assignment names
         "db_loaded": False,      # one-shot guard for boot-time DB load
+        "db_load_blocked": None,  # Phase-1 quarantine: {reason,path} when the
+                                  # configured DB is unreadable/unavailable and
+                                  # persist() must refuse to overwrite it.
         "save_status": ("", ""), # (kind, message) for last save attempt
         "prefs": DEFAULT_PREFS.copy(),  # device-local UI prefs (overwritten below)
         "classes": [],           # [{"name","grade","myp_year"}] taught this year
@@ -459,10 +514,19 @@ def init_state() -> None:
     # student marks survive across terms / refreshes for the whole school year.
     # Reads from the resolved (possibly cloud) database path.
     if not st.session_state["db_loaded"]:
-        loaded = load_database(db_path())
-        if loaded and (loaded["gradebook"].students or loaded["gradebook"].assignments):
-            st.session_state["gradebook"] = loaded["gradebook"]
-            restore_session(loaded.get("session", {}))
+        path = db_path()
+        # Load-guard (Phase 1): never let the demo session run — and then
+        # autosave — on top of a real database we merely failed to read. If the
+        # configured path is unreadable, empty-but-heavy, or on missing storage,
+        # quarantine instead of proceeding; persist() then refuses to write.
+        blocked = diagnose_db_load(path)
+        if blocked:
+            st.session_state["db_load_blocked"] = blocked
+        else:
+            loaded = load_database(path)
+            if loaded and (loaded["gradebook"].students or loaded["gradebook"].assignments):
+                st.session_state["gradebook"] = loaded["gradebook"]
+                restore_session(loaded.get("session", {}))
         st.session_state["db_loaded"] = True
 
 
@@ -636,6 +700,17 @@ def persist(show: bool = False) -> None:
     (``show=True`` surfaces a confirmation). Failures are captured rather than
     raised so a transient disk error never takes the dashboard down.
     """
+    # Phase-1 quarantine: the configured database could not be read at boot, so
+    # the in-memory state is demo/quarantine state. Writing it would clobber the
+    # real (merely unreadable) file — exactly wipe mechanism 2. Refuse; the
+    # full-width banner already explains the situation and the fix.
+    if st.session_state.get("db_load_blocked"):
+        if show:
+            st.session_state["save_status"] = (
+                "error", "Save blocked: the database is in read-only "
+                "quarantine (see the banner at the top). Fix the file or path "
+                "and restart CAM.")
+        return
     try:
         path = db_path()
         save_database(path, gb(), build_session_payload())
@@ -6478,6 +6553,39 @@ def class_dialog() -> None:
     _class_dialog_body(edit=(mode == "edit"))
 
 
+def _render_db_quarantine_banner() -> None:
+    """Full-width read-only-quarantine banner when the DB could not be loaded.
+
+    Phase 1 (docs/CROSS_DEVICE_AND_DB_SAFETY_PLAN.md): when the boot guard set
+    ``db_load_blocked``, the app is running demo/quarantine state with saving
+    disabled. Make that loud and name the configured path so the teacher knows
+    exactly which file/location to fix before restarting."""
+    blocked = st.session_state.get("db_load_blocked")
+    if not blocked:
+        return
+    path = blocked.get("path", "")
+    reason = blocked.get("reason", "")
+    if reason == "storage-missing":
+        detail = (f"Your database location **`{path}`** is unavailable — the "
+                  "drive or folder is not currently accessible (an unplugged "
+                  "USB drive, an unmounted cloud folder, or a disconnected "
+                  "network share).")
+    elif reason == "empty-load":
+        detail = (f"Your database file **`{path}`** contains data but loaded "
+                  "with no students or assignments — it may be damaged.")
+    else:  # "unreadable"
+        detail = (f"Your database file **`{path}`** exists but could not be "
+                  "read — it may be malformed, temporarily locked, or a cloud "
+                  "file that has not finished downloading.")
+    st.error(
+        f"🛑 **Database not loaded — CAM is in read-only quarantine.**\n\n"
+        f"{detail}\n\n"
+        "**Nothing will be saved** while this banner is showing, so your real "
+        "data on disk has **not** been changed. Fix the file or the path, then "
+        "restart CAM. (Do not use Settings to point somewhere else and save — "
+        "that would write this demo session out.)")
+
+
 def _render_top_bar() -> None:
     """Title + class/level selector + Add/Edit class + Settings."""
     st.title("Criterion Assessment Metrics")
@@ -6556,6 +6664,7 @@ def main() -> None:
     prefs = st.session_state["prefs"]
 
     _render_top_bar()
+    _render_db_quarantine_banner()
 
     # Three columns at the user's preferred width ratios. Each window body lives
     # in its own fixed-height scroll region (overflow-y:auto) so the whole
