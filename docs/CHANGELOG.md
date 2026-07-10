@@ -6,6 +6,44 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-11 — Boot load-guard: never run demo state against a real database (safety plan Phase 1)
+
+**Symptom:** moving CAM to a second computer left the shared cloud database
+`acm_database.json` overwritten — Crit D rows gone, folder assignments demoted
+to manual, watch folders missing. The file had been silently replaced by a
+fresh demo session that then autosaved on top of the real data.
+
+**Cause (wipe mechanism 2).** `load_database()` returns `None` for an **absent**
+file *and* for a **present-but-unreadable** one (a malformed JSON save, a
+transient lock, or a OneDrive Files-On-Demand placeholder that hasn't finished
+downloading). The boot hydrate (`app.py`) could not tell the two apart, so an
+unreadable real database looked like "no database yet": the app started on the
+`init_state` demo gradebook **still pointed at the same path**, and the next
+`persist()` — which fires after every mutation — clobbered the real file. A
+configured path on missing storage (unplugged USB, unmounted cloud folder,
+reassigned drive letter) hit the same path and could receive a fresh empty DB.
+
+**Fix.** A boot load-guard that refuses to run demo state onto a real DB:
+
+- New `db_file_state(path) -> "absent" | "ok" | "unreadable"` in
+  `engine/persistence.py` restores the absent-vs-unreadable distinction
+  (`load_database`'s `None` contract is unchanged for existing callers).
+- `diagnose_db_load()` (`app.py`) runs at boot: **unreadable**, **empty-but-
+  heavy** (parses to zero students/assignments yet `> EMPTY_DB_MAX_BYTES`), or
+  **absent-with-missing-parent-folder/volume** each set
+  `st.session_state["db_load_blocked"] = {reason, path}` instead of proceeding.
+  Only an absent file inside an **existing** folder is treated as a legitimate
+  first run (start empty, create on save).
+- While quarantined, `persist()` **refuses every write** and a full-width
+  read-only banner names the path and the fix (repair the file/path, restart).
+  Real data on disk is never touched.
+
+Sandbox-verified (corrupt JSON, empty-but-heavy file, absent-in-existing-folder,
+nonexistent volume/subfolder) and byte-compiled clean. Phase 2 (Settings path
+change adopts vs. overwrites) and Phase 3 (`persist()` shrink tripwire +
+rotating backups) close the remaining wipe paths — see
+[CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
+
 ## 2026-07-10 — Grading workspace: teacher identities move to local prefs (public-release fix)
 
 **Symptom:** after the repo was prepared for public release, opening an
