@@ -6,6 +6,58 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-11 — CGW: identities + credentials heal from the cloud (safety plan Phase 5)
+
+**Symptom it removes:** bringing the grading workspace (CGW) to a second computer
+still meant hand-carrying three device-local files — `local_device_prefs.json`
+(so the app knows which Drive accounts are *yours* and doesn't file your own
+uploads under a student), `credentials.json` (the OAuth client secret), and a
+fresh browser sign-in (`token.json`). Commit `15073c5` had already moved the
+teacher identities out of tracked source into device-local prefs for privacy, but
+portability was untouched: a new machine with only the shared OneDrive/Drive
+folder still misattributed the teacher's files and couldn't authenticate.
+
+**Fix (CGW `cam_grading_workspace/app.py`), extending the existing
+`gcg_settings.json` cloud-mirror + order-of-authority load:**
+
+- **Identities heal from the cloud mirror.** `my_identities` is now a third field
+  in `SETTINGS` (`_read_settings_file` parses it, `save_settings` mirrors it into
+  `<cloud_dir>/gcg_settings.json` alongside the class map). `load_settings()`
+  takes the **union** of the root and cloud copies — unlike the class map (where
+  the cloud copy wins), an identity is an allowlist entry whose *absence*
+  misattributes the teacher's own work, so neither machine's list is ever dropped.
+  `my_identities()` merges the (empty) public default + `SETTINGS["my_identities"]`
+  + the device-local prefs list, de-duplicated case-insensitively
+  (`_dedupe_identities`). A new machine that only knows the cloud dir already has
+  the identities — zero copying. Tracked source stays empty.
+
+- **Editable in the Settings panel.** The workspace's ⚙ Settings dialog gains a
+  *My identities* textarea (one per line) with a **Save identities** button that
+  POSTs to `/api/config` (`my_identities` accepted + de-duped there, cache
+  invalidated), so the value lands in both the root and cloud `gcg_settings.json`.
+  No more hand-editing JSON to set who "me" is. `cloud_dir` + the class map stay
+  read-only (CAM-managed) — only identities became editable.
+
+- **Client secret from the cloud dir.** `find_client_secret()` now probes
+  `<cloud_dir>/credentials.json` / `client_secret_*.json` **after** the app-root
+  candidates, so a machine with only the shared folder can authenticate. An
+  installed-app client secret is low-sensitivity (useless without a browser
+  consent); `.gitignore` excludes both name shapes regardless.
+
+- **Opt-in `token.json` bootstrap (off by default).** New device pref
+  `token_bootstrap`: when on and the local token is absent, `get_credentials()`
+  seeds it once from `<cloud_dir>/token.json` (`_maybe_bootstrap_token()`), saving
+  a browser round-trip on a new machine. It is a **one-way** seed — refreshes keep
+  writing locally only; this app never mirrors the token back to the cloud. A
+  Settings toggle exposes it with the tradeoff stated (the token grants
+  `drive.readonly` to anyone who can read the cloud folder — the teacher's call).
+
+New keys: `my_identities` in `gcg_settings.json` (root + cloud, both git-ignored);
+`token_bootstrap` (bool) in CGW `local_device_prefs.json`. Verified by a sandboxed
+harness (temp cloud dir, no real token/OAuth): identity union + `is_me`, client
+secret discovery order, one-way token seed + idempotency, and the `/api/config`
+identity round-trip through root + cloud mirror.
+
 ## 2026-07-11 — cross-device bootstrap: first-boot setup panel + CAM_DB_PATH (safety plan Phase 4)
 
 **Symptom it removes:** bringing CAM to a second computer meant hand-copying the

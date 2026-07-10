@@ -284,6 +284,21 @@ panel; established prefs boot exactly as today.
 
 ## 8. Phase 5 — CGW: identities + credentials heal from the cloud (question 2)
 
+**Status: landed 2026-07-11.** Implemented in `cam_grading_workspace/app.py`:
+`my_identities` is a third `SETTINGS` field (parsed by `_read_settings_file`,
+mirrored by `save_settings`, **unioned** root ↔ cloud by `load_settings` which
+also invalidates the identities cache); `my_identities()` merges empty default +
+settings + device prefs, de-duped by `_dedupe_identities`; `find_client_secret()`
+probes `<cloud_dir>` after the app root; the opt-in `_maybe_bootstrap_token()`
+(pref `token_bootstrap`, default off) one-way seeds an absent local token from the
+cloud dir inside `get_credentials()`. UI: a *My identities* textarea + Save
+(POST `/api/config`, which now accepts/returns `my_identities`) and a
+cloud-sign-in-seed toggle (`/api/prefs`, now carrying `token_bootstrap`). Docs:
+CHANGELOG, ARCHITECTURE (settings note + file registry), SETUP §7. Verified by a
+sandboxed harness (temp cloud dir, no real token/OAuth): identity union + `is_me`,
+client-secret discovery order, one-way token seed + idempotency, and the
+`/api/config` identity round-trip through root + cloud mirror.
+
 **Context:** commit `15073c5` already moved the teacher identities out of
 tracked source into the device-local `cam_grading_workspace/
 local_device_prefs.json` (`my_identities()` runtime merge). Privacy is solved;

@@ -133,15 +133,32 @@ successful folder launch also records a session-only **active-launch marker**
 so the post-session probe can auto-ingest the return export (§8). Exam handoffs
 skip all of this: exams don't round-trip through folder grading.
 
-**⚠ The workspace ⚙ Settings is now read-only for these fields.** Because CAM
-owns `cloud_dir` and the class map, the workspace's Settings dialog displays
+**⚠ The workspace ⚙ Settings is read-only for the CAM-managed fields.** Because
+CAM owns `cloud_dir` and the class map, the workspace's Settings dialog displays
 them but no longer lets a teacher edit them (no *Save Settings*, *+ Add class*,
-*Refresh Classes*, rename, or delete). Only the device-local **Theme** stays
-editable. This removes the failure mode where a manual edit in the workspace
-silently misrouted exports or created a class the dashboard didn't know about.
-The `POST /api/config` / `/api/config/refresh` / `/api/config/rename_class`
-endpoints still exist (CAM's seeding uses the first); only the workspace's own
-UI controls were withdrawn.
+*Refresh Classes*, rename, or delete). This removes the failure mode where a
+manual edit in the workspace silently misrouted exports or created a class the
+dashboard didn't know about. Editable in the dialog are only the fields the
+workspace owns: the device-local **Theme**, **Anonymous grading**, and the
+**cloud-sign-in seed** toggle (§Phase 5), plus **My identities** — the one
+CAM-independent piece of shared config, saved through `POST /api/config` and
+mirrored to the cloud so it heals across machines (below). The
+`/api/config/refresh` / `/api/config/rename_class` endpoints still exist (CAM's
+seeding uses `POST /api/config`); only the workspace's UI controls for the
+CAM-owned fields were withdrawn.
+
+**Identities + credentials heal from the cloud (safety plan Phase 5).** A new
+machine reaches a working CGW from the shared OneDrive/Drive folder alone:
+`gcg_settings.json` now carries `my_identities` alongside the class map (root +
+cloud mirror), and `load_settings()` takes the **union** of root and cloud copies
+— an identity's *absence* misfiles the teacher's own uploads under a student, so
+the allowlist is never narrowed by a sync. `my_identities()` merges the empty
+public default + settings + device-local prefs, de-duped case-insensitively.
+`find_client_secret()` probes `<cloud_dir>` after the app root, so
+`credentials.json` can live in the private cloud folder. An **opt-in**,
+one-way `token.json` bootstrap (device pref `token_bootstrap`, default off) seeds
+an absent local token from `<cloud_dir>/token.json` on the next sign-in; refreshes
+still write locally only — the token is never mirrored back.
 
 **Local-path master directories round-trip end-to-end (PDF/local-mode plan
 Phase 4).** Folder grading is no longer Drive-only. The class-folder *browser*
@@ -543,9 +560,9 @@ works without them.
 | `gcg_exams.json` | Flask/exam_engine | Exam definitions, keyed by class. |
 | `exam_grades_<exam>.json` | Flask/exam_engine | Per-exam question scores. |
 | `cam_grades_<folderId>.json` | Streamlit writes, Flask consumes | CAM's current grades for one folder-backed assignment, published at handoff into `[db folder]/[class]/`; deleted by the workspace once merged (§8). |
-| `token.json`, `client_secret_*.json` | Flask | Google OAuth material (read by Streamlit for Drive listing). |
-| `gcg_settings.json` | Flask, but **CAM-managed**: `cloud_dir` + class map are seeded by the Streamlit launch bridge via `POST /api/config` and shown read-only in the workspace. | Cloud-sync dir + class → Drive-folder-ID map. |
-| `local_device_prefs.json` | both (each app keeps its own copy beside its `app.py`) | Device-local UI prefs, never the shared cloud DB. CAM: db path + column widths / scroll heights. CGW: the `anonymous_grading` toggle (§8). Writers merge, so unknown keys are preserved. |
+| `token.json`, `client_secret_*.json` | Flask | Google OAuth material (read by Streamlit for Drive listing). `find_client_secret()` also probes `<cloud_dir>` after the app root; `token.json` may be opt-in seeded from `<cloud_dir>` (Phase 5). |
+| `gcg_settings.json` | Flask; `cloud_dir` + class map are **CAM-managed** (seeded by the launch bridge via `POST /api/config`, read-only in the workspace). `my_identities` is workspace-owned and editable in Settings. | Cloud-sync dir + class → Drive-folder-ID map + the teacher's own identities. Mirrored into `<cloud_dir>` so identities heal across machines (Phase 5). |
+| `local_device_prefs.json` | both (each app keeps its own copy beside its `app.py`) | Device-local UI prefs, never the shared cloud DB. CAM: db path + column widths / scroll heights. CGW: the `anonymous_grading` toggle (§8), the opt-in `token_bootstrap` toggle (Phase 5), and any `my_identities` override. Writers merge, so unknown keys are preserved. |
 
 ---
 
