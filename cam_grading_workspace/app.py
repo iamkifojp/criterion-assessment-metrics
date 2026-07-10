@@ -80,16 +80,39 @@ THUMB_MAX_WIDTH = 1600
 
 # Emails / names that belong to YOU (the teacher) and must NEVER be treated as
 # the student. Because you typically share the school folder with a personal
-# Gmail, Drive may report your school account as the "owner" of every file. List
-# every account you own here — your school login, your display name, and any
-# Gmail the folder is shared through. Matched case-insensitively as a substring,
-# so "j.smith" also matches "j.smith@school.edu".
+# Gmail, Drive may report your school account as the "owner" of every file — so
+# without this list every file you uploaded collapses under your own account
+# instead of routing to the real student. List every account you own — your
+# school login, your display name, and any Gmail the folder is shared through.
+# Matched case-insensitively as a substring, so "j.smith" also matches
+# "j.smith@school.edu".
 #
-# Fill these in for your own deployment (leave empty if not using Drive sync):
+# Keep this list EMPTY in source (it ships publicly). Put your real identities in
+# the device-local, git-ignored local_device_prefs.json instead, e.g.:
+#     { "my_identities": ["j.smith", "yourname@gmail.com"] }
+# They are merged in at runtime by my_identities() below, so nothing personal is
+# ever committed.
 MY_IDENTITIES = [
-    # "j.smith",
-    # "yourname@gmail.com",
 ]
+
+_MY_IDENTITIES_CACHE = None
+
+
+def my_identities():
+    """Effective teacher identities: the (empty) public default plus any listed
+    under "my_identities" in the device-local, git-ignored local_device_prefs.json.
+    Cached for the process; restart the app after editing prefs."""
+    global _MY_IDENTITIES_CACHE
+    if _MY_IDENTITIES_CACHE is None:
+        extra = []
+        try:
+            val = load_prefs().get("my_identities")
+            if isinstance(val, list):
+                extra = [str(x) for x in val if str(x).strip()]
+        except Exception:
+            extra = []
+        _MY_IDENTITIES_CACHE = list(MY_IDENTITIES) + extra
+    return _MY_IDENTITIES_CACHE
 
 app = Flask(__name__)
 
@@ -916,7 +939,7 @@ def is_me(identity):
         return False
     blob = ((identity.get("emailAddress") or "") + " " +
             (identity.get("displayName") or "")).lower()
-    return any(tag.lower() in blob for tag in MY_IDENTITIES if tag.strip())
+    return any(tag.lower() in blob for tag in my_identities() if tag.strip())
 
 
 def student_id_from_email(email):

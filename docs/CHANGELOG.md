@@ -6,6 +6,37 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-10 — Grading workspace: teacher identities move to local prefs (public-release fix)
+
+**Symptom:** after the repo was prepared for public release, opening an
+assignment in the grading workspace bucketed every teacher-uploaded file under a
+single phantom **teacher-owner** student instead of routing each to its real
+student — only files a student genuinely owned in Drive attributed correctly.
+No grades
+were lost: attribution is a *live Drive-read* concern, and saved grades are
+keyed by student ID in the database (verified intact — 121 students, 1262
+scores, 120 remarks/overrides).
+
+**Cause:** preparing the public repo emptied the hard-coded `MY_IDENTITIES`
+list (which must not ship real names/emails). With it empty, `is_me()` no longer
+recognised the teacher's own Drive account, so `pick_student()` — which normally
+*skips* the teacher-owner and recovers the student from `sharingUser` /
+`lastModifyingUser` — instead accepted the teacher account as the "owner" and
+grouped all shared-folder uploads under it.
+
+**Fix (`cam_grading_workspace/app.py`).** `MY_IDENTITIES` now stays **empty in
+tracked source** (it ships publicly) and real identities are merged in at
+runtime from the device-local, **git-ignored** `local_device_prefs.json` via a
+new cached `my_identities()` helper:
+
+```json
+{ "my_identities": ["j.smith", "yourname@gmail.com"] }
+```
+
+So the teacher's identity works locally but is never committed. Restart the
+workspace after editing the file (the list is cached per process); reopen /
+re-scan the assignment to re-attribute the pooled files.
+
 ## 2026-07-10 — Window 2: thumbnail-grid matching dialog (Sync/anonymous plan Phase 4)
 
 Per [SYNC_AND_ANONYMOUS_GRADING_PLAN.md](SYNC_AND_ANONYMOUS_GRADING_PLAN.md)

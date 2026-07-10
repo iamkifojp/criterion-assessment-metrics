@@ -146,9 +146,22 @@ If you use Google Drive sync, you supply your own Google OAuth client:
 2. Save it as `credentials.json` in the repo root (it is git-ignored). On first
    connect, a browser window authorizes access and a local `token.json` is
    cached.
-3. In `cam_grading_workspace/app.py`, fill in the `MY_IDENTITIES` list with the
-   account name(s)/email(s) you own, so your own uploads are never mistaken for a
-   student's work.
+3. Tell the workspace which Drive accounts are **yours**, so files you upload
+   are never mistaken for a student's work. When you share a class folder from
+   your school account to a personal Gmail, Drive reports *you* as the owner of
+   every file; the workspace needs to know that so it can re-route each file to
+   the real student instead of bucketing them all under your account. Put your
+   identities in a device-local, git-ignored `local_device_prefs.json` **inside
+   `cam_grading_workspace/`**:
+
+   ```json
+   { "my_identities": ["j.smith", "yourname@gmail.com"] }
+   ```
+
+   List your school login, display name, and any Gmail the folder is shared
+   through (matched case-insensitively as a substring). Restart the workspace
+   after editing. Keeping these in local prefs — not in the tracked source —
+   means your identity never ships to the public repo.
 
 Folder-sync grading also works **without** any Google setup: point it at a local
 folder that OneDrive/Drive already syncs to disk.
