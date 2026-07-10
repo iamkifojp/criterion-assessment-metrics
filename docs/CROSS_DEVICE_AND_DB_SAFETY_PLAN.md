@@ -181,9 +181,21 @@ storage-missing banner, `persist()` refuses, nothing created anywhere.
 - Path **unchanged**: plain `persist()` as today (layout-only saves must not
   trigger any of this).
 
+**Implementation note (landed 2026-07-11):** the new `db_custom_path` pref is
+committed **only** when the teacher picks Load or Replace — not at Save time.
+While the adopt-vs-overwrite panel is open, and if it is dismissed with Cancel or
+**ESC**, the active pref stays on the *old* location. Committing it at Save would
+reopen wipe mechanism 1 through the back door: an ESC-dismissed panel would leave
+the demo session pointed at the existing DB, and the next autosave (`persist()`
+fires after every mutation) would overwrite it. `db_path()` was split into a pure
+`resolve_db_path(custom)` resolver + the session-reading wrapper so the panel can
+inspect the *candidate* path (counts, `db_file_state`) without moving the pref.
+
 **Verify:** sandbox: repoint a demo session at a temp dir containing a rich DB →
 session shows the rich DB, file untouched; explicit-overwrite writes
-`.bak-replaced-*` first; unchanged-path Save still persists layout prefs.
+`.bak-replaced-*` first; unchanged-path Save still persists layout prefs;
+Cancel/ESC leave the pref on the old location so no autosave can reach the
+existing DB.
 
 ---
 

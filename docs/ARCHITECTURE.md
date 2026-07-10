@@ -215,6 +215,29 @@ an **absent file inside an existing folder** is treated as a legitimate first
 run (start empty, create on first save). This is wipe-mechanism 2 in
 [CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
 
+**⚠ Invariant: repointing the database path adopts an existing DB, never
+overwrites it.** In **⚙ Settings**, Save writes the device prefs but only calls
+`persist()` when it is safe to: for an **unchanged** path (a layout-only Save) or
+a **new location with no database** there. When Save changes `db_custom_path` to
+a location that **already holds a readable** `acm_database.json`, the settings
+form is replaced by an adopt-vs-overwrite panel (`_render_db_switch_panel`,
+gated by `st.session_state["db_switch_pending"]`) showing the target file's
+assignment/roster/class counts (`_db_file_counts`). **Load** (the default)
+clears `db_loaded` and re-runs the boot hydrate so the session *becomes* the
+existing database — nothing on disk is written; **Replace** is explicit,
+checkbox-gated, and snapshots the target to
+`acm_database.json.bak-replaced-<ts>` (`_backup_replaced_db`) before persisting.
+**The new `db_custom_path` pref is committed only on Load / Replace** — while
+the panel is pending, and if it is dismissed with Cancel or **ESC**, the active
+pref stays on the old location (`resolve_db_path()` is a pure resolver so the
+*candidate* path can be inspected without moving the pref). Committing the pref
+at Save time instead would let an ESC-dismissed panel leave the demo session
+pointed at the existing DB, and the next autosave would overwrite it. This is
+wipe-mechanism 1 in
+[CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md); with
+the Phase-1 boot guard it closes the two paths by which the demo session could
+clobber a real database.
+
 **⚠ The class *name* is a primary key, spread across many stores.** A class is
 identified by its name string, and that same string keys: the class entry in
 `classes`, `rosters`, `archived_students`, `unit_plans`, every assignment's

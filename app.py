@@ -27,6 +27,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -160,20 +161,27 @@ def save_prefs(prefs: dict) -> None:
         pass
 
 
-def db_path() -> str:
-    """Resolve the active database path from the custom-path preference.
+def resolve_db_path(custom: str) -> str:
+    """Resolve a custom-path preference value to a concrete database file path.
 
     Smart interpretation: a value ending in ``.json`` is used verbatim as the
     file path; any other non-empty value is treated as a directory and
     ``acm_database.json`` is placed inside it (the OneDrive/Drive folder case).
-    Blank falls back to a file beside this script.
+    Blank falls back to a file beside this script. Pure — takes the pref value
+    directly so callers (e.g. the Phase-2 settings panel) can resolve a
+    *candidate* path without mutating the active pref first.
     """
-    custom = (st.session_state.get("prefs", DEFAULT_PREFS).get("db_custom_path") or "").strip()
+    custom = (custom or "").strip()
     if not custom:
         return os.path.join(BASE_DIR, DEFAULT_DB_FILENAME)
     if custom.lower().endswith(".json"):
         return custom
     return os.path.join(custom, DEFAULT_DB_FILENAME)
+
+
+def db_path() -> str:
+    """The active database path, resolved from the current custom-path pref."""
+    return resolve_db_path(st.session_state.get("prefs", DEFAULT_PREFS).get("db_custom_path"))
 
 
 def db_folder() -> str:
@@ -467,6 +475,10 @@ def init_state() -> None:
         "db_load_blocked": None,  # Phase-1 quarantine: {reason,path} when the
                                   # configured DB is unreadable/unavailable and
                                   # persist() must refuse to overwrite it.
+        "db_switch_pending": None,  # Phase-2 adopt-vs-overwrite: {path,counts,
+                                    # old_custom} while the settings dialog asks
+                                    # whether to load an existing DB at a newly
+                                    # configured path or overwrite it.
         "save_status": ("", ""), # (kind, message) for last save attempt
         "prefs": DEFAULT_PREFS.copy(),  # device-local UI prefs (overwritten below)
         "classes": [],           # [{"name","grade","myp_year"}] taught this year
@@ -718,6 +730,47 @@ def persist(show: bool = False) -> None:
             st.session_state["save_status"] = ("ok", f"Saved to {path}.")
     except Exception as exc:  # disk full / permissions / etc.
         st.session_state["save_status"] = ("error", f"Save failed: {exc}")
+
+
+def _db_file_counts(path: str) -> dict:
+    """Assignment / roster-student / class counts for an on-disk DB file.
+
+    Read for the Phase-2 settings switch panel so the teacher can recognise the
+    database that already lives at a newly-configured path before choosing to
+    adopt or overwrite it. Best-effort and never raises — an unreadable file
+    reports zeros (the panel only shows for a file that already parsed ``ok``,
+    so this is a belt-and-braces guard)."""
+    loaded = load_database(path)
+    if not loaded:
+        return {"assignments": 0, "students": 0, "classes": 0}
+    gbk = loaded["gradebook"]
+    sess = loaded.get("session", {}) or {}
+    rosters = sess.get("rosters", {})
+    if isinstance(rosters, dict) and rosters:
+        students = sum(len(v) for v in rosters.values() if isinstance(v, list))
+    else:
+        students = len(gbk.students)
+    classes = sess.get("classes", [])
+    n_classes = len(classes) if isinstance(classes, list) else 0
+    return {"assignments": len(gbk.assignments), "students": students,
+            "classes": n_classes}
+
+
+def _backup_replaced_db(path: str) -> str:
+    """Copy an existing DB aside before the current session overwrites it.
+
+    Phase 2 (docs/CROSS_DEVICE_AND_DB_SAFETY_PLAN.md): the explicit "push my
+    current session over that file" step must never be silent — the file that
+    is about to be replaced is snapshotted to
+    ``acm_database.json.bak-replaced-<YYYYMMDD-HHMMSS>`` beside it first (the
+    ``.bak-*`` pattern is already git-ignored). Returns the backup path, or
+    ``""`` when there was nothing at ``path`` to copy."""
+    if not os.path.exists(path):
+        return ""
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = f"{path}.bak-replaced-{ts}"
+    shutil.copy2(path, backup)
+    return backup
 
 
 def calc_method_map() -> dict:
@@ -4196,6 +4249,80 @@ def build_single_docx(student) -> bytes:
 # Modal dialogs (flag-driven so widgets inside survive internal reruns)
 # --------------------------------------------------------------------------
 
+def _render_db_switch_panel(pending: dict) -> None:
+    """Adopt-vs-overwrite decision for a newly-configured path (Phase 2).
+
+    Save pointed ``db_custom_path`` at a location that **already holds** a
+    readable ``acm_database.json``. Overwriting it with the current (possibly
+    demo) session is wipe mechanism 1, so CAM never does it silently: this panel
+    offers **Load** (the default — "point my new PC at my cloud DB") or an
+    explicit, backed-up **Replace**. Rendered in place of the settings form
+    while ``db_switch_pending`` is set; every button ends with ``st.rerun()``,
+    which closes the dialog. The new path pref is committed only on Load /
+    Replace — Cancel (and an ESC-dismiss) leave it on the old location, so the
+    session is never left pointed at (and about to autosave over) this DB."""
+    path = pending["path"]
+    new_custom = pending.get("new_custom", "")
+    counts = pending.get("counts", {})
+    st.markdown("**A database already exists at this location**")
+    st.info(
+        f"`{path}`\n\n"
+        f"already contains **{counts.get('assignments', 0)} assignment(s)**, "
+        f"**{counts.get('students', 0)} student(s)** across "
+        f"**{counts.get('classes', 0)} class(es)**.")
+    st.caption("CAM will not overwrite it automatically. Choose what to do:")
+
+    if st.button("📥 Load this database into CAM", type="primary",
+                 width="stretch", key="dbsw_adopt",
+                 help="Use the database already at this location — the normal "
+                      "way to point a second computer at your cloud data. "
+                      "Nothing on disk is changed."):
+        # Commit the new path pref, then re-run the boot hydrate against it (the
+        # same code a fresh boot uses). db_load_blocked is cleared so a prior
+        # quarantine does not linger; the hydrate re-diagnoses the (ok) file.
+        prefs = st.session_state["prefs"]
+        prefs["db_custom_path"] = new_custom
+        save_prefs(prefs)
+        st.session_state["db_loaded"] = False
+        st.session_state["db_load_blocked"] = None
+        st.session_state["db_switch_pending"] = None
+        st.session_state["save_status"] = (
+            "ok", f"Loaded the existing database at {path}.")
+        st.session_state["dlg_settings"] = False
+        st.rerun()
+
+    st.markdown("---")
+    st.caption("Or replace it with the session currently open in CAM. This "
+               "overwrites the database above; a timestamped backup "
+               "(`…acm_database.json.bak-replaced-…`) is written first.")
+    overwrite_ok = st.checkbox(
+        "I understand the existing database will be overwritten",
+        key="dbsw_overwrite_cfm")
+    if st.button("♻ Replace it with the current session", disabled=not overwrite_ok,
+                 width="stretch", key="dbsw_overwrite"):
+        backup = _backup_replaced_db(path)
+        prefs = st.session_state["prefs"]
+        prefs["db_custom_path"] = new_custom  # commit the path, then write to it
+        save_prefs(prefs)
+        persist()  # writes the current session to the new (now-configured) path
+        if st.session_state.get("save_status", ("", ""))[0] != "error":
+            note = f"Overwrote {path} with the current session."
+            if backup:
+                note += f" Previous database backed up to {backup}."
+            st.session_state["save_status"] = ("ok", note)
+        st.session_state["db_switch_pending"] = None
+        st.session_state["dlg_settings"] = False
+        st.rerun()
+
+    if st.button("Cancel", key="dbsw_cancel"):
+        # Nothing to undo: the path pref was never moved off the old location
+        # (it is committed only on Load / Replace), so the session keeps
+        # pointing where it was. Just clear the decision and close.
+        st.session_state["db_switch_pending"] = None
+        st.session_state["dlg_settings"] = False
+        st.rerun()
+
+
 @st.dialog("⚙ Settings — device & data", width="large")
 def settings_dialog() -> None:
     """Per-device UI prefs + custom (cloud) database path.
@@ -4204,6 +4331,13 @@ def settings_dialog() -> None:
     the modal; everything applies on Save. Prefs persist to the device-local
     ``local_device_prefs.json`` only — never the shared database."""
     prefs = st.session_state["prefs"]
+    # Phase-2 adopt-vs-overwrite decision: when Save repointed the DB path at a
+    # location that already holds a database, the form is replaced by the switch
+    # panel until the teacher chooses (load / replace / cancel).
+    pending = st.session_state.get("db_switch_pending")
+    if pending:
+        _render_db_switch_panel(pending)
+        return
     st.caption("Saved to this device only (local_device_prefs.json), so each "
                "machine keeps its own layout while sharing one cloud database.")
     with st.form("settings_form"):
@@ -4237,10 +4371,36 @@ def settings_dialog() -> None:
         saved = st.form_submit_button("Save settings", type="primary",
                                       width="stretch")
     if saved:
-        prefs.update({"db_custom_path": custom.strip(),
-                      "col_w1": w1, "col_w2": w2, "col_w3": w3,
+        old_custom = prefs.get("db_custom_path", "")
+        new_custom = custom.strip()
+        old_resolved = os.path.normcase(os.path.abspath(resolve_db_path(old_custom)))
+        new_resolved = os.path.normcase(os.path.abspath(resolve_db_path(new_custom)))
+        path_changed = new_resolved != old_resolved
+        # Layout prefs always apply now. The db_custom_path pref is committed
+        # only once the destination is settled — see below.
+        prefs.update({"col_w1": w1, "col_w2": w2, "col_w3": w3,
                       "h1": h1, "h2": h2, "h3": h3,
                       "h_remarks": h_remarks, "h_comment": h_comment})
+        # Phase 2: repointing at a location that ALREADY holds a readable
+        # database must not overwrite it with the current session (wipe
+        # mechanism 1). Defer committing the path pref and hand off to the
+        # adopt-vs-overwrite panel — the pref stays on the OLD location until
+        # the teacher chooses, so an ESC-dismissed panel can never leave the
+        # session pointed at (and about to autosave over) the existing DB.
+        new_path = resolve_db_path(new_custom)
+        if path_changed and db_file_state(new_path) == "ok":
+            prefs["db_custom_path"] = old_custom  # keep pointing at the old path
+            save_prefs(prefs)
+            st.session_state["db_switch_pending"] = {
+                "path": new_path,
+                "new_custom": new_custom,
+                "counts": _db_file_counts(new_path),
+            }
+            _render_db_switch_panel(st.session_state["db_switch_pending"])
+            return
+        # Unchanged path (layout-only Save) or a new location with no database
+        # there: commit the path pref and persist as today (saves / creates).
+        prefs["db_custom_path"] = new_custom
         save_prefs(prefs)
         persist()  # write the database to the (possibly new) path immediately
         st.session_state["dlg_settings"] = False
