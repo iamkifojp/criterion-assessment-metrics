@@ -6,6 +6,53 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-11 — Settings path change adopts the existing database, never overwrites it (safety plan Phase 2)
+
+**Symptom:** the cross-device setup flow — fresh boot (demo `Class 1`) → open
+**⚙ Settings**, point *Custom Database Path* at the OneDrive folder → **Save** —
+silently replaced the real cloud `acm_database.json` with the demo session. The
+existing database at the new path was never loaded and never backed up.
+
+**Cause (wipe mechanism 1).** On Save, `settings_dialog` (`app.py`) wrote the
+device prefs and then called `persist()` unconditionally — mirroring the current
+in-memory session to whatever file already sat at the new path. Pointing at an
+existing database therefore *overwrote* it instead of *adopting* it.
+
+**Fix.** Save now distinguishes adopt from overwrite:
+
+- When Save **changes** `db_custom_path` and the new resolved path **already
+  holds a readable** `acm_database.json`, CAM no longer persists. It shows an
+  adopt-vs-overwrite panel (`_render_db_switch_panel`) reporting the target
+  file's assignment / roster / class counts (`_db_file_counts`):
+  - **📥 Load** (default) — reset `db_loaded` and re-run the boot hydrate so the
+    session becomes the existing database. Nothing on disk is written. This is
+    what "point my new PC at my cloud DB" means.
+  - **♻ Replace** (explicit, gated by a confirm checkbox) — snapshot the target
+    to `acm_database.json.bak-replaced-<YYYYMMDD-HHMMSS>` (`_backup_replaced_db`)
+    **first**, then persist the current session. Never silent.
+  - **Cancel** — clear the decision and close; nothing is loaded or written.
+- **Unchanged path** (layout-only Save) or a **new location with no database
+  there** keep today's behaviour: `persist()` saves / creates the file.
+
+**Extra hardening beyond the plan — the deferred path-pref commit.** The new
+`db_custom_path` is written to `local_device_prefs.json` **only** when the
+teacher chooses **Load** or **Replace**. While the switch panel is open — and if
+it is dismissed with **Cancel** or **ESC** — the active pref stays on the *old*
+location, so `db_path()` still resolves there. This closes an otherwise-subtle
+hole: had the pref been committed at Save time, an ESC-dismissed panel would
+leave the demo session pointed at the existing database, and the next autosave
+(`persist()` fires after every mutation) would overwrite it — reopening wipe
+mechanism 1 through the back door. `resolve_db_path()` was split out of
+`db_path()` so the panel can resolve and inspect the *candidate* path without
+mutating the active pref.
+
+Sandbox-verified (rich DB adopted read-only and byte-identical after; explicit
+overwrite writes exactly one `.bak-replaced-*` preserving the rich content
+before the demo session lands; unchanged-path and absent-file paths bypass the
+panel) and byte-compiled clean. Phase 3 (`persist()` shrink tripwire + rotating
+backups) is the remaining safety-core piece — see
+[CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
+
 ## 2026-07-11 — Boot load-guard: never run demo state against a real database (safety plan Phase 1)
 
 **Symptom:** moving CAM to a second computer left the shared cloud database
