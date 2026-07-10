@@ -37,6 +37,7 @@ import csv
 import glob
 import json
 import random
+import shutil
 import hashlib
 import datetime
 import threading
@@ -98,20 +99,51 @@ MY_IDENTITIES = [
 _MY_IDENTITIES_CACHE = None
 
 
+def _dedupe_identities(items):
+    """Trim, drop blanks, and de-duplicate identities case-insensitively while
+    preserving first-seen order. Identities are matched as case-insensitive
+    substrings downstream, so two spellings that differ only in case are the same
+    rule; keeping the first spelling the teacher typed is the friendly choice."""
+    seen = set()
+    out = []
+    for x in items or []:
+        s = str(x).strip()
+        if not s:
+            continue
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
+
+
 def my_identities():
-    """Effective teacher identities: the (empty) public default plus any listed
-    under "my_identities" in the device-local, git-ignored local_device_prefs.json.
-    Cached for the process; restart the app after editing prefs."""
+    """Effective teacher identities, merged from every source and de-duplicated:
+
+      1. the (empty) public default ``MY_IDENTITIES``;
+      2. ``SETTINGS["my_identities"]`` — the cloud-healing copy carried in
+         gcg_settings.json (root + cloud mirror), so a new machine that only
+         knows the cloud dir already has them (Phase 5);
+      3. ``my_identities`` in the device-local, git-ignored
+         local_device_prefs.json — the pre-Phase-5 home, kept as a per-device
+         override/addition.
+
+    Cached for the process; invalidated by load_settings() and by the settings
+    panel save. Restart the app after editing prefs by hand."""
     global _MY_IDENTITIES_CACHE
     if _MY_IDENTITIES_CACHE is None:
-        extra = []
+        merged = list(MY_IDENTITIES)
+        s = SETTINGS.get("my_identities")
+        if isinstance(s, list):
+            merged += [str(x) for x in s]
         try:
             val = load_prefs().get("my_identities")
             if isinstance(val, list):
-                extra = [str(x) for x in val if str(x).strip()]
+                merged += [str(x) for x in val]
         except Exception:
-            extra = []
-        _MY_IDENTITIES_CACHE = list(MY_IDENTITIES) + extra
+            pass
+        _MY_IDENTITIES_CACHE = _dedupe_identities(merged)
     return _MY_IDENTITIES_CACHE
 
 app = Flask(__name__)
@@ -158,24 +190,30 @@ STATE_LOCK = threading.Lock()
 # directory so a downstream dashboard can pick them up.
 SETTINGS_FILE = os.path.join(BASE_DIR, "gcg_settings.json")
 SETTINGS = {
-    "cloud_dir": "",   # local path to OneDrive/Google Drive sync folder ("" = off)
-    "classes": {},     # {"Class 7A": "<driveFolderId>", ...}
+    "cloud_dir": "",       # local path to OneDrive/Google Drive sync folder ("" = off)
+    "classes": {},         # {"Class 7A": "<driveFolderId>", ...}
+    "my_identities": [],   # teacher's own Drive accounts/names — heals from the cloud
 }
 
 
 def _read_settings_file(path):
-    """Parse one gcg_settings.json file into {cloud_dir, classes}, or None."""
+    """Parse one gcg_settings.json file into {cloud_dir, classes, my_identities},
+    or None on read failure."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f) or {}
     except Exception as e:
         print(f"Warning: could not read {path}:", e)
         return None
-    out = {"cloud_dir": str(data.get("cloud_dir", "") or "").strip(), "classes": {}}
+    out = {"cloud_dir": str(data.get("cloud_dir", "") or "").strip(),
+           "classes": {}, "my_identities": []}
     classes = data.get("classes") or {}
     if isinstance(classes, dict):
         out["classes"] = {str(k): str(v) for k, v in classes.items()
                           if str(k).strip() and str(v).strip()}
+    ids = data.get("my_identities")
+    if isinstance(ids, list):
+        out["my_identities"] = _dedupe_identities(ids)
     return out
 
 
@@ -232,7 +270,7 @@ def load_settings():
 
     Called on every startup, and again on demand by the "Force Sync" action.
     """
-    fresh = {"cloud_dir": "", "classes": {}}
+    fresh = {"cloud_dir": "", "classes": {}, "my_identities": []}
 
     root = _read_settings_file(SETTINGS_FILE) if os.path.exists(SETTINGS_FILE) else None
     if root:
@@ -247,6 +285,12 @@ def load_settings():
                 fresh["classes"] = cloud_data["classes"]
                 if cloud_data["cloud_dir"]:
                     fresh["cloud_dir"] = cloud_data["cloud_dir"]
+                # Identities are an allowlist, not a map: unlike classes (where the
+                # cloud copy wins), take the UNION of root + cloud so an identity
+                # added on either machine is never dropped — a missing identity
+                # silently misattributes the teacher's own files to a student.
+                fresh["my_identities"] = _dedupe_identities(
+                    fresh["my_identities"] + cloud_data["my_identities"])
 
         # Fill in any class present on disk but absent from the JSON maps.
         # setdefault: a name already mapped by the JSON keeps its (authoritative)
@@ -257,11 +301,17 @@ def load_settings():
     SETTINGS.clear()
     SETTINGS.update(fresh)
 
+    # SETTINGS feed my_identities(); drop its cache so the next call rebuilds
+    # from the freshly-loaded (possibly cloud-healed) identities.
+    global _MY_IDENTITIES_CACHE
+    _MY_IDENTITIES_CACHE = None
+
 
 def save_settings():
     """Write SETTINGS to the app root, then mirror into the cloud dir if set."""
     payload = {"cloud_dir": SETTINGS.get("cloud_dir", ""),
-               "classes": SETTINGS.get("classes", {})}
+               "classes": SETTINGS.get("classes", {}),
+               "my_identities": SETTINGS.get("my_identities", [])}
     targets = [SETTINGS_FILE]
     cloud = SETTINGS.get("cloud_dir", "").strip()
     if cloud and os.path.isdir(cloud):
@@ -482,18 +532,63 @@ load_settings()
 # Google authentication
 # -----------------------------------------------------------------------------
 def find_client_secret():
-    """Locate the OAuth client-secret file regardless of its exact name."""
-    candidates = [os.path.join(BASE_DIR, "credentials.json")]
-    candidates += sorted(glob.glob(os.path.join(BASE_DIR, "client_secret_*.json")))
-    candidates += sorted(glob.glob(os.path.join(BASE_DIR, "client_secret*.json")))
+    """Locate the OAuth client-secret file regardless of its exact name.
+
+    Probes the app root first, then the configured cloud dir (Phase 5) so a new
+    machine that only has the shared OneDrive/Drive folder can authenticate
+    without hand-copying credentials.json. An installed-app client secret is
+    low-sensitivity — useless without the teacher consenting in a browser — so a
+    private cloud folder is a fine home for it. .gitignore excludes both name
+    shapes from the repo regardless."""
+    def _probe(folder):
+        found = [os.path.join(folder, "credentials.json")]
+        found += sorted(glob.glob(os.path.join(folder, "client_secret_*.json")))
+        found += sorted(glob.glob(os.path.join(folder, "client_secret*.json")))
+        return found
+
+    candidates = _probe(BASE_DIR)
+    cloud = SETTINGS.get("cloud_dir", "").strip()
+    if cloud and os.path.isdir(cloud):
+        candidates += _probe(cloud)
     for path in candidates:
         if os.path.exists(path):
             return path
     return None
 
 
+def _maybe_bootstrap_token():
+    """Opt-in, one-time seeding of the local OAuth token from the cloud dir.
+
+    Off by default (device pref ``token_bootstrap``). When enabled and the local
+    ``token.json`` is absent, copy ``<cloud_dir>/token.json`` beside this app so a
+    new machine skips the browser sign-in (Phase 5). This app never mirrors the
+    token back to the cloud dir — refreshes keep writing locally only, so the
+    cloud copy is a deliberate one-way seed the teacher placed there. Tradeoff:
+    the token grants drive.readonly to anyone who can read the cloud folder, which
+    is why it is opt-in."""
+    if os.path.exists(TOKEN_FILE):
+        return
+    try:
+        if not bool(load_prefs().get("token_bootstrap")):
+            return
+    except Exception:
+        return
+    cloud = SETTINGS.get("cloud_dir", "").strip()
+    if not (cloud and os.path.isdir(cloud)):
+        return
+    src = os.path.join(cloud, "token.json")
+    if not os.path.exists(src):
+        return
+    try:
+        shutil.copyfile(src, TOKEN_FILE)
+        print("Seeded token.json from cloud dir (token_bootstrap).")
+    except Exception as e:
+        print("Warning: could not seed token from cloud dir:", e)
+
+
 def get_credentials():
     """Return valid OAuth credentials, running the local-server flow if needed."""
+    _maybe_bootstrap_token()
     creds = None
     if os.path.exists(TOKEN_FILE):
         try:
@@ -2147,26 +2242,37 @@ def api_settings():
 def api_prefs():
     """Get or set device-local prefs. Currently just the Anonymous-grading toggle.
 
-    GET  -> {anonymous_grading: bool}
-    POST {anonymous_grading: bool} -> persists to local_device_prefs.json and
-         returns the new value. The front end reloads the open assignment after
-         a change so the anonymized/real payload is rebuilt.
+    GET  -> {anonymous_grading: bool, token_bootstrap: bool}
+    POST {anonymous_grading?: bool, token_bootstrap?: bool} -> persists the given
+         keys to local_device_prefs.json and returns the new values. The front end
+         reloads the open assignment after an anonymous change so the
+         anonymized/real payload is rebuilt. token_bootstrap only takes effect on
+         the next OAuth sign-in (it seeds an absent token from the cloud dir).
     """
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
         if "anonymous_grading" in data:
             save_prefs({"anonymous_grading": bool(data["anonymous_grading"])})
-    return jsonify({"anonymous_grading": anonymous_enabled()})
+        if "token_bootstrap" in data:
+            save_prefs({"token_bootstrap": bool(data["token_bootstrap"])})
+    prefs = load_prefs()
+    return jsonify({"anonymous_grading": bool(prefs.get("anonymous_grading")),
+                    "token_bootstrap": bool(prefs.get("token_bootstrap"))})
 
 
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
-    """Get or update the app settings: cloud sync directory + class->ID map.
+    """Get or update the app settings: cloud sync dir + class->ID map + identities.
 
-    GET  -> {cloud_dir, classes, cloud_dir_exists}
-    POST -> persists {cloud_dir, classes} to gcg_settings.json (root + cloud
-            mirror) and returns the saved settings.
+    GET  -> {cloud_dir, classes, my_identities, cloud_dir_exists}
+    POST -> persists any of {cloud_dir, classes, my_identities} to
+            gcg_settings.json (root + cloud mirror) and returns the saved
+            settings. cloud_dir + classes are CAM-managed (seeded by the launch
+            bridge); my_identities is the one field the workspace's own Settings
+            panel edits, so it saves here too and heals to other machines via the
+            cloud mirror.
     """
+    global _MY_IDENTITIES_CACHE
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
         with STATE_LOCK:
@@ -2178,11 +2284,15 @@ def api_config():
                     for k, v in data["classes"].items()
                     if str(k).strip() and str(v).strip()
                 }
+            if "my_identities" in data and isinstance(data["my_identities"], list):
+                SETTINGS["my_identities"] = _dedupe_identities(data["my_identities"])
+                _MY_IDENTITIES_CACHE = None   # rebuild on next my_identities()
             save_settings()
     cloud = SETTINGS.get("cloud_dir", "").strip()
     return jsonify({
         "cloud_dir": cloud,
         "classes": SETTINGS.get("classes", {}),
+        "my_identities": SETTINGS.get("my_identities", []),
         "cloud_dir_exists": bool(cloud and os.path.isdir(cloud)),
     })
 
@@ -2203,6 +2313,7 @@ def api_config_refresh():
     return jsonify({
         "cloud_dir": cloud,
         "classes": SETTINGS.get("classes", {}),
+        "my_identities": SETTINGS.get("my_identities", []),
         "cloud_dir_exists": bool(cloud and os.path.isdir(cloud)),
     })
 
@@ -2257,6 +2368,7 @@ def api_config_rename_class():
     return jsonify({
         "cloud_dir": cloud,
         "classes": SETTINGS.get("classes", {}),
+        "my_identities": SETTINGS.get("my_identities", []),
         "cloud_dir_exists": bool(cloud and os.path.isdir(cloud)),
         "renamed": {"from": old_name, "to": new_name, **moved},
     })
@@ -3256,6 +3368,34 @@ HTML_PAGE = r"""<!DOCTYPE html>
         open a class or assignment from CAM to set them up. They're read-only
         here so the workspace and CAM can't drift out of sync.
       </div>
+      <div class="sm-classhead" style="margin-top:14px;">
+        <span>My identities (one per line) · your own Drive accounts &amp; names</span>
+      </div>
+      <textarea id="identitiesInput" rows="3"
+                placeholder="j.smith&#10;yourname@gmail.com"
+                style="width:100%;box-sizing:border-box;font-family:inherit;"></textarea>
+      <div class="sm-note">
+        Files you own must never be mistaken for a student's work. List your
+        school login, display name, and any Gmail the class folder is shared
+        through (matched case-insensitively as a substring). Saved into the cloud
+        settings, so other machines pick them up automatically. Reload the
+        assignment after saving.
+        <div style="margin-top:6px;">
+          <button id="identitiesSaveBtn" class="secondary" style="padding:4px 10px;">Save identities</button>
+        </div>
+      </div>
+      <label class="sm-anon" style="margin-top:14px;">
+        <input id="tokenBootstrapToggle" type="checkbox">
+        <span>Seed sign-in from the cloud folder (this device)</span>
+      </label>
+      <div class="sm-note">
+        When on, and you haven't signed in on this machine yet, the workspace
+        copies a <code>token.json</code> you placed in the cloud sync folder so you
+        skip the browser sign-in. Off by default. Tradeoff: that token grants
+        read-only Drive access to anyone who can read the cloud folder — your call.
+        Takes effect on the next sign-in; refreshes are always kept on this device
+        only.
+      </div>
       <div class="sm-note" style="margin-top:10px;">
         <b>Local-folder assignments</b> (a class whose master directory is a
         local path) grade here too — PDFs and images only. Student identity
@@ -3333,8 +3473,9 @@ let DEADLINE = "";            // official deadline (datetime-local string)
 let CLASS_FOLDER_ID = "";     // parent class folder currently loaded
 let ACTIVE_CLASS_NAME = "";   // selected class label -> cloud subfolder routing
 
-// App settings mirrored from /api/config: cloud sync dir + {className: folderId}.
-let SETTINGS = {cloud_dir:"", classes:{}, cloud_dir_exists:false};
+// App settings mirrored from /api/config: cloud sync dir + {className: folderId}
+// + the teacher's own identities (editable here; heals across machines).
+let SETTINGS = {cloud_dir:"", classes:{}, my_identities:[], cloud_dir_exists:false};
 
 // Default rubric template. Used only as a fallback when a folder has no saved
 // checklist yet — never mutated, so we can always restore a clean baseline.
@@ -3507,7 +3648,7 @@ async function loadConfig() {
   try {
     const res = await fetch("/api/config");
     SETTINGS = await res.json();
-  } catch (e) { console.warn("config load failed", e); SETTINGS = {cloud_dir:"", classes:{}}; }
+  } catch (e) { console.warn("config load failed", e); SETTINGS = {cloud_dir:"", classes:{}, my_identities:[]}; }
   populateClassSelect();
 }
 
@@ -3552,14 +3693,54 @@ function openSettings() {
   $("#cloudDirInput").value = SETTINGS.cloud_dir || "";
   renderCloudNote();
   renderClassRows(SETTINGS.classes || {});
+  $("#identitiesInput").value = (SETTINGS.my_identities || []).join("\n");
   $("#settingsStatus").textContent = "";
   $("#settingsOverlay").classList.remove("hidden");
-  // Anonymous-grading toggle lives in device-local prefs (server-side file), so
-  // read its current value fresh each time the modal opens.
+  // Device-local prefs (server-side file): the Anonymous-grading and
+  // token-bootstrap toggles. Read their current values fresh each open.
   fetch("/api/prefs").then(r => r.json())
-    .then(p => { $("#anonToggle").checked = !!p.anonymous_grading; })
+    .then(p => {
+      $("#anonToggle").checked = !!p.anonymous_grading;
+      $("#tokenBootstrapToggle").checked = !!p.token_bootstrap;
+    })
     .catch(() => {});
 }
+
+/* Save the editable "My identities" list to /api/config (root + cloud mirror),
+   so this device — and every other one reading the cloud folder — stops
+   mistaking the teacher's own files for a student's. */
+$("#identitiesSaveBtn").addEventListener("click", async () => {
+  const ids = $("#identitiesInput").value.split("\n")
+    .map(s => s.trim()).filter(Boolean);
+  $("#settingsStatus").textContent = "Saving identities…";
+  try {
+    const res = await fetch("/api/config", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({my_identities: ids})
+    });
+    SETTINGS = await res.json();
+    $("#identitiesInput").value = (SETTINGS.my_identities || []).join("\n");
+    $("#settingsStatus").textContent = "Identities saved. Reload the assignment to apply.";
+  } catch (e) {
+    console.warn("identities save failed", e);
+    $("#settingsStatus").textContent = "Could not save identities.";
+  }
+});
+
+/* Token-bootstrap toggle: a device-local pref, like Anonymous grading. Takes
+   effect on the next OAuth sign-in (seeds an absent token from the cloud dir). */
+$("#tokenBootstrapToggle").addEventListener("change", async () => {
+  const on = $("#tokenBootstrapToggle").checked;
+  try {
+    await fetch("/api/prefs", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({token_bootstrap: on})
+    });
+  } catch (e) { console.warn("prefs save failed", e); }
+  $("#settingsStatus").textContent = on
+    ? "Sign-in will be seeded from the cloud folder on next login."
+    : "Cloud sign-in seeding off.";
+});
 
 /* Persist the Anonymous-grading toggle, then rebuild the open assignment's
    payload so tiles + matrix switch between "Work NN" and real names at once. */

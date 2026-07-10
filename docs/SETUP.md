@@ -184,18 +184,32 @@ If you use Google Drive sync, you supply your own Google OAuth client:
    are never mistaken for a student's work. When you share a class folder from
    your school account to a personal Gmail, Drive reports *you* as the owner of
    every file; the workspace needs to know that so it can re-route each file to
-   the real student instead of bucketing them all under your account. Put your
-   identities in a device-local, git-ignored `local_device_prefs.json` **inside
-   `cam_grading_workspace/`**:
+   the real student instead of bucketing them all under your account. The
+   easiest way is the workspace's **⚙ Settings → My identities** box (one per
+   line): it saves them into `gcg_settings.json` and mirrors them to your cloud
+   sync folder, so every other machine picks them up automatically. List your
+   school login, display name, and any Gmail the folder is shared through
+   (matched case-insensitively as a substring); reload the assignment after
+   saving. (You can still set them per-device by hand in a git-ignored
+   `local_device_prefs.json` inside `cam_grading_workspace/` —
+   `{ "my_identities": ["j.smith", "yourname@gmail.com"] }` — which is merged in
+   as an override.) Either way nothing personal is ever committed: both files are
+   git-ignored, and the tracked source ships empty.
 
-   ```json
-   { "my_identities": ["j.smith", "yourname@gmail.com"] }
-   ```
+**Bringing CGW to a second computer.** Once your cloud sync folder is set, most
+of the per-machine setup heals from it:
 
-   List your school login, display name, and any Gmail the folder is shared
-   through (matched case-insensitively as a substring). Restart the workspace
-   after editing. Keeping these in local prefs — not in the tracked source —
-   means your identity never ships to the public repo.
+- **Identities** already travel in `gcg_settings.json` (above) — nothing to copy.
+- **Client secret**: you can drop `credentials.json` (or `client_secret_*.json`)
+  into the cloud sync folder instead of each repo root; the workspace probes it
+  there after the app root. An installed-app secret is unusable without your
+  browser consent, so a private cloud folder is a fine home for it.
+- **Sign-in**: signing in once per machine is the only remaining step. To skip
+  even that, place your `token.json` in the cloud folder and turn on **⚙ Settings
+  → Seed sign-in from the cloud folder** (off by default). It is a one-way seed —
+  token refreshes stay on the local machine and are never written back to the
+  cloud. Tradeoff: that token grants read-only Drive access to anyone who can
+  read the cloud folder, so leave it off unless the folder is yours alone.
 
 Folder-sync grading also works **without** any Google setup: point it at a local
 folder that OneDrive/Drive already syncs to disk.
