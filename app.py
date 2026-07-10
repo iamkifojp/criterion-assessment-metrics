@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import atexit
 import csv
+import glob
 import hashlib
 import io
 import json
@@ -705,17 +706,23 @@ def restore_session(session: dict) -> None:
             for t, mp in cmt.items() if isinstance(mp, dict)}
 
 
-def persist(show: bool = False) -> None:
+def persist(show: bool = False, allow_shrink: bool = False) -> None:
     """Write the gradebook + session state to the JSON database.
 
     Called after every mutation (auto-save) and from the manual Save button
     (``show=True`` surfaces a confirmation). Failures are captured rather than
     raised so a transient disk error never takes the dashboard down.
+
+    ``allow_shrink`` bypasses the Phase-3 shrink tripwire for a deliberate,
+    typed-confirmed mass reduction — the Danger-zone wipe and the explicit,
+    backed-up Phase-2 Replace. Every other caller (autosave included) leaves it
+    False so a catastrophic mass-loss write is refused.
     """
     # Phase-1 quarantine: the configured database could not be read at boot, so
     # the in-memory state is demo/quarantine state. Writing it would clobber the
     # real (merely unreadable) file — exactly wipe mechanism 2. Refuse; the
-    # full-width banner already explains the situation and the fix.
+    # full-width banner already explains the situation and the fix. A shrink
+    # tripwire that fired earlier this session sets the same flag (below).
     if st.session_state.get("db_load_blocked"):
         if show:
             st.session_state["save_status"] = (
@@ -725,7 +732,25 @@ def persist(show: bool = False) -> None:
         return
     try:
         path = db_path()
-        save_database(path, gb(), build_session_payload())
+        payload = build_session_payload()
+        # Phase-3 shrink tripwire: refuse a catastrophic mass-loss overwrite —
+        # a demo/quarantine session must never flatten a rich database on disk.
+        # Park the outgoing payload for inspection and raise the same read-only
+        # quarantine banner Phase 1 uses. Deliberate wipes set allow_shrink.
+        if not allow_shrink and _shrink_would_lose(path, gb(), payload):
+            parked = _park_blocked_payload(path, gb(), payload)
+            st.session_state["db_load_blocked"] = {
+                "reason": "shrink-blocked", "path": path, "parked": parked}
+            note = ("Save blocked: this would have erased most of the database "
+                    "on disk (see the banner at the top).")
+            if parked:
+                note += f" Your unsaved session was parked at {parked}."
+            st.session_state["save_status"] = ("error", note)
+            return
+        # Rotating daily backup: snapshot the existing on-disk DB the first time
+        # we persist on a new calendar day, before save_database overwrites it.
+        _rotate_daily_backup(path)
+        save_database(path, gb(), payload)
         if show:
             st.session_state["save_status"] = ("ok", f"Saved to {path}.")
     except Exception as exc:  # disk full / permissions / etc.
@@ -771,6 +796,142 @@ def _backup_replaced_db(path: str) -> str:
     backup = f"{path}.bak-replaced-{ts}"
     shutil.copy2(path, backup)
     return backup
+
+
+# ---- Phase 3: persist() shrink tripwire + rotating daily backups ---------
+# The last line of defence in docs/CROSS_DEVICE_AND_DB_SAFETY_PLAN.md. persist()
+# fires after every mutation and mirrors the whole in-memory session straight to
+# disk, so a demo / quarantine session pointed at a rich database would flatten
+# it. Before each write we compare a cheap structural "mass" of the outgoing
+# payload against the file already on disk and refuse the write when a
+# substantial database would collapse to a small fraction of its size. Generous
+# on purpose: deleting one class of several still clears the bar; wiping every
+# class to the demo gradebook does not. Danger-zone wipes and the explicit,
+# backed-up Phase-2 Replace pass ``allow_shrink=True`` (after their own typed
+# confirmation) to bypass it.
+SHRINK_MIN_ASSIGNMENTS = 10   # below this the on-disk DB is too young to guard
+SHRINK_KEEP_RATIO = 0.33      # outgoing mass must stay >= this fraction of disk
+AUTO_BACKUP_KEEP = 7          # rotating .bak-auto-<date> snapshots retained
+
+
+def _scored_student_count(gradebook: Gradebook) -> int:
+    """Students carrying at least one criterion score (any bucket non-empty)."""
+    return sum(1 for s in gradebook.students.values()
+               if any(s.scores.get(c) for c in s.scores))
+
+
+def _roster_entry_count(session: dict) -> int:
+    """Total roster entries across every class in a session payload."""
+    rosters = (session or {}).get("rosters", {})
+    if not isinstance(rosters, dict):
+        return 0
+    return sum(len(v) for v in rosters.values() if isinstance(v, list))
+
+
+def _outgoing_mass(gradebook: Gradebook, session: dict) -> int:
+    """Structural mass of the in-memory state about to be written.
+
+    ``assignments + roster entries + scored students`` — the same three
+    dimensions :func:`_ondisk_mass` reads back from the file already on disk, so
+    the two are directly comparable for the shrink tripwire."""
+    return (len(gradebook.assignments) + _roster_entry_count(session)
+            + _scored_student_count(gradebook))
+
+
+def _ondisk_mass(path: str) -> Optional[tuple]:
+    """``(n_assignments, total_mass)`` of the database already at ``path``.
+
+    Counted straight from the raw JSON without rebuilding engine objects, so the
+    shrink tripwire stays light enough to run on every persist. Returns ``None``
+    when nothing readable is there — an absent or unreadable file has no mass to
+    protect (the Phase-1 boot guard owns the unreadable-file case)."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    gbk = payload.get("gradebook", {}) or {}
+    students = gbk.get("students", []) or []
+    assignments = gbk.get("assignments", []) or []
+    n_assign = len(assignments) if isinstance(assignments, list) else 0
+    n_scored = sum(1 for s in students if isinstance(s, dict) and s.get("scores"))
+    sess = payload.get("session", {}) or {}
+    n_roster = _roster_entry_count(sess if isinstance(sess, dict) else {})
+    return (n_assign, n_assign + n_roster + n_scored)
+
+
+def _shrink_would_lose(path: str, gradebook: Gradebook, session: dict) -> bool:
+    """True when writing ``gradebook``/``session`` over ``path`` would erase most
+    of a substantial database already there (the shrink tripwire condition).
+
+    Only guards a database with real substance (``>= SHRINK_MIN_ASSIGNMENTS`` on
+    disk); a young file is expected to shrink as classes come and go. Trips when
+    the outgoing structural mass falls below ``SHRINK_KEEP_RATIO`` of the
+    on-disk mass."""
+    disk = _ondisk_mass(path)
+    if disk is None:
+        return False
+    disk_assign, disk_mass = disk
+    if disk_assign < SHRINK_MIN_ASSIGNMENTS or disk_mass <= 0:
+        return False
+    return _outgoing_mass(gradebook, session) < SHRINK_KEEP_RATIO * disk_mass
+
+
+def _park_blocked_payload(path: str, gradebook: Gradebook, session: dict) -> str:
+    """Write the refused outgoing payload aside as ``<path>.blocked-<ts>``.
+
+    So a blocked write is never simply lost: the session that would have been
+    saved is parked for inspection (via the engine's atomic writer) beside the
+    protected database. Returns the parked path, or ``""`` on failure."""
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    blocked = f"{path}.blocked-{ts}"
+    try:
+        save_database(blocked, gradebook, session)
+    except Exception:
+        return ""
+    return blocked
+
+
+def _prune_auto_backups(path: str, keep: int = AUTO_BACKUP_KEEP) -> None:
+    """Keep only the newest ``keep`` ``<path>.bak-auto-*`` snapshots.
+
+    The ``-<YYYYMMDD>`` suffix sorts chronologically, so lexicographic order is
+    date order. Only auto snapshots match the glob — manual ``.bak-replaced-*`` /
+    ``.bak-<purpose>-*`` files are never touched (see the safety rules in
+    CLAUDE.md: never prune existing ``.bak-*`` files)."""
+    if keep <= 0:
+        return
+    try:
+        snaps = sorted(glob.glob(glob.escape(path) + ".bak-auto-*"))
+    except OSError:
+        return
+    for old in snaps[:-keep]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+
+
+def _rotate_daily_backup(path: str) -> None:
+    """Snapshot the existing on-disk DB once per calendar day before it is
+    overwritten, so any future incident is at most a one-day loss even without
+    OneDrive version history.
+
+    Keyed by today's date (``<path>.bak-auto-<YYYYMMDD>``) and skipped when that
+    snapshot already exists, so it fires on the *first* persist of the day and
+    survives restarts. Best-effort — a copy failure never blocks the save."""
+    if not os.path.exists(path):
+        return
+    backup = f"{path}.bak-auto-{datetime.now().strftime('%Y%m%d')}"
+    if os.path.exists(backup):
+        return
+    try:
+        shutil.copy2(path, backup)
+    except OSError:
+        return
+    _prune_auto_backups(path)
 
 
 def calc_method_map() -> dict:
@@ -3358,7 +3519,10 @@ def wipe_database_full() -> None:
     ss["sel_assignment"] = None
     ss["edit_cell"] = None
     ensure_class_context()  # recreate the default empty class
-    persist()
+    # Deliberate, checkbox-confirmed wipe: bypass the Phase-3 shrink tripwire
+    # (that is exactly the mass loss it exists to catch). The daily .bak-auto
+    # snapshot inside persist() still captures the pre-wipe DB.
+    persist(allow_shrink=True)
 
 
 # --------------------------------------------------------------------------
@@ -4304,7 +4468,10 @@ def _render_db_switch_panel(pending: dict) -> None:
         prefs = st.session_state["prefs"]
         prefs["db_custom_path"] = new_custom  # commit the path, then write to it
         save_prefs(prefs)
-        persist()  # writes the current session to the new (now-configured) path
+        # Explicit, checkbox-confirmed, already-backed-up overwrite: bypass the
+        # Phase-3 shrink tripwire (a demo -> rich Replace is exactly the shrink
+        # it would otherwise refuse). _backup_replaced_db above is the safety net.
+        persist(allow_shrink=True)  # write the current session to the new path
         if st.session_state.get("save_status", ("", ""))[0] != "error":
             note = f"Overwrote {path} with the current session."
             if backup:
@@ -6725,7 +6892,16 @@ def _render_db_quarantine_banner() -> None:
         return
     path = blocked.get("path", "")
     reason = blocked.get("reason", "")
-    if reason == "storage-missing":
+    if reason == "shrink-blocked":
+        parked = blocked.get("parked", "")
+        parked_note = (f" Your unsaved session was set aside at **`{parked}`** "
+                       "for inspection." if parked else "")
+        detail = (f"A save to **`{path}`** was refused because it would have "
+                  "erased most of the database already on disk — the outgoing "
+                  "session held far less data (far fewer assignments, roster "
+                  "entries and graded students) than the file it would have "
+                  "replaced, so CAM stopped the write." + parked_note)
+    elif reason == "storage-missing":
         detail = (f"Your database location **`{path}`** is unavailable — the "
                   "drive or folder is not currently accessible (an unplugged "
                   "USB drive, an unmounted cloud folder, or a disconnected "

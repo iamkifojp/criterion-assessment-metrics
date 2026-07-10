@@ -6,6 +6,65 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-11 — persist() shrink tripwire + rotating daily backups (safety plan Phase 3)
+
+**Symptom it prevents:** the persistence layer mirrors every in-memory change
+straight to disk after each mutation, so *any* future path that leaves the
+session holding far less than the database on disk — a demo/quarantine session, a
+half-loaded state, a bug in a bulk operation — would silently overwrite a whole
+year of grades with a fraction of it. Phases 1–2 close the two known wipe
+mechanisms; this is the catch-all behind them so a *novel* mass-loss write can
+never destroy the only copy.
+
+**Fix (CAM `app.py`), two independent guards in `persist()`:**
+
+- **Shrink tripwire.** Before each write, a cheap structural **mass** —
+  `assignments + roster entries + scored students` — of the outgoing session is
+  compared against the file already on disk (`_ondisk_mass()` reads it straight
+  from the raw JSON, no engine-object rebuild, so it is light enough to run on
+  every autosave). When the on-disk DB has real substance
+  (`≥ SHRINK_MIN_ASSIGNMENTS` = 10 assignments) **and** the outgoing mass would
+  fall below `SHRINK_KEEP_RATIO` (33%) of it, the write is **refused**: the
+  outgoing payload is parked as `acm_database.json.blocked-<ts>`
+  (`_park_blocked_payload`, via the engine's atomic writer) and the same
+  `db_load_blocked` read-only quarantine banner Phase 1 raises is shown (new
+  reason `"shrink-blocked"`). The threshold is deliberately generous — deleting
+  one class of several still clears it (`delete_class()` uses a plain `persist()`
+  and passes), while flattening every class to the demo gradebook does not.
+- **Rotating daily backups.** The **first** successful persist of each calendar
+  day copies the existing on-disk DB to `acm_database.json.bak-auto-<YYYYMMDD>`
+  **before** it is overwritten (`_rotate_daily_backup`), keyed by today's date so
+  it fires once per day and survives restarts, pruned to the newest
+  `AUTO_BACKUP_KEEP` (7). Turns any future incident into a ≤1-day loss even
+  without OneDrive version history. Pruning only ever removes `.bak-auto-*`;
+  manual `.bak-replaced-*` / `.bak-<purpose>-*` snapshots are never touched.
+
+**Deliberate reductions bypass the tripwire** via a new
+`persist(allow_shrink=True)` — the Danger-zone **Wipe entire database**
+(`wipe_database_full()`) and the Phase-2 **Replace** button (already checkbox-
+gated and `.bak-replaced-` backed-up); both are exactly the mass loss the
+tripwire exists to catch, so they opt out after their own typed confirmation. The
+daily `.bak-auto` snapshot inside `persist()` still captures the pre-wipe DB.
+Every other caller (autosave included) leaves `allow_shrink` False.
+
+Once the tripwire fires, `persist()` refuses every subsequent write (the
+`db_load_blocked` guard) until the teacher restarts — on restart the healthy
+on-disk DB reloads untouched. `.gitignore` gains `acm_database.json.blocked-*`
+(the `.bak-*` pattern already covers the auto backups).
+
+Sandbox-verified (23-check harness, fake Streamlit + temp data home, never real
+prefs): mass math and the shrink decision (demo-over-rich trips, rich-over-rich
+and a 75%-mass single-class deletion pass, a `<10`-assignment DB is never
+guarded, an absent target creates freely); `persist()` blocks the demo-over-rich
+overwrite leaving the on-disk file byte-identical, parks a `.blocked-*`, sets the
+quarantine flag, and refuses follow-up writes; `allow_shrink=True` writes the
+reduction through with no quarantine; a normal growth edit persists; and the
+daily backup creates exactly one dated `.bak-auto-*`, is a no-op on the same-day
+second call, prunes to 7 keeping the newest, and never removes a manual `.bak-*`.
+Byte-compiled clean. This completes the safety core (Phases 1–3); Phases 4–5
+(cross-device bootstrap, CGW cloud-healing) remain — see
+[CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
+
 ## 2026-07-11 — Settings path change adopts the existing database, never overwrites it (safety plan Phase 2)
 
 **Symptom:** the cross-device setup flow — fresh boot (demo `Class 1`) → open
