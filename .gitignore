@@ -68,6 +68,7 @@ thumb_cache/
 *roster*.csv
 *Roster*.csv
 acm_database.json.bak-*
+acm_database.json.blocked-*
 acm_term_summaries_*.json
 *.docx
 *.pdf

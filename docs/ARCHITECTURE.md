@@ -238,6 +238,33 @@ wipe-mechanism 1 in
 the Phase-1 boot guard it closes the two paths by which the demo session could
 clobber a real database.
 
+**⚠ Invariant: `persist()` refuses a catastrophic mass-loss write (shrink
+tripwire) and keeps rotating daily backups.** The last line of defence behind the
+two wipe-mechanism guards above: whatever future code path produces a
+mass-reducing write, it cannot destroy the only copy. Before each save,
+`persist()` (`app.py`) compares a cheap structural **mass** —
+`assignments + roster entries + scored students`, read from the file already on
+disk via `_ondisk_mass()` (raw JSON, no engine objects, so it is light enough to
+run on every autosave) — against the outgoing session (`_outgoing_mass()`). When
+the on-disk DB has real substance (`≥ SHRINK_MIN_ASSIGNMENTS`, currently 10) and
+the outgoing mass would fall below `SHRINK_KEEP_RATIO` (0.33) of it, the write is
+**refused**: the outgoing payload is parked as `acm_database.json.blocked-<ts>`
+for inspection and the same `db_load_blocked` read-only quarantine banner is
+raised (reason `"shrink-blocked"`). The threshold is deliberately generous —
+deleting one class of several still clears it (`delete_class()` uses a plain
+`persist()` and passes), while flattening every class to the demo gradebook does
+not. Two **deliberate, typed-confirmed** reductions bypass it with
+`persist(allow_shrink=True)`: the Danger-zone **Wipe entire database**
+(`wipe_database_full()`) and the Phase-2 **Replace** (already checkbox-gated and
+`.bak-replaced-` backed-up). Independently, the **first** `persist()` of each
+calendar day snapshots the existing on-disk DB to `acm_database.json.bak-auto-
+<YYYYMMDD>` *before* it is overwritten (`_rotate_daily_backup()`), pruned to the
+newest `AUTO_BACKUP_KEEP` (7) — so any future incident is at most a one-day loss
+even without OneDrive version history. Pruning only ever removes `.bak-auto-*`;
+manual `.bak-replaced-*` / `.bak-<purpose>-*` snapshots are never touched. This is
+Phase 3 in
+[CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
+
 **⚠ The class *name* is a primary key, spread across many stores.** A class is
 identified by its name string, and that same string keys: the class entry in
 `classes`, `rosters`, `archived_students`, `unit_plans`, every assignment's
