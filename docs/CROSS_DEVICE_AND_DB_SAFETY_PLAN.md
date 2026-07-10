@@ -227,6 +227,15 @@ deletion passes; day-rollover creates exactly one `.bak-auto-*` and prunes to 7.
 
 ## 7. Phase 4 — Cross-device bootstrap (question 1: "easier way to bring settings across")
 
+**Status: landed 2026-07-11.** Implemented in `app.py`: `_needs_first_boot_setup()`
+gate (blank `db_custom_path` + unset `setup_done` pref + no `CAM_DB_PATH`), the
+`_render_first_boot_setup()` panel, cloud discovery (`discover_db_candidates()` /
+`_cloud_search_roots()` / `_scan_for_db_files()`), the shared `_adopt_db_path()`
+commit-and-rehydrate, the deferred boot hydrate in `init_state()` + the `main()`
+gate, and the `CAM_DB_PATH` override in `db_path()`. Docs: CHANGELOG, ARCHITECTURE
+invariant, SETUP §4/§5. Verified by a sandboxed harness (discovery against fake
+cloud roots, the gate decision table, the env override, and a render smoke test).
+
 **Goal:** a second computer reaches the shared DB without hand-copying
 `local_device_prefs.json` — and without ever being able to wipe it (Phases 1-3
 are the safety; this is the convenience).

@@ -137,6 +137,13 @@ DEFAULT_PREFS = {
     "col_w1": 4, "col_w2": 3, "col_w3": 5,   # 3-column width ratios
     "h1": 520, "h2": 520, "h3": 640,         # per-window scroll heights (px)
     "h_remarks": 80, "h_comment": 90,        # Window 3 editable text-area heights (px)
+    # Phase-4 first-boot bootstrap marker: False (or a missing prefs file) means
+    # this machine has not yet chosen a data home, so CAM shows the one-time
+    # setup panel instead of silently booting the sample DB. Set True by any of
+    # the panel's choices (adopt a discovered DB / use another folder / start
+    # fresh) so the panel never nags again — even for "start fresh", which keeps
+    # db_custom_path blank. See docs/CROSS_DEVICE_AND_DB_SAFETY_PLAN.md Phase 4.
+    "setup_done": False,
 }
 
 
@@ -181,7 +188,18 @@ def resolve_db_path(custom: str) -> str:
 
 
 def db_path() -> str:
-    """The active database path, resolved from the current custom-path pref."""
+    """The active database path, resolved from the current custom-path pref.
+
+    The ``CAM_DB_PATH`` environment variable overrides the pref entirely (Phase
+    4): a one-liner new-machine setup, and — crucially — a way for tests and
+    harnesses to force a sandbox path that **cannot** fall through to the real
+    device prefs (which point at live OneDrive data). Set it and the app can
+    never resolve the teacher's real data folder, closing the ``.wiped-by-test``
+    hazard class. It is resolved through the same folder-or-.json logic as the
+    pref. See docs/CROSS_DEVICE_AND_DB_SAFETY_PLAN.md Phase 4."""
+    env = os.environ.get("CAM_DB_PATH", "").strip()
+    if env:
+        return resolve_db_path(env)
     return resolve_db_path(st.session_state.get("prefs", DEFAULT_PREFS).get("db_custom_path"))
 
 
@@ -192,6 +210,129 @@ def db_folder() -> str:
     grading caches, finalized term summaries), so all of a class's data
     travels together inside the one cloud-synced directory."""
     return os.path.dirname(os.path.abspath(db_path())) or BASE_DIR
+
+
+# --- Phase-4 cross-device bootstrap: discover an existing cloud database -----
+# A second computer should reach the shared database without hand-copying
+# local_device_prefs.json. The first-boot setup panel probes well-known cloud-
+# mirror roots for a folder holding acm_database.json and offers each as a
+# candidate; the teacher recognises the real one by its assignment/roster counts.
+# Convenience only — the safety guards (Phases 1-3) are what actually protect the
+# file; this just saves the manual path-paste. USB/removable drives are
+# deliberately NOT auto-scanned (Phase 1's storage-missing quarantine is the
+# safety net for a forgotten drive); the teacher points at those via "Use another
+# folder". See docs/CROSS_DEVICE_AND_DB_SAFETY_PLAN.md Phase 4.
+
+# Directory names never worth descending into during the shallow scan — noisy,
+# huge, or system trees that will not hold a teacher's cloud data folder.
+_SCAN_SKIP_DIRS = {
+    "node_modules", "__pycache__", ".git", ".svn", "$recycle.bin",
+    "system volume information", "windows", "program files",
+    "program files (x86)", "programdata", "appdata", "thumb_cache",
+    ".thumbnails", "cache", ".cache", "venv", ".venv", "site-packages",
+}
+# Hard cap on directories visited per root so a pathologically large cloud tree
+# can never hang the first-boot panel; depth ≤ 3 already bounds it in practice.
+_SCAN_MAX_DIRS = 6000
+
+
+def _cloud_search_roots() -> list:
+    """Well-known local cloud-mirror roots to probe for a CAM data folder.
+
+    OneDrive, Google Drive for Desktop and Dropbox, discovered from their
+    standard environment variables / mount points / config, de-duplicated and
+    filtered to those that actually exist on this machine. Best-effort — a
+    missing service simply contributes no roots."""
+    roots: list = []
+
+    def add(path: str) -> None:
+        if not path:
+            return
+        try:
+            if os.path.isdir(path):
+                key = os.path.normcase(os.path.abspath(path))
+                if key not in {os.path.normcase(os.path.abspath(r)) for r in roots}:
+                    roots.append(path)
+        except OSError:
+            pass
+
+    # OneDrive (personal + the two business-tenant variables).
+    for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        add(os.environ.get(var, ""))
+    home = os.path.expanduser("~")
+    # Google Drive for Desktop: the virtualised "My Drive" under the profile,
+    # a legacy "Google Drive" folder, and the DriveFS letter mounts (G:\My Drive
+    # etc. — Drive defaults to G: but the letter is user-configurable).
+    add(os.path.join(home, "My Drive"))
+    add(os.path.join(home, "Google Drive"))
+    for letter in "GHIJKLMNOPQRSTUVWXYZ":
+        add(f"{letter}:\\My Drive")
+    # Dropbox: the default profile folder, plus any account paths recorded in
+    # info.json (Dropbox's own location file) when the folder was moved.
+    add(os.path.join(home, "Dropbox"))
+    try:
+        info = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Dropbox", "info.json")
+        with open(info, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            for acct in data.values():
+                if isinstance(acct, dict):
+                    add(acct.get("path", ""))
+    except (OSError, ValueError):
+        pass
+    return roots
+
+
+def _scan_for_db_files(root: str, max_depth: int) -> list:
+    """Shallow walk under ``root`` (directory depth ≤ ``max_depth``) collecting
+    every ``acm_database.json``. Prunes system/noise directories and caps total
+    directories visited so a huge cloud tree cannot hang the scan. os.walk
+    swallows permission errors, so this never raises."""
+    hits: list = []
+    try:
+        root = os.path.abspath(root)
+    except OSError:
+        return hits
+    base = root.rstrip("\\/").count(os.sep)
+    visited = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        visited += 1
+        if visited > _SCAN_MAX_DIRS:
+            break
+        if DEFAULT_DB_FILENAME in filenames:
+            hits.append(os.path.join(dirpath, DEFAULT_DB_FILENAME))
+        depth = dirpath.rstrip("\\/").count(os.sep) - base
+        if depth >= max_depth:
+            dirnames[:] = []  # at the depth limit: check files, do not descend
+            continue
+        dirnames[:] = [d for d in dirnames
+                       if not d.startswith(".")
+                       and d.lower() not in _SCAN_SKIP_DIRS]
+    return hits
+
+
+def discover_db_candidates(max_depth: int = 3) -> list:
+    """Existing CAM databases found under the known cloud roots (Phase 4).
+
+    Returns a list of ``{"path", "folder", "counts"}`` dicts — one per distinct
+    ``acm_database.json`` discovered — each carrying the assignment / roster /
+    class counts (``_db_file_counts``) so the teacher can recognise their real
+    data. De-duplicated by resolved path; unreadable hits are dropped (a
+    placeholder / not-yet-synced cloud file has nothing to recognise)."""
+    seen: set = set()
+    out: list = []
+    for root in _cloud_search_roots():
+        for db in _scan_for_db_files(root, max_depth):
+            key = os.path.normcase(os.path.abspath(db))
+            if key in seen:
+                continue
+            seen.add(key)
+            if db_file_state(db) != "ok":
+                continue
+            out.append({"path": db,
+                        "folder": os.path.dirname(db),
+                        "counts": _db_file_counts(db)})
+    return out
 
 
 # A freshly-created, genuinely-empty database file is tiny (schema envelope +
@@ -526,7 +667,12 @@ def init_state() -> None:
     # Year-long persistence: on first boot of a session, hydrate from disk so
     # student marks survive across terms / refreshes for the whole school year.
     # Reads from the resolved (possibly cloud) database path.
-    if not st.session_state["db_loaded"]:
+    # Phase-4 first-boot gate: on a machine that has not chosen a data home yet,
+    # defer the hydrate entirely — main() renders the setup panel and returns, so
+    # nothing (not even the sample DB) is loaded or persisted until the teacher
+    # picks. db_loaded stays False; once a choice commits a path, the hydrate
+    # runs on the next rerun with the gate cleared.
+    if not st.session_state["db_loaded"] and not _needs_first_boot_setup():
         path = db_path()
         # Load-guard (Phase 1): never let the demo session run — and then
         # autosave — on top of a real database we merely failed to read. If the
@@ -6880,6 +7026,128 @@ def class_dialog() -> None:
     _class_dialog_body(edit=(mode == "edit"))
 
 
+def _needs_first_boot_setup() -> bool:
+    """Whether CAM must show the one-time first-boot setup panel (Phase 4).
+
+    True only when this machine has **not chosen a data home yet**: no
+    ``CAM_DB_PATH`` override, a **blank** ``db_custom_path`` pref, and the
+    one-time ``setup_done`` marker unset. So a machine already pointed at a cloud
+    folder boots exactly as before (non-blank path), a machine that explicitly
+    chose *Start fresh* is not nagged again (``setup_done`` set), and a harness/
+    env-configured path skips the panel — while a genuine fresh machine (no prefs
+    file → blank path, no marker) always lands on the panel instead of silently
+    booting the sample DB. See docs/CROSS_DEVICE_AND_DB_SAFETY_PLAN.md Phase 4."""
+    if os.environ.get("CAM_DB_PATH", "").strip():
+        return False
+    prefs = st.session_state.get("prefs", DEFAULT_PREFS)
+    if (prefs.get("db_custom_path") or "").strip():
+        return False
+    return not prefs.get("setup_done")
+
+
+def _adopt_db_path(new_custom: str, note: str) -> None:
+    """Commit a chosen data home and (re)hydrate against it (Phase 4).
+
+    Shared by all three first-boot choices (adopt a discovered candidate, use
+    another folder, start fresh). Writes the ``db_custom_path`` pref + the
+    one-time ``setup_done`` marker, then clears ``db_loaded`` so the boot hydrate
+    re-runs against the new path — reusing Phase 2's adopt behaviour: an existing
+    database there is **loaded** (never overwritten), an absent one is created on
+    first save. There is nothing worth pushing during bootstrap, so this never
+    offers an overwrite. ``db_load_blocked`` is cleared so a stale quarantine
+    from the pre-choice state does not linger (the hydrate re-diagnoses the new
+    path)."""
+    prefs = st.session_state["prefs"]
+    prefs["db_custom_path"] = new_custom
+    prefs["setup_done"] = True
+    save_prefs(prefs)
+    st.session_state["db_loaded"] = False
+    st.session_state["db_load_blocked"] = None
+    st.session_state["db_switch_pending"] = None
+    st.session_state.pop("_boot_candidates", None)
+    st.session_state["save_status"] = ("ok", note)
+    st.rerun()
+
+
+def _render_first_boot_setup() -> None:
+    """One-time cross-device bootstrap panel shown before CAM loads anything.
+
+    Rendered in place of the whole cockpit (main() returns right after) whenever
+    ``_needs_first_boot_setup()`` — so this machine never silently boots the
+    sample DB, and never persists, before the teacher points CAM at a data home.
+    Offers: discovered cloud databases (convenience), a manual folder/path, and
+    an explicit *Start fresh*. Every choice routes through ``_adopt_db_path``.
+    See docs/CROSS_DEVICE_AND_DB_SAFETY_PLAN.md Phase 4."""
+    st.title("Welcome to Criterion Assessment Metrics")
+    st.caption("First, tell CAM where your gradebook lives. This is asked once "
+               "per computer and saved to this device only "
+               "(local_device_prefs.json).")
+
+    # ---- Discovered candidates (probed once, cached for this panel) ----------
+    if "_boot_candidates" not in st.session_state:
+        with st.spinner("Looking for an existing CAM database in your OneDrive, "
+                        "Google Drive and Dropbox folders…"):
+            st.session_state["_boot_candidates"] = discover_db_candidates()
+    candidates = st.session_state["_boot_candidates"]
+
+    st.markdown("### 1 · Use my existing database")
+    if candidates:
+        st.caption("CAM found these databases in your cloud folders. Pick the "
+                   "one with your real classes — the counts help you recognise "
+                   "it. Nothing on disk is changed; CAM just points here.")
+        for i, cand in enumerate(candidates):
+            c = cand["counts"]
+            row = st.columns([5, 1], vertical_alignment="center")
+            row[0].markdown(
+                f"**`{cand['folder']}`**  \n"
+                f"{c.get('assignments', 0)} assignment(s) · "
+                f"{c.get('students', 0)} student(s) · "
+                f"{c.get('classes', 0)} class(es)")
+            if row[1].button("Use this", key=f"boot_adopt_{i}", type="primary",
+                             width="stretch"):
+                _adopt_db_path(
+                    cand["folder"],
+                    f"Connected to the database at {cand['folder']}.")
+    else:
+        st.caption("No existing CAM database was found automatically in your "
+                   "OneDrive / Google Drive / Dropbox folders. If you have one "
+                   "there (or on a USB / network drive), point CAM at it below.")
+    if st.button("🔄 Scan again", key="boot_rescan"):
+        st.session_state.pop("_boot_candidates", None)
+        st.rerun()
+
+    # ---- Manual folder / file path (USB, network share, anything unlisted) ---
+    st.markdown("---")
+    st.markdown("### 2 · Use another folder")
+    st.caption("Paste the folder that holds (or should hold) acm_database.json — "
+               "a OneDrive/Drive folder, a USB drive, or a network share. An "
+               "existing database there is loaded; an empty folder gets a new one "
+               "on first save.")
+    manual = st.text_input(
+        "Database folder or .json path",
+        key="boot_manual_path",
+        placeholder=r"e.g. D:\CAM   or   \\server\share\CAM\acm_database.json")
+    if st.button("Use this folder", key="boot_manual_use",
+                 disabled=not manual.strip()):
+        path = manual.strip()
+        resolved = resolve_db_path(path)
+        if db_file_state(resolved) == "ok":
+            note = f"Connected to the existing database at {resolved}."
+        else:
+            note = f"CAM will use {resolved} (created on first save)."
+        _adopt_db_path(path, note)
+
+    # ---- Start fresh (explicit sample/demo boot) -----------------------------
+    st.markdown("---")
+    st.markdown("### 3 · Start fresh")
+    st.caption("Begin with CAM's built-in sample gradebook on this computer "
+               "only. You can point at a cloud folder later in ⚙ Settings.")
+    if st.button("Start fresh with sample data", key="boot_fresh"):
+        # Blank db_custom_path -> the sample acm_database.json beside app.py;
+        # setup_done keeps this panel from reappearing next boot.
+        _adopt_db_path("", "Started fresh with the built-in sample gradebook.")
+
+
 def _render_db_quarantine_banner() -> None:
     """Full-width read-only-quarantine banner when the DB could not be loaded.
 
@@ -6978,6 +7246,13 @@ def main() -> None:
     st.markdown(DENSE_CSS, unsafe_allow_html=True)  # dense layout for 1080p/4K
     st.markdown(theme_css(), unsafe_allow_html=True)  # grey/red theme surfaces
     init_state()
+    # Phase-4 first-boot bootstrap: before any class/term context, sync, dedupe
+    # or autosave can run, a machine that has not chosen a data home gets the
+    # one-time setup panel — and nothing else. Returning here guarantees no
+    # persist() fires against the (unchosen) path before the teacher picks.
+    if _needs_first_boot_setup():
+        _render_first_boot_setup()
+        return
     ensure_class_context()
     ensure_term_context()
     # Heal any duplicate assignment records (same name+class) before rendering —

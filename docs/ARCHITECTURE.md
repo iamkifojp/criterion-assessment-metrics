@@ -265,6 +265,34 @@ manual `.bak-replaced-*` / `.bak-<purpose>-*` snapshots are never touched. This 
 Phase 3 in
 [CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
 
+**⚠ A new computer bootstraps to the shared database without ever wiping it.** A
+machine that has not chosen a data home — no `CAM_DB_PATH`, a **blank**
+`db_custom_path`, and the one-time `setup_done` pref unset (`_needs_first_boot_setup()`,
+`app.py`) — gets the first-boot **setup panel** (`_render_first_boot_setup()`)
+*instead of* the cockpit: `init_state()` **defers the boot hydrate** and `main()`
+returns before any class/term context, sync, dedupe or autosave runs, so nothing
+(not even the sample DB) is loaded or persisted before the teacher picks. The
+panel offers **discovered databases** (a shallow, depth-≤3, system-dir-pruned
+walk of the local OneDrive / Google Drive / Dropbox roots — `discover_db_candidates()`
+via `_cloud_search_roots()` + `_scan_for_db_files()` — each shown with its
+`_db_file_counts`), a **manual folder/path**, and an explicit **Start fresh**.
+Every choice routes through `_adopt_db_path()`, which writes the pref + `setup_done`
+and clears `db_loaded` so the hydrate re-runs on the **Phase-2 adopt path**: an
+existing database at the chosen location is **loaded, never overwritten**; an
+absent one is created on first save. Removable/USB roots are deliberately **not**
+auto-scanned (the teacher points at them once via *Use another folder*; Phase 1's
+storage-missing quarantine covers a forgotten drive on every later boot). The
+**`CAM_DB_PATH`** environment variable overrides the pref in `db_path()` and skips
+the panel entirely — a one-liner new-machine setup and the sandbox handle that
+lets tests/harnesses force a path which **cannot** fall through to the real device
+prefs (closing the `.wiped-by-test` hazard class). Watch folders need no transfer
+mechanism: a class's `master_dir` / assignment `folder_ref` are Drive IDs in the
+**shared** database (machine-independent), so Drive-backed classes travel with the
+DB automatically; a **local-path** master is per-machine by nature and uses the
+existing re-link flow (**✎ Add / Edit class**). Layout prefs stay per-device by
+design. This is Phase 4 in
+[CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
+
 **⚠ The class *name* is a primary key, spread across many stores.** A class is
 identified by its name string, and that same string keys: the class entry in
 `classes`, `rosters`, `archived_students`, `unit_plans`, every assignment's

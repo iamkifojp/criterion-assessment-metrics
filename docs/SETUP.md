@@ -69,9 +69,20 @@ the grading-workspace dependencies. The AI client libraries (`anthropic`,
 py -m streamlit run app.py
 ```
 
-Your browser opens to the dashboard. On first run CAM loads the bundled
-**fictional sample class** (`acm_database.json`) so you can explore every screen
-with realistic-looking (but invented) data. To reset the demo at any time:
+Your browser opens to the dashboard. On the **first run on a new computer** CAM
+shows a one-time **setup panel** (it never silently boots the sample data on a
+machine that has not chosen where its gradebook lives — see §5). It offers to:
+
+- **Use an existing database** it discovered in your OneDrive / Google Drive /
+  Dropbox folders (each shown with its class/assignment counts so you recognise
+  the real one),
+- **Use another folder** you type in (a USB drive, a network share, or any
+  unlisted cloud path), or
+- **Start fresh** with the bundled **fictional sample class** so you can explore
+  every screen with realistic-looking (but invented) data.
+
+Your choice is remembered on that device; you can change it later in
+**⚙ Settings**. To regenerate the sample data at any time:
 
 ```bash
 py tools/generate_sample_data.py
@@ -109,6 +120,29 @@ Once set, CAM creates `acm_database.json` in that folder and keeps every class's
 data (grade exports, exam scans, caches, finalized term summaries) in per-class
 subfolders beside it. Because the folder is cloud-synced, all your devices share
 one database.
+
+### Adding a second computer
+
+You do **not** need to hand-copy `local_device_prefs.json`. On a new machine,
+just launch CAM and use the first-run **setup panel** (§4): pick the database it
+finds in your cloud folder, or paste the folder path under *Use another folder*.
+CAM **adopts** the existing database (loads it — never overwrites it); layout
+preferences stay per-device by design. Classes whose watch folder is a Google
+Drive folder travel automatically (their Drive IDs live in the shared database);
+a class whose master directory is a **local path** is inherently per-machine and
+is re-linked once via **✎ Add / Edit class** on the new computer.
+
+For scripted or one-liner setups, the **`CAM_DB_PATH`** environment variable
+overrides the pref entirely and skips the setup panel:
+
+```bash
+# Windows PowerShell
+$env:CAM_DB_PATH = "C:\Users\you\OneDrive\CAM"; py -m streamlit run app.py
+```
+
+`CAM_DB_PATH` accepts the same folder-or-`.json` value as `db_custom_path`.
+Because it cannot fall through to the device prefs, it is also the safe way for
+tests and harnesses to pin a sandbox path that can never reach your real data.
 
 > **Back up before big changes.** Before any migration or bulk cleanup, copy
 > your `acm_database.json` to a timestamped `.bak-*` file first. CAM is designed
