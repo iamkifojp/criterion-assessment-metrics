@@ -6,6 +6,54 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-11 — cross-device bootstrap: first-boot setup panel + CAM_DB_PATH (safety plan Phase 4)
+
+**Symptom it removes:** bringing CAM to a second computer meant hand-copying the
+device-local `local_device_prefs.json` to point the new machine at the shared
+cloud database — and if you launched without it, CAM silently booted the sample
+gradebook while pointed at (blank →) the repo path, exactly the kind of "fresh
+demo session pointed at real data" that the wipe incident grew from. There was
+also no override a test/harness could set that was *guaranteed* not to fall
+through to the real prefs.
+
+**Fix (CAM `app.py`), two convenience mechanisms sitting on top of the Phase 1–3
+safety guards:**
+
+- **First-boot setup panel.** A machine that has not chosen a data home — no
+  `CAM_DB_PATH`, a **blank** `db_custom_path`, and the new one-time `setup_done`
+  pref unset (`_needs_first_boot_setup()`) — now gets a one-time **setup panel**
+  (`_render_first_boot_setup()`) *instead of* the cockpit. `init_state()` defers
+  the boot hydrate and `main()` returns before any class/term context, sync,
+  dedupe or autosave runs, so **nothing is loaded or persisted before the teacher
+  picks** (it can never boot the sample DB onto an unchosen machine). The panel
+  offers: **discovered databases** — a shallow (depth ≤ 3), system-dir-pruned
+  walk of the local OneDrive / Google Drive / Dropbox roots
+  (`discover_db_candidates()` → `_cloud_search_roots()` + `_scan_for_db_files()`),
+  each listed with its assignment/roster/class counts (`_db_file_counts`) so the
+  real one is recognisable; a **manual folder/path** (USB, network share, any
+  unlisted location); and an explicit **Start fresh** (sample data). Every choice
+  routes through `_adopt_db_path()`, which commits the pref + `setup_done` and
+  clears `db_loaded` so the hydrate re-runs on **Phase 2's adopt path** — an
+  existing DB at the chosen location is **loaded, never overwritten**; an absent
+  one is created on first save. Removable/USB roots are deliberately **not**
+  auto-scanned; they are pointed at once via *Use another folder*, and Phase 1's
+  storage-missing quarantine protects every later boot when the drive is gone.
+
+- **`CAM_DB_PATH` environment override.** Checked before the pref in `db_path()`
+  (same folder-or-`.json` resolution). A one-liner new-machine setup, and — because
+  it **cannot** fall through to the real device prefs — the safe way for tests and
+  harnesses to pin a sandbox path that can never resolve the teacher's real data
+  folder. This closes the `.wiped-by-test` hazard class.
+
+**Watch folders need no new transfer mechanism.** A class's `master_dir` /
+assignment `folder_ref` are Google Drive IDs stored in the **shared** database, so
+Drive-backed classes travel with it automatically; a **local-path** master is
+per-machine by nature and uses the existing re-link flow (**✎ Add / Edit class**).
+Layout prefs stay per-device by design. New pref key: `setup_done` (bool) in
+`local_device_prefs.json`; "Start fresh" sets it while keeping `db_custom_path`
+blank, so the panel never reappears. Established machines (a non-blank
+`db_custom_path`) boot exactly as before.
+
 ## 2026-07-11 — persist() shrink tripwire + rotating daily backups (safety plan Phase 3)
 
 **Symptom it prevents:** the persistence layer mirrors every in-memory change
