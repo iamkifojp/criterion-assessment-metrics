@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "acm",
+      "runtimeExecutable": "py",
+      "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.headless", "true", "--server.port", "8600"],
+      "port": 8600
+    },
+    {
+      "name": "cgw",
+      "runtimeExecutable": "py",
+      "runtimeArgs": ["cam_grading_workspace/app.py", "--port", "5050"],
+      "port": 5050
+    }
+  ]
+}

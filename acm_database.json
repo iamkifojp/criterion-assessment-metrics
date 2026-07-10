@@ -1,0 +1,690 @@
+{
+  "version": 1,
+  "saved_at": "2026-07-10T16:24:24.471241",
+  "gradebook": {
+    "students": [
+      {
+        "student_id": "100001",
+        "name": "Alex Rivera",
+        "gender": "",
+        "scores": [
+          {
+            "criterion": "A",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Artist Study",
+            "assignment": "Artist Study",
+            "keywords": [
+              "Close observation",
+              "Research depth"
+            ],
+            "comment": "Strengths: Close observation. Areas to develop: Research depth.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "B",
+            "value": 7,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Changing Views",
+            "assignment": "Changing Views",
+            "keywords": [
+              "Line quality",
+              "Accurate proportion"
+            ],
+            "comment": "Strengths: Line quality, Accurate proportion.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "C",
+            "value": 7,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Creative concept",
+              "Media control"
+            ],
+            "comment": "Strengths: Creative concept, Media control.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "D",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Thoughtful reflection",
+              "Use of art vocabulary"
+            ],
+            "comment": "Strengths: Thoughtful reflection. Areas to develop: Use of art vocabulary.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          }
+        ],
+        "exam_results": []
+      },
+      {
+        "student_id": "100002",
+        "name": "Sam Chen",
+        "gender": "",
+        "scores": [
+          {
+            "criterion": "A",
+            "value": 7,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Artist Study",
+            "assignment": "Artist Study",
+            "keywords": [
+              "Research depth",
+              "Close observation"
+            ],
+            "comment": "Strengths: Research depth, Close observation.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "B",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Changing Views",
+            "assignment": "Changing Views",
+            "keywords": [
+              "Line quality",
+              "Tonal range"
+            ],
+            "comment": "Strengths: Line quality. Areas to develop: Tonal range.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "C",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Media control",
+              "Creative concept"
+            ],
+            "comment": "Strengths: Media control. Areas to develop: Creative concept.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "D",
+            "value": 7,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Use of art vocabulary",
+              "Thoughtful reflection"
+            ],
+            "comment": "Strengths: Use of art vocabulary, Thoughtful reflection.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          }
+        ],
+        "exam_results": []
+      },
+      {
+        "student_id": "100003",
+        "name": "Jordan Okafor",
+        "gender": "",
+        "scores": [
+          {
+            "criterion": "A",
+            "value": 5,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Artist Study",
+            "assignment": "Artist Study",
+            "keywords": [
+              "Close observation",
+              "Research depth"
+            ],
+            "comment": "Areas to develop: Close observation, Research depth.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "B",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Changing Views",
+            "assignment": "Changing Views",
+            "keywords": [
+              "Accurate proportion",
+              "Line variation"
+            ],
+            "comment": "Strengths: Accurate proportion. Areas to develop: Line variation.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "C",
+            "value": 7,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Creative concept"
+            ],
+            "comment": "Strengths: Creative concept.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "D",
+            "value": 5,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Depth of reflection"
+            ],
+            "comment": "Areas to develop: Depth of reflection.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          }
+        ],
+        "exam_results": []
+      },
+      {
+        "student_id": "100004",
+        "name": "Priya Sharma",
+        "gender": "",
+        "scores": [
+          {
+            "criterion": "A",
+            "value": 8,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Artist Study",
+            "assignment": "Artist Study",
+            "keywords": [
+              "Research depth",
+              "Insightful analysis"
+            ],
+            "comment": "Strengths: Research depth, Insightful analysis.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "B",
+            "value": 8,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Changing Views",
+            "assignment": "Changing Views",
+            "keywords": [
+              "Tonal range",
+              "Accurate proportion"
+            ],
+            "comment": "Strengths: Tonal range, Accurate proportion.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "C",
+            "value": 7,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Creative concept",
+              "Media control"
+            ],
+            "comment": "Strengths: Creative concept, Media control.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "D",
+            "value": 7,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Thoughtful reflection"
+            ],
+            "comment": "Strengths: Thoughtful reflection.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          }
+        ],
+        "exam_results": []
+      },
+      {
+        "student_id": "100005",
+        "name": "Liam O'Brien",
+        "gender": "",
+        "scores": [
+          {
+            "criterion": "A",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Artist Study",
+            "assignment": "Artist Study",
+            "keywords": [
+              "Close observation"
+            ],
+            "comment": "Strengths: Close observation.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "B",
+            "value": 5,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Changing Views",
+            "assignment": "Changing Views",
+            "keywords": [
+              "Line variation",
+              "Sense of scale"
+            ],
+            "comment": "Areas to develop: Line variation, Sense of scale.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "C",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Media control",
+              "Refinement"
+            ],
+            "comment": "Strengths: Media control. Areas to develop: Refinement.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "D",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Use of art vocabulary",
+              "Depth of reflection"
+            ],
+            "comment": "Strengths: Use of art vocabulary. Areas to develop: Depth of reflection.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          }
+        ],
+        "exam_results": []
+      },
+      {
+        "student_id": "100006",
+        "name": "Mia Tanaka",
+        "gender": "",
+        "scores": [
+          {
+            "criterion": "A",
+            "value": 7,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Artist Study",
+            "assignment": "Artist Study",
+            "keywords": [
+              "Insightful analysis",
+              "Research depth"
+            ],
+            "comment": "Strengths: Insightful analysis. Areas to develop: Research depth.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "B",
+            "value": 7,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Changing Views",
+            "assignment": "Changing Views",
+            "keywords": [
+              "Line quality",
+              "Highly detailed"
+            ],
+            "comment": "Strengths: Line quality, Highly detailed.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "C",
+            "value": 8,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Creative concept",
+              "Refinement"
+            ],
+            "comment": "Strengths: Creative concept, Refinement.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "D",
+            "value": 7,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Thoughtful reflection"
+            ],
+            "comment": "Strengths: Thoughtful reflection.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          }
+        ],
+        "exam_results": []
+      },
+      {
+        "student_id": "100007",
+        "name": "Noah Williams",
+        "gender": "",
+        "scores": [
+          {
+            "criterion": "A",
+            "value": 4,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Artist Study",
+            "assignment": "Artist Study",
+            "keywords": [
+              "Research depth",
+              "Analysis"
+            ],
+            "comment": "Areas to develop: Research depth, Analysis.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "B",
+            "value": 5,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Changing Views",
+            "assignment": "Changing Views",
+            "keywords": [
+              "Accurate proportion",
+              "Highly detailed"
+            ],
+            "comment": "Strengths: Accurate proportion. Areas to develop: Highly detailed.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "C",
+            "value": 5,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Creative concept",
+              "Refinement"
+            ],
+            "comment": "Areas to develop: Creative concept, Refinement.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "D",
+            "value": 5,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Depth of reflection",
+              "Art vocabulary"
+            ],
+            "comment": "Areas to develop: Depth of reflection, Art vocabulary.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          }
+        ],
+        "exam_results": []
+      },
+      {
+        "student_id": "100008",
+        "name": "Emma Costa",
+        "gender": "",
+        "scores": [
+          {
+            "criterion": "A",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Artist Study",
+            "assignment": "Artist Study",
+            "keywords": [
+              "Close observation",
+              "Analysis"
+            ],
+            "comment": "Strengths: Close observation. Areas to develop: Analysis.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "B",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Changing Views",
+            "assignment": "Changing Views",
+            "keywords": [
+              "Tonal range",
+              "Line variation"
+            ],
+            "comment": "Strengths: Tonal range. Areas to develop: Line variation.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "C",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Media control",
+              "Refinement"
+            ],
+            "comment": "Strengths: Media control. Areas to develop: Refinement.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          },
+          {
+            "criterion": "D",
+            "value": 6,
+            "timestamp": "2026-05-10T00:00:00",
+            "source": "sample:Final Composition",
+            "assignment": "Final Composition",
+            "keywords": [
+              "Thoughtful reflection"
+            ],
+            "comment": "Strengths: Thoughtful reflection.",
+            "is_valid": true,
+            "include_in_report": true,
+            "note": "",
+            "late": false
+          }
+        ],
+        "exam_results": []
+      }
+    ],
+    "assignments": [
+      {
+        "name": "Artist Study",
+        "criteria": [
+          "A"
+        ],
+        "source_file": "",
+        "ingested_at": "2026-05-10T00:00:00",
+        "score_count": 8,
+        "note": "",
+        "class_name": "Class 1",
+        "term": "Term 1",
+        "folder_ref": "",
+        "grading_complete": false,
+        "is_exam": false,
+        "max_total": 0,
+        "question_labels": []
+      },
+      {
+        "name": "Changing Views",
+        "criteria": [
+          "B"
+        ],
+        "source_file": "",
+        "ingested_at": "2026-05-10T00:00:00",
+        "score_count": 8,
+        "note": "",
+        "class_name": "Class 1",
+        "term": "Term 1",
+        "folder_ref": "",
+        "grading_complete": false,
+        "is_exam": false,
+        "max_total": 0,
+        "question_labels": []
+      },
+      {
+        "name": "Final Composition",
+        "criteria": [
+          "C",
+          "D"
+        ],
+        "source_file": "",
+        "ingested_at": "2026-05-10T00:00:00",
+        "score_count": 16,
+        "note": "",
+        "class_name": "Class 1",
+        "term": "Term 1",
+        "folder_ref": "",
+        "grading_complete": false,
+        "is_exam": false,
+        "max_total": 0,
+        "question_labels": []
+      }
+    ]
+  },
+  "session": {
+    "classes": [
+      {
+        "name": "Class 1",
+        "grade": "7",
+        "myp_year": "2",
+        "subject": "Visual Arts",
+        "master_dir": ""
+      }
+    ],
+    "active_class": "Class 1",
+    "active_term": "Term 1",
+    "calc_method": "60/40 Recency",
+    "rosters": {
+      "Class 1": [
+        {
+          "key": "100001",
+          "name": "Alex Rivera",
+          "email": "100001@school.edu"
+        },
+        {
+          "key": "100002",
+          "name": "Sam Chen",
+          "email": "100002@school.edu"
+        },
+        {
+          "key": "100003",
+          "name": "Jordan Okafor",
+          "email": "100003@school.edu"
+        },
+        {
+          "key": "100004",
+          "name": "Priya Sharma",
+          "email": "100004@school.edu"
+        },
+        {
+          "key": "100005",
+          "name": "Liam O'Brien",
+          "email": "100005@school.edu"
+        },
+        {
+          "key": "100006",
+          "name": "Mia Tanaka",
+          "email": "100006@school.edu"
+        },
+        {
+          "key": "100007",
+          "name": "Noah Williams",
+          "email": "100007@school.edu"
+        },
+        {
+          "key": "100008",
+          "name": "Emma Costa",
+          "email": "100008@school.edu"
+        }
+      ]
+    }
+  }
+}

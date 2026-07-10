@@ -1,0 +1,103 @@
+# User manual
+
+A short, illustrated tour of Criterion Assessment Metrics (CAM) for the teacher
+using it day to day. If you haven't installed it yet, start with the
+[Setup guide](SETUP.md).
+
+> Everything shown below runs on the bundled **fictional sample class** — the
+> students, grades and comments are invented.
+
+---
+
+## The three-window cockpit
+
+CAM lays the whole grading job out on one screen, in three panels that read left
+to right — the same order you actually work in: **pick the work → score it →
+write the report.**
+
+![The three-window cockpit layout](images/cockpit-layout.svg)
+
+| Window | You use it to… |
+|---|---|
+| **1 · Classes & Assignments** | Switch between the classes you teach, import grade CSVs, watch a synced folder for new work, and see the timeline of assessed assignments. |
+| **2 · Students & Evidence** | See every student's Criterion A–D scores, flag or exclude a piece, mark work late, and set the weighting method. Each student's gender (optional) sets the pronouns used in their comment. |
+| **3 · Report & Comment** | Read the auto-computed **MYP Grade** and **School Grade**, jot teacher remarks, and generate the report-card comment. |
+
+You can drag the column widths and panel heights to suit your screen; those
+preferences are saved to your device only.
+
+---
+
+## The daily workflow
+
+![The five-step grading workflow](images/workflow.svg)
+
+1. **Ingest.** In Window 1, import a grade CSV (or point CAM at a folder it
+   watches). Scores are matched to students and dated automatically.
+2. **Review.** In Window 2, glance over the evidence. Exclude a piece that
+   shouldn't count, flag a "wrong assignment" upload, or mark something late —
+   without deleting anything.
+3. **Grade.** CAM computes a recency-weighted suggestion for each criterion and
+   rolls them into the report grades (see below).
+4. **Comment.** In Window 3, generate a report-card comment. With no setup this
+   copies a ready-made prompt to your clipboard; with an API key it writes the
+   comment in place.
+5. **Finalize.** Export the mail-merge pack and snapshot the term so next term's
+   comments can build on this one.
+
+---
+
+## How a grade is worked out
+
+Each MYP criterion is scored **0–8**, and a student collects several scores per
+criterion across the term. CAM weights **recent** work more heavily, sums the
+per-criterion results, and looks the total up to produce the two report grades.
+
+![Criteria roll up into the MYP grade and School grade](images/grade-rollup.svg)
+
+- **MYP Grade (1–7)** comes straight from the criterion sum.
+- **School Grade (1–10)** folds in an **Effort / English-use** score through a
+  configurable lookup table, so it reflects more than the criteria alone.
+- The **weighting method** (for example *"60/40 Recency"*) is yours to choose in
+  Window 2.
+
+Nothing here is a black box: every score that feeds a grade is visible in Window
+2, and you can exclude or re-weight any of it.
+
+---
+
+## Report-card comments
+
+CAM drafts a comment from the same evidence you can see on screen — it is
+pronoun-aware (from the optional gender field) and term-aware (it can build on a
+previous term's finalized comment).
+
+- **Clipboard mode (no setup).** CAM assembles the prompt; you paste it into any
+  chatbot and paste the result back. Nothing leaves your machine automatically.
+- **API mode (optional).** Add a Claude or Gemini API key in the comment
+  settings and CAM writes the comment in one click. See
+  [Setup · report-comment AI](SETUP.md#6-optional-report-comment-ai).
+
+Always read and adjust a generated comment before it goes on a report — it is a
+first draft built from your grades, not a replacement for your judgement.
+
+---
+
+## The grading workspace (optional)
+
+For grading student work that syncs in from Google Drive / OneDrive, CAM can
+launch a companion **grading workspace**: a thumbnail grid of a whole class's
+submissions, an anonymous grading mode (grade without seeing names to reduce
+bias), and PDF exam slicing for marking scanned papers. It hands finished grades
+back to the dashboard automatically. Setup is in
+[Setup · the grading workspace](SETUP.md#7-optional-the-grading-workspace--google-drive).
+
+---
+
+## Where your data lives
+
+Your real gradebook is a single `acm_database.json` in a folder **you** choose —
+ideally a cloud-synced one so every device shares it and it's backed up. CAM
+never stores real student data inside the program folder. To change the
+location, open **⚙ Settings → Custom database location**
+([details](SETUP.md#5-point-cam-at-your-own-data)).

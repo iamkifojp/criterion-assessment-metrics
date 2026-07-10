@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 360" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="860" height="360" rx="14" fill="#E9E7E2"/>
+  <text x="30" y="42" font-size="24" font-weight="700" fill="#38352F">How a grade is worked out</text>
+  <text x="30" y="66" font-size="14" fill="#6b6559">Each criterion is scored 0–8 over the term. Recent work counts for more. The sum drives the report grades.</text>
+
+  <!-- Criteria column -->
+  <text x="70" y="106" font-size="12" font-weight="700" fill="#6b6559">CRITERIA (0–8, recency-weighted)</text>
+  <g font-size="14" font-weight="700" fill="#ffffff">
+    <rect x="70" y="118" width="220" height="34" rx="8" fill="#7f9b74"/><text x="84" y="141">A · Investigating</text><text x="272" y="141" text-anchor="end">6</text>
+    <rect x="70" y="160" width="220" height="34" rx="8" fill="#7f9b74"/><text x="84" y="183">B · Developing</text><text x="272" y="183" text-anchor="end">7</text>
+    <rect x="70" y="202" width="220" height="34" rx="8" fill="#c9a24b"/><text x="84" y="225">C · Creating</text><text x="272" y="225" text-anchor="end">7</text>
+    <rect x="70" y="244" width="220" height="34" rx="8" fill="#7f9b74"/><text x="84" y="267">D · Evaluating</text><text x="272" y="267" text-anchor="end">6</text>
+  </g>
+
+  <!-- arrow -->
+  <g stroke="#B3554D" stroke-width="3" fill="#B3554D">
+    <line x1="300" y1="198" x2="360" y2="198"/><polygon points="360,191 373,198 360,205"/>
+  </g>
+
+  <!-- Sum -->
+  <rect x="383" y="168" width="140" height="60" rx="10" fill="#DDDAD3" stroke="#C6C2B9"/>
+  <text x="453" y="192" font-size="12" fill="#6b6559" text-anchor="middle">Criterion sum</text>
+  <text x="453" y="216" font-size="22" font-weight="700" fill="#38352F" text-anchor="middle">26</text>
+
+  <!-- arrow -->
+  <g stroke="#B3554D" stroke-width="3" fill="#B3554D">
+    <line x1="523" y1="198" x2="583" y2="198"/><polygon points="583,191 596,198 583,205"/>
+  </g>
+
+  <!-- Report grades -->
+  <text x="606" y="150" font-size="12" font-weight="700" fill="#6b6559">REPORT-CARD GRADES</text>
+  <rect x="606" y="160" width="220" height="52" rx="10" fill="#EDEBE6" stroke="#C6C2B9"/>
+  <text x="622" y="182" font-size="12" fill="#6b6559">MYP Grade (1–7)</text>
+  <text x="810" y="194" font-size="26" font-weight="700" fill="#B3554D" text-anchor="end">6</text>
+  <rect x="606" y="222" width="220" height="52" rx="10" fill="#EDEBE6" stroke="#C6C2B9"/>
+  <text x="622" y="244" font-size="12" fill="#6b6559">School Grade (1–10)</text>
+  <text x="810" y="256" font-size="26" font-weight="700" fill="#B3554D" text-anchor="end">8</text>
+
+  <text x="606" y="300" font-size="11" fill="#6b6559">School Grade also folds in an</text>
+  <text x="606" y="316" font-size="11" fill="#6b6559">Effort / English-use score via a</text>
+  <text x="606" y="332" font-size="11" fill="#6b6559">configurable lookup table.</text>
+
+  <text x="70" y="316" font-size="12" fill="#6b6559">Weighting method (e.g. "60/40 Recency") is chosen</text>
+  <text x="70" y="332" font-size="12" fill="#6b6559">per teacher — recent evidence is weighted more heavily.</text>
+</svg>

@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------------------
+# Python bytecode / caches
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# Virtual environments
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# ---------------------------------------------------------------------------
+# OS / system junk
+# ---------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
+$RECYCLE.BIN/
+
+# ---------------------------------------------------------------------------
+# Editor / IDE
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+
+# ---------------------------------------------------------------------------
+# Credentials & secrets  (NEVER commit these)
+# ---------------------------------------------------------------------------
+.env
+*.env
+token.json
+client_secret*.json
+*credentials*.json
+.streamlit/secrets.toml
+
+# ---------------------------------------------------------------------------
+# Local device prefs & transient session / cache data
+# ---------------------------------------------------------------------------
+local_device_prefs.json
+gcg_settings.json
+grades_*.json
+grading_cache.json
+workspace_startup.log
+pdf_cache/
+thumb_cache/
+
+# ---------------------------------------------------------------------------
+# Real student data  (NEVER commit — this repo ships fictional sample data only)
+# ---------------------------------------------------------------------------
+# The tracked acm_database.json is invented sample data (see tools/
+# generate_sample_data.py). Real gradebooks/rosters live OUTSIDE the repo in the
+# folder pointed to by local_device_prefs.json -> db_custom_path. These patterns
+# stop any real export that lands in the working tree from being committed:
+*Grades*.csv
+*grades*.csv
+*roster*.csv
+*Roster*.csv
+acm_database.json.bak-*
+acm_term_summaries_*.json
+*.docx
+*.pdf

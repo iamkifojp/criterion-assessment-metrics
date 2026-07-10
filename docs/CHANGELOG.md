@@ -1,0 +1,1587 @@
+# CAM — Changelog
+
+A maintenance log of notable fixes and behaviour changes. Architectural detail
+lives in [ARCHITECTURE.md](ARCHITECTURE.md); this file records *what changed and
+why*, symptom-first, so a future maintainer can trace a regression quickly.
+
+---
+
+## 2026-07-10 — Window 2: thumbnail-grid matching dialog (Sync/anonymous plan Phase 4)
+
+Per [SYNC_AND_ANONYMOUS_GRADING_PLAN.md](SYNC_AND_ANONYMOUS_GRADING_PLAN.md)
+Phase 4 — the teacher-facing face of Phase 3. Phase 3 pooled every unmatched
+graded work in `unmatched_works[class][assignment]` instead of minting a
+phantom student; Phase 4 lets the teacher resolve those visually, entered from
+the student who is missing the work. **CAM `app.py` only** (additive UI + a
+render helper; no schema, no engine change).
+
+- **Entry point in the Window-2 ⚠ missing-work popover (`render_window2`).** A
+  missing assignment whose class+assignment has a non-empty `unmatched_works`
+  pool now renders as a button — "🧩 `<name>` — N unmatched work(s)" — instead
+  of a dead "missing" line; it opens `match_works_dialog(student_key,
+  assignment)`. An assignment with an **empty** pool keeps today's plain text +
+  tags (excused / awaiting grade) unchanged — the change is purely additive.
+- **`match_works_dialog` (`@st.dialog(width="large")`).** Scoped to one student
+  missing one assignment, so matching is a single click — no dropdown. It shows
+  a scrollable grid (`st.columns`, 3 per row) of the assignment's pooled works:
+  thumbnail, filename caption (secondary — the *image* is the identification
+  channel), a **⤢ Enlarge** toggle, and a **"✓ ⟨first name⟩'s work"** button
+  that calls Phase 3's `assign_work` (write the durable alias, materialise the
+  score, drop from the pool) and reruns the whole app so the ⚠ count and Window
+  3 score refresh. **⤢ Enlarge** re-renders that one work full-width (~1600px)
+  to read a handwritten name; **⤡ Shrink** returns to the grid — both toggles
+  `st.rerun(scope="fragment")` so the dialog stays open. No hover, no JS.
+- **Thumbnails (`_work_thumbnail` → `_render_work_png` → `_work_page_png_bytes`,
+  `_find_work_file`).** The pooled row's `files` cell (the export's `"; "`-joined
+  basenames) is resolved to a file under the assignment's `folder_ref`, walking
+  **both** layouts (flat stem-per-student and subfolder-per-student). First
+  page / image is rasterised through the same PyMuPDF/Pillow pipeline the
+  grading workspace uses (`exam_engine.page_png_bytes`), downscaled to 400px
+  (grid) / 1600px (enlarged), and **disk-cached** under `thumb_cache/` keyed by
+  path+mtime+width — gitignored and beside `app.py`, deliberately **never** in
+  the (possibly OneDrive-synced) db folder. Reopening the dialog is a cache hit.
+  Both imports (`fitz`, `PIL`) are lazy, so a missing PyMuPDF only degrades this
+  one feature (filename-only tiles), never boot.
+- **Graceful fallbacks.** A pooled work whose source file was deleted after
+  export (a sanctioned workflow — the grade lives in the CSV/pool, not the file)
+  shows a filename-only tile ("source file no longer on disk") and **still
+  assigns**. Drive-backed pools (rare — a transfer student off the roster) get a
+  filename-only tile too: no Drive thumbnail fetch in this phase.
+- **Verified (sandboxed, synthetic CSVs/rosters — never live prefs):**
+  `_find_work_file` locates by basename in flat + subfolder layouts and returns
+  None for a missing file; `_render_work_png` renders image + PDF-first-page,
+  downscales to the requested width, writes one cache file, and second call is a
+  cache hit; `_work_thumbnail` returns a PNG for a present local file and the
+  right note for missing-file / Drive / missing-folder cases; an AppTest of the
+  real Window 2 renders the "🧩 Essay 1 — 2 unmatched works" button with the
+  correct count; a single-run harness renders the dialog (an Enlarge + assign
+  button per pooled work, no exception) and `assign_work` shrinks the pool,
+  records the durable alias, and materialises the score (A=6) under the student.
+
+## 2026-07-10 — Ingest: roster-aware routing + unmatched-works pool + durable alias layer (Sync/anonymous plan Phase 3)
+
+Per [SYNC_AND_ANONYMOUS_GRADING_PLAN.md](SYNC_AND_ANONYMOUS_GRADING_PLAN.md)
+Phase 3. **What it addresses:** with anonymity (Phase 2) removing any filename
+discipline, graded works arrive in CAM keyed by camera-roll noise
+(`IMG0004050`) instead of a roster id. `ingest_csv` used to join the
+`Student Name` cell as an exact string key and **silently mint a phantom
+student** for every miss — those leaked into every export through
+`students_for_active_class`'s score-only union. Phase 3 stops the minting, pools
+the unmatched rows for visual matching (Phase 4), and makes a teacher's match
+survive Sync's purge-replace. This is the two-layer late-flags pattern applied
+to identity.
+
+- **`ingest_csv` grows opt-in identity routing (`engine/ingestion.py`).** New
+  optional params `roster_keys`, `aliases` (`{csv_key → roster_key}`),
+  `unmatched_out`, `auto_aliases_out`. Per row, `resolve_identity()` resolves in
+  order: (1) exact roster key → ingest under it; (2) known alias → ingest under
+  `aliases[sid]`; (3) **unambiguous longest-prefix** match (normalize: casefold,
+  strip spaces/`_`/`-`; longest candidate wins; any tie/double-match → no match)
+  → ingest under it **and** record the auto-alias; (4) else → append the whole
+  row (grades + keywords + comment + files + late + timestamp) to `unmatched_out`
+  instead of `get_or_create`. **Never fuzzy/edit-distance** (siblings mis-assign
+  eventually). With `roster_keys` falsy the whole mechanism is skipped —
+  **byte-identical** for every existing caller (a rosterless class keeps its
+  legacy score-only behaviour by design). New `materialize_row()` re-creates a
+  pooled row's scores under a roster id through the identical construction path
+  (`_apply_grades`), so a manual match scores exactly as a routed re-sync would.
+- **CAM persists two class-keyed stores (`app.py`, `acm_database.json` session
+  payload).** `work_aliases[class] = {csv_key → roster_key}` — the **durable**
+  manual + auto-recorded map, **never rebuilt** (survives purge-replace). And
+  `unmatched_works[class][assignment] = [pool-row dicts]` — **rebuilt** every
+  time the assignment's CSV is (re)ingested, exactly as scores are. Both wired
+  through the four sites (`init_state`, `build_session_payload`,
+  `restore_session`, `wipe_database_full`).
+- **Sync passes roster + aliases at the shared ingest site.**
+  `_ingest_cloud_file` reads the target class's roster keys + `work_aliases`,
+  hands them to `ingest_csv`, rebuilds that assignment's pool from the returned
+  unmatched rows, merges any new prefix auto-alias into the durable map, and
+  surfaces it on the sync banner (`🔗 <asg>: matched \`0001a\` → 0001 by prefix`).
+  Exam CSVs never route.
+- **`assign_work(class, assignment, csv_key, roster_key)`** — Phase 4's action:
+  writes the durable alias, immediately re-materializes the pooled row under the
+  roster student (`materialize_row`), removes it from the pool, persists. Works
+  even when the source file was deleted after export (the grade lives in the
+  pool/CSV, not the file).
+- **Late machinery under aliases.** `_sync_reconcile_late` now resolves each CSV
+  id through `work_aliases` before matching, so an aliased row's `Late` heals the
+  score living under the **roster** id. The Late-count tripwire and manual
+  `late_flags` (both keyed by roster id) are unaffected.
+- **Publish reverse-map.** `_publish_workspace_grades` additionally mirrors each
+  aliased student's entry under the **csv_key** (verified against CGW `api_load`:
+  a local/unmatched work's key is `student_id_from_email(email) or name` = the
+  csv_key), so CGW's reconcile lands on the right work; the roster-id key is kept
+  too (harmless — routes to `cam_extra` if no work matches).
+- **Ambient visibility.** Window 1's assignment-analytics dialog shows a
+  `🧩 N unmatched work(s)` warning for a folder assignment with a non-empty pool.
+- **Existing phantom students from past syncs are left alone** (the teacher
+  archives them) — routing only runs when a CSV is (re)ingested with a roster
+  present; a one-time cleanup sweep is deferred.
+
+## 2026-07-10 — Anonymous grading mode in CGW (Sync/anonymous plan Phase 2)
+
+Per [SYNC_AND_ANONYMOUS_GRADING_PLAN.md](SYNC_AND_ANONYMOUS_GRADING_PLAN.md)
+Phase 2. **What it addresses:** the marking viewer always showed student names,
+IDs and filenames and always graded the same (alphabetically first) student
+first — so grading order and name/filename recognition (a student who renames
+their file `AbeJohn_Essay.pdf` gets recognition one submitting `IMG0004050.jpg`
+does not) biased scores. CGW gains an opt-in per-device toggle that strips
+identity from the *display* while leaving state, save, export and the CSV
+round-trip byte-identical.
+
+- **"Anonymous grading" toggle (CGW `app.py`)** — a checkbox in the ⚙ Settings
+  modal, persisted in `local_device_prefs.json` (CGW's device-local prefs; same
+  filename CAM uses for its own UI prefs), default **off**. New `load_prefs()` /
+  `save_prefs()` (save **merges**, never clobbering another tool's keys) and
+  `anonymous_enabled()`; new `GET/POST /api/prefs` route. Flipping it reloads the
+  open assignment so tiles + matrix switch at once.
+- **Display-only anonymization, in the payload where it is built.** A new
+  presentation layer (`present_students()` / `present_student()` /
+  `_anonymize_student()` / `_anon_plan()`) returns *copies* of the student dicts
+  with only the display strings overwritten: student `name` + `display_id` →
+  `Work 01`…`Work NN`, `email` blanked, `files[].filename` → `Image 1` /
+  `Document 2` (kind/draft-chip/Late/MODIFIED/count all preserved). Wired into
+  `api_load`, `api_state`, `api_group_link` and `api_save`. **Never touched:** the
+  round-trip identifiers (`key`, file `id`, `web_view`/`embed_url`, grades keyed
+  by `key`), saved state, `grading_cache.json`, and `api_export`'s CSV cells —
+  `api_export` reads `STATE` directly and never sees this layer, so the exported
+  `Student Name` / `Files (newest first)` stay **real** (Window 2 matching keys
+  on them). Nothing here mutates `STATE`.
+- **Seeded shuffle:** with the toggle on, order is `random.Random(state_key)`
+  over the sorted student keys instead of alphabetical — stable across reloads of
+  the same assignment, different between assignments, uncorrelated with names.
+  Off → today's alphabetical order is byte-identical.
+- **Honesty (plan T7):** anonymity is bias-reduction, not blind review — the
+  round-trip `key` still embeds the real id, the "↗ open" link still serves the
+  real file, and a student can write their name inside the work. One line in the
+  settings note says so.
+- **Verified (sandboxed, no OAuth/live data):** off → payload byte-identical to
+  today (Drive-shaped + local synthetic); on → every tile/matrix cell is
+  `Work NN`, no real name/id/filename in any display field (email blanked,
+  filenames neutral), order differs from alphabetical, is stable across a reload
+  and differs between two assignments; grade round-trips by key across an
+  anon↔plain reload; and the exported CSV is **byte-identical on-vs-off** and
+  carries real stems/filenames. Browser spot-check of the two layouts remains a
+  manual look (port 5001).
+
+---
+
+## 2026-07-10 — Sync decomposition: scoped sync + lifecycle triggers (Sync/anonymous plan Phase 1)
+
+Per [SYNC_AND_ANONYMOUS_GRADING_PLAN.md](SYNC_AND_ANONYMOUS_GRADING_PLAN.md)
+Phase 1. **Symptom it prevents:** the universal 🔄 Sync button was the only way
+grades re-entered CAM, so a teacher who forgot to press it before re-opening an
+assignment in CGW re-published CAM's *stale* values — CGW's reconcile then
+adopted the stale value and flagged the teacher's newer marks MODIFIED, losing
+them (the launch-time stale-handoff race, plan Terrain §T4). Sync is now
+automatic and mostly assignment-scoped, tied to the moments that actually
+produce/consume CSVs.
+
+- **`sync_assignment(class, assignment)` (CAM `app.py`)** — an assignment-scoped
+  sync that reuses the *identical* per-CSV machinery as the global scan: the new
+  shared `_sync_one_csv()` helper (extracted from `sync_from_cloud`'s inner loop)
+  carries the duplicate guard, purge-replace ingest, the Late-count tripwire, the
+  read-only completeness stamp + Late reconcile, and the graceful parse-failure
+  branch, so scoped and global passes can never diverge. `_assignment_csv_paths()`
+  finds the target's CSV(s) by the same cleaned-name + rebind round-trip ingest
+  uses (exam CSVs excluded).
+- **Launch-time sync closes §T4:** `launch_grading_workspace()` now scoped-syncs
+  the target assignment **before** `_publish_workspace_grades`, so CAM publishes
+  its *latest* values, not ones older than the CSV on disk. A duplicate-dated
+  group or a parse failure **cancels the launch** with the banner — a session
+  started on an ambiguous/stale baseline clobbers marks.
+- **Post-session probe:** a successful folder launch records a session-only
+  `active_launch` marker; on each rerun, throttled to ~30 s
+  (`ACTIVE_LAUNCH_PROBE_INTERVAL`), `_run_active_launch_probe()` cheaply
+  `os.stat`s just that assignment's export CSV(s) and, on a change,
+  scoped-syncs + banners, clearing the marker once the newer export ingests.
+- **Session-start global pass:** `_run_session_start_sync()` runs one `sync_all()`
+  automatically after the DB loads (once-per-session guard `session_sync_done`);
+  the OneDrive/multi-machine catch-up. Unconfigured installs (no Custom Database
+  Path) stay a quiet no-op — no error banner.
+- **Active-launch guard:** the global scan (`sync_from_cloud`) **skips** the
+  CSV(s) of an assignment with a live `active_launch` marker, so the scoped probe
+  owns that file mid-grading and the two never race.
+- **Button demoted, not deleted:** the main-bar 🔄 Sync button is gone; **"Force
+  full re-scan"** (the same `sync_all`) now lives in ⚙ Settings for the manual
+  escape hatch. Class-add / 👁 Watch keep their existing automatic passes.
+- **No schema change:** `ingested_files` is untouched; `active_launch` /
+  `session_sync_done` are session-only and never persisted. Purge-replace,
+  duplicate-refusal and Late-tripwire semantics are unchanged — every new trigger
+  surfaces them through the same `_report_sync` banner as the old button.
+- **Verified (sandboxed):** a 20-check harness (temp db folder + synthetic CSVs,
+  no live prefs, no CGW process) confirms all six plan Done-when items — launch
+  ingests-before-publish (published `cam_grades` shows the newer band); a
+  duplicate pair blocks the launch; the probe auto-ingests a fresh export past
+  the throttle (and respects the throttle otherwise); the session-start pass
+  picks up an unrelated changed CSV; a full re-scan of an unchanged sandbox
+  ingests nothing; and an unparseable CSV errors gracefully (counted, left out of
+  the registry) then re-ingests once fixed.
+
+## 2026-07-10 — Threaded exam-slicing worker (PDF/local-mode plan Phase 6)
+
+Per [PDF_AND_LOCAL_MODE_PLAN.md](PDF_AND_LOCAL_MODE_PLAN.md) Phase 6. **Symptom
+it prevents:** a class with many student PDFs made `POST /api/exam/process`
+sit for the whole slice before responding, long enough to hit a browser gateway
+timeout even though the crops were being written fine. Slicing now runs off the
+request thread.
+
+- **Background job + polling:** `api_exam_process` validates the folder, saves
+  the exam config, then launches `process_exam` on a daemon
+  `threading.Thread` (`_run_exam_job`) and returns a `job_id` immediately. The
+  Exam Setup UI (`processAll` → new `pollExamJob`) polls the new
+  `GET /api/exam/status/<job_id>` once a second, showing a live `done / total`
+  student counter and, on completion, the same "✅ Sliced N images…" summary as
+  before.
+- **`process_exam` gained an optional `progress(done, total)` callback**
+  (`exam_engine.py`), invoked after each student. Default callers (none passed)
+  behave exactly as before — no schema or output change; crops still land at
+  `<crops>/<Class>/<Exam>/<Q>/<Student>.png`.
+- **Locking:** jobs live in an in-memory `EXAM_JOBS` registry guarded by its own
+  `EXAM_JOBS_LOCK`, deliberately independent of `STATE_LOCK` — slicing only
+  touches the filesystem, never `STATE`. The exam-definition store's atomic
+  writes and `threading.Lock` are untouched. Jobs aren't persisted; a restart
+  forgets in-flight/finished jobs (the crops on disk are the durable artifact).
+- **Empty/invalid folder still fails fast** synchronously with a 400 (validated
+  before the thread starts), so the teacher gets the same immediate error.
+
+## 2026-07-10 — grading_cache.json schema versioning (PDF/local-mode plan Phase 5)
+
+Per [PDF_AND_LOCAL_MODE_PLAN.md](PDF_AND_LOCAL_MODE_PLAN.md) Phase 5. Independent
+hardening: the workspace's background autosave cache
+(`cam_grading_workspace/app.py` → `grading_cache.json`) is now schema-versioned,
+so future entry-shape changes have a single, safe migration seam instead of an
+ever-growing pile of read-time coercions.
+
+- **Top-level `"version"` key + `CACHE_VERSION` (= 1):** `load_cache()` now
+  reads the raw file, migrates every entry through one routine, and stamps
+  `version`. `write_cache()` stamps it too, so even a brand-new (empty) cache is
+  written versioned. Writes stay atomic (`.tmp` + `os.replace`) as before.
+- **Single `upgrade_entry()` migration routine:** the long-standing read-time
+  shims `_normalize_checklist()` (bare-string / mixed headers →
+  `{label, type}`) and `_normalize_grades()` (legacy `"grade": "7"` →
+  `{"A": "7"}`, obsolete `grade` key dropped) are folded in as the **v0 → v1**
+  step. Idempotent on already-v1 entries.
+- **Late-flag integrity preserved (map §G):** `late_manual` is carried through
+  verbatim and defaulted to `false` **only when absent** — never stripped or
+  forced, which would have silently un-stuck every teacher-set Late tick
+  (the 2026-07-09 incident). `cam_modified` is re-validated to real criterion
+  letters; `cam_extra` / `cam_name` / `criteria` / `deadline` / `groups` pass
+  through untouched.
+- **Legacy files still load:** an unversioned (v0) mixed-shape `grading_cache.json`
+  loads cleanly; after one load-and-save every entry is v1 and the file carries
+  `version`. Missing / non-dict cache files degrade to `{}`.
+- **Verified** with a sandboxed harness (temp `cloud_dir`, no real data): a
+  hand-crafted v0 cache mixing the legacy single-`grade` shape, a bare-string
+  checklist header, and a hand-set `late_manual: true` migrates correctly —
+  legacy grade promoted, header coerced, `late_manual` preserved across the
+  in-memory migration, the idempotent second pass, and a real `write_cache()`
+  round-trip to disk (19/19 checks pass). App boots clean (`/api/state` → 200).
+- Docs: `DATA_DICTIONARY.md` Part B gains the `version` key in B.1, a migration
+  note in B.3, and a new **B.7 Schema versioning & migration**.
+
+## 2026-07-09 — CAM bridge: local classes flow end-to-end (PDF/local-mode plan Phase 4)
+
+Per [PDF_AND_LOCAL_MODE_PLAN.md](PDF_AND_LOCAL_MODE_PLAN.md) Phase 4. A CAM class
+whose `master_dir` is a **local path** now flows through folder grading exactly
+like a Drive class — Watch → 🖌 Grade → CGW marking → CSV export → 🔄 Sync →
+Awaiting-Grade unlock — with no Google account. The CGW marking viewer already
+graded a local folder since Phase 3; this lifts the CAM-side handoff that still
+refused local masters.
+
+- **Refusal lifted (CAM `app.py`):** `_seed_workspace_class()` no longer returns
+  a teacher-facing refusal for a local-master class; it now seeds the class map
+  with the local master path (Drive IDs unchanged), so `launch_grading_workspace()`
+  drives a local class straight into CGW. The `cloud_dir` seeding is unchanged.
+- **Local class browser (CGW `cam_grading_workspace/app.py`):** `POST /api/class`
+  now enumerates a **local class-master path** off disk (new `local_subfolders()`,
+  chosen by the Phase-1 `_ref_is_local` seam) — no OAuth — returning the same
+  `{class_folder_name, assignments:[{id, name}]}` shape the Drive path returns,
+  with each `id` the subfolder's absolute path. The CAM-bridge autoloader
+  (`autoloadFromParams` → `loadClass` → `/api/class` → `openSelectedAssignment`)
+  and every front-end path are **byte-for-byte unchanged**: the local subfolder
+  ids match the `folder_ref` CAM stamps in `_watch_class_master`, so the dropdown
+  resolves the assignment exactly as a Drive folder ID does.
+- **Round-trip key aligned (CAM `app.py`):** `_publish_workspace_grades()` now
+  keys the handoff file by the workspace's **durable state key** (new
+  `_workspace_state_key()`) — a Drive ID unchanged, or the same `local-<hash>`
+  slug `LocalProvider.state_key` derives (sha1 of the normcased absolute path) —
+  so `cam_grades_<key>.json` lands under the exact name CGW reads. Publish →
+  reconcile (MODIFIED markers) → export → Sync now round-trips for local classes.
+- **Missing-folder re-link (CAM Window 1 analytics dialog):** deleting a local
+  assignment folder after its CSV is exported is a sanctioned workflow (the marks
+  live in CAM). When a Grade button's local `folder_ref` no longer exists on disk,
+  the dialog now shows a "folder missing — grades are safe; re-link to regrade"
+  banner with a re-link input that updates just that assignment's `folder_ref`,
+  and suppresses the dead-launch Grade button. Watch never drops or duplicates a
+  row whose folder vanished (rows are pinned by `folder_ref`, never re-scanned for
+  existence).
+- **Capability hint (✎ Add / Edit class dialog):** the master-directory expander
+  now states what each master type grades — local = PDFs, images, video (export
+  Office docs to PDF first); Drive = those plus Google-native Docs/Sheets/Slides —
+  and that work graded elsewhere can always be entered by hand.
+- **§G late-flag machinery inherited, not re-implemented:** a local export writes
+  the identical `<name>_Grades_<date>.csv` with the tri-state `Late` column into
+  the class's data folder, so CAM Sync's duplicate-export guard, read-only Late
+  reconcile, and Late-count tripwire apply unchanged (they key on the filename,
+  not on Drive IDs). Verified, not touched.
+- **Verified** (CGW started with a local test class, no `token.json` used on the
+  local path): `/api/class` listed the assignment subfolder; the CAM-bridge
+  autoload URL opened straight into it (class + assignment dropdowns pre-selected,
+  both students grouped with PDF thumbnails, **no console errors**); a
+  `cam_grades_local-<hash>.json` written by hand (CAM's exact slug — confirmed
+  equal to `LocalProvider.state_key`) was **reconciled** (grade adopted, `A`
+  flagged `cam_modified`, comment adopted) and **consumed**; `/api/export` wrote a
+  CSV with the identical Drive header + tri-state `Late` column into the class
+  folder alongside the slug-keyed `grades_<slug>.json` / `grading_cache.json`.
+
+## 2026-07-09 — LocalProvider: grade a local folder in CGW (PDF/local-mode plan Phase 3)
+
+Per [PDF_AND_LOCAL_MODE_PLAN.md](PDF_AND_LOCAL_MODE_PLAN.md) Phase 3. Fills in the
+`LocalProvider` stub so the marking viewer can grade a **local assignment folder**
+(no `token.json` needed) through the exact same pipeline as a Drive assignment —
+students grouped, thumbnails, hover-enlarge, focused PDF viewer, grading, save,
+export — **indistinguishable once loaded**. Google support is untouched.
+
+- **New behaviour (CGW `cam_grading_workspace/app.py`):** `POST /api/load` pointed
+  at a filesystem path now succeeds via `LocalProvider` (chosen by the Phase-1
+  `_ref_is_local` seam). It enumerates the folder into `fetch_folder`-shaped file
+  dicts so `group_by_student` and the **entire front end stay byte-for-byte
+  unchanged**. Student identity mirrors Google Classroom's local layout:
+  **subfolder-per-student** when the assignment folder has subdirectories
+  (subfolder name = student), else **filename stem = student**. The synthesised
+  owner lets `pick_student` resolve identity exactly as it reads a Drive owner
+  email, so the exported CSV is shaped identically.
+- **Media routes, now backend-aware:** `/api/thumbnail`, `/api/pdf`, `/api/video`
+  and a new **`/api/download/<file_id>`** all dispatch through `current_provider()`.
+  `LocalProvider` renders **PDF first-page / image thumbnails** via `exam_engine`
+  (PyMuPDF rasterise → Pillow LANCZOS, grid ~400px + hover 1600px honouring `?sz=`),
+  disk-cached under `thumb_cache/` keyed by source path + mtime + width (gitignored,
+  **outside the served tree**). PDFs serve inline via `send_file`; video streams
+  from disk (`conditional=True` → HTTP Range, no Drive-bandwidth concern locally);
+  office/other files fall back to a placeholder tile plus the download link. Per-file
+  IDs are opaque `lf-<hash>` tokens resolved through an in-session **id→path
+  registry**; every file access is guarded by an `os.path.commonpath` containment
+  check against the loaded folder (not `startswith`), so an unknown/escaped id 404s.
+- **Durable key:** `api_load` now persists under `provider.state_key(ref)` — a
+  Drive ID unchanged, or a stable `local-<hash>` slug of the normalised absolute
+  path for a local folder — so `grades_<key>.json` and the `grading_cache.json`
+  entry (DATA_DICTIONARY §B.1) survive an app restart. Lateness is synthesised from
+  file mtimes into `createdTime`/`modifiedTime`, feeding the existing `Late`
+  derivation + the sticky `late_manual` tick unchanged (Terrain §G intact).
+- **No token, no Google import on the local path:** the whole flow runs with
+  `token.json` renamed away — `LocalProvider` touches only `exam_engine`, Pillow and
+  the filesystem. A short **local-mode note** was added to CGW's ⚙ Settings modal
+  documenting the identity convention, the PDFs-and-images scope, and the mtime
+  lateness caveat.
+- **Verified** with `token.json` renamed away: loaded both layout conventions
+  (subfolder + flat) — students group correctly; PDF thumbnails render (grid 6.3 KB,
+  hover `?sz=1600` 39.5 KB) and image thumbnails serve; `/api/pdf` returns inline
+  `application/pdf`; `/api/download` serves; an unknown id 404s (containment holds);
+  a grade + criteria + deadline **survive a full process restart** (reloaded the
+  slug-keyed state) ; the exported CSV header/columns are identical to a Drive
+  export. In a real browser (unchanged front end): the roster shows student cards
+  with PDF thumbnails and **Late badges** (mtime 2026 vs a 2020 deadline → `isLate`
+  true), clicking a PDF fills the left panel with the native engine + ✕ Close,
+  **Escape** closes it, and no console errors. `thumb_cache/` added to `.gitignore`.
+
+## 2026-07-09 — Click-to-focus document viewer in CGW (PDF/local-mode plan Phase 2)
+
+Per [PDF_AND_LOCAL_MODE_PLAN.md](PDF_AND_LOCAL_MODE_PLAN.md) Phase 2. First
+user-visible feature of the plan: a **focused document viewer** in the marking
+workspace. Drive-only for now; local mode still arrives in Phase 3.
+
+- **New behaviour (CGW `cam_grading_workspace/app.py`):** clicking a **PDF** tile
+  in a student's file stack now fills the left panel with the browser's own PDF
+  engine (an `<iframe>` at the new `/api/pdf/<file_id>` route) — scroll, page
+  navigation and zoom come from the native toolbar; our only chrome is an
+  **✕ Close** button, and **Escape** also closes. Clicking a **Google-native**
+  tile (`slides|doc|sheet|drawing`) opens the same overlay against the file's
+  existing `embed_url`. The overlay reuses the `#overlay` element behind the
+  video-zoom pattern (new `doc-mode` class); the right-hand grading pane is
+  untouched, so grades/keywords/comments stay fully usable while a document is
+  focused.
+- **New route + provider method:** `GET /api/pdf/<file_id>` delegates to
+  `current_provider().pdf(...)`. `DriveProvider.pdf` downloads the PDF through
+  the authenticated session and serves it inline (`Content-Type: application/pdf`,
+  `Content-Disposition: inline`), **caching to disk** under `pdf_cache/` keyed by
+  file id + `modifiedTime` (a re-upload's fresh `modifiedTime` busts the entry;
+  disk-write failures fall back to serving the bytes directly). `LocalProvider.pdf`
+  is a stub raising `NotImplementedError` until Phase 3. `pdf_cache/` is
+  gitignored.
+- **No regressions:** the PDF/image hover-enlarge overlay, video hover-zoom, and
+  rotate button are unchanged; the hover handlers gained a `docFocusActive` guard
+  so a focused document isn't torn down by a stray hover. `buildMedia`,
+  `group_by_student`, the file-dict shape, and every other route are untouched.
+- **Verified:** booted CGW with a synthetic assignment (a real 3-page PDF, an
+  image, a Google-doc tile) and mocked media routes, then drove it in a browser:
+  the PDF tile's first page renders as its thumbnail and hover shows the 1600px
+  enlarge overlay; clicking fills the left panel with Chrome's PDFium engine
+  (`/api/pdf/PDF1` → 200, native `pdf_embedder` loads); the overlay stays clear
+  of the grading pane (overlay right edge 285px < right panel 304px); ✕ and
+  Escape both close and remove the iframe; the Google-doc tile focuses via its
+  `embed_url`. Server-side unit checks confirm the route is registered, serves
+  inline `application/pdf`, caches as `<id>__<modifiedTimeDigits>.pdf`, serves the
+  second hit from cache without re-downloading, and the Local stub raises. No
+  console errors.
+
+---
+
+## 2026-07-09 — Storage-provider seam in CGW (PDF/local-mode plan Phase 1)
+
+Per [PDF_AND_LOCAL_MODE_PLAN.md](PDF_AND_LOCAL_MODE_PLAN.md) Phase 1. Groundwork
+only — **no user-visible behaviour change.** Introduces the seam that will let
+the marking viewer source files from either Google Drive or a local folder,
+without yet enabling local mode.
+
+- **Change (CGW `cam_grading_workspace/app.py`):** the Drive-coupled marking
+  logic (`fetch_folder`, the thumbnail proxy, the video Range-stream) now lives
+  behind a **`DriveProvider`** class; a **`LocalProvider`** stub sits beside it
+  (every operation raises a teacher-readable `NotImplementedError` until Phase 3
+  fills it in). `provider_for(ref)` picks the backend at load time by whether
+  `api_load`'s (already `_extract_folder_id`-normalised) reference is a Drive
+  folder ID or a local filesystem path — `_ref_is_local()` mirrors CAM's
+  `_master_is_local()`. The chosen backend is recorded in the new
+  `STATE["source"]` (`"drive"` | `"local"`), which the stateless
+  `/api/thumbnail` / `/api/video` routes read via `current_provider()` so they
+  dispatch to the same backend that loaded the assignment.
+- **No behaviour change on the Drive path:** the thumbnail/video route bodies
+  moved verbatim into `DriveProvider` methods; the routes now delegate. Route
+  shapes (`/api/thumbnail/<id>`, `/api/video/<id>`), the `fetch_folder`-shaped
+  file dicts, `group_by_student`, and the entire `HTML_PAGE` front end are
+  untouched. Because `LocalProvider.fetch_folder` raises, `STATE["source"]`
+  never flips to `"local"` in this phase, so the media routes only ever hit
+  `DriveProvider`.
+- **Verified:** against a real Drive assignment (`Silent Storytelling (Crit A)`,
+  44 files) via the provider + Flask test client — `fetch_folder` returns the
+  identical file-dict shape; `/api/thumbnail/<id>` returns 200 `image/jpeg` and
+  the `?sz=1600` zoom variant rewrites the size (8 KB → 252 KB); `/api/video/<id>`
+  returns 206 with `Accept-Ranges` + `Content-Range` and streams exactly the
+  requested Range. `provider_for` routes bare IDs → Drive, `C:\…` and `/home/…`
+  paths → Local; the Local stub raises as designed.
+- **Schema note:** `STATE["source"]` is transient — re-derived from the
+  reference on every load — and appears only in the full-STATE snapshot
+  `grades_<folderId>.json`, never in `grading_cache.json` (`write_cache` does
+  not emit it). No migration needed (DATA_DICTIONARY B.5).
+
+## 2026-07-09 — Window 3 grade-button tooltips → static caption (PDF/local-mode plan Phase 0)
+
+Per [PDF_AND_LOCAL_MODE_PLAN.md](PDF_AND_LOCAL_MODE_PLAN.md) Phase 0. Symptom:
+the per-cell grade buttons in Window 3 (the "⏳ Awaiting Grade" button and the
+"Missing/Excused" `cell_missing_*` buttons) carried `help=` tooltips. Streamlit
+wraps `help=` buttons in a tooltip container that intercepts hover, so the popup
+appeared over the button and blocked the first click; the messages were also
+identical row to row.
+
+- **Fix (CAM `app.py`, `student_cockpit` marks list):** removed `help=` from the
+  `cell_await_*` and `cell_missing_*` per-cell buttons and rendered the guidance
+  once as a single `st.caption` directly above the marks list (Missing = counts
+  as a mathematical 0, click to mark/excuse; ⏳ Awaiting Grade = folder still
+  being graded, excluded from the trend and grade math). `edit_grade_dialog`
+  internals and every other `help=` in the app are untouched.
+
+## 2026-07-09 — Late-flag integrity v2 (the stale-ingest hole + sticky CAM overrides)
+
+Per [LATE_FLAG_INTEGRITY_PLAN_V2.md](LATE_FLAG_INTEGRITY_PLAN_V2.md), the
+incident-2 post-mortem. Follow-up to the v1 entry below: v1's fixes work as
+designed; these two holes were **pre-existing**, exposed but not caused by v1.
+Symptom: Year 10 1Z student 101109's *Launch and Material Shift* (Crit B) was
+`Late=1` in the export CSV and marked Late in CGW, but showed no Late pill in
+CAM Window 3 — and 27 other works across Year 9 / Year 10 shared the hole.
+
+- **Hole 1 — the stale-ingest hole (`CriterionScore.late` frozen at False).**
+  CSVs ingested by a Streamlit process that predated `Late`-column parsing
+  (commit `7ae6167`) stored `late=False` on every row; the unchanged-hash Sync
+  skip then refused to ever re-read them, freezing the flags forever.
+  **Fix (Phase A, CAM `app.py`):** `_sync_reconcile_late()` — a **read-only**
+  Late reconciliation in the skipped-as-unchanged branch of
+  `sync_from_cloud()`. It re-reads *only* the `Late` column and rewrites each
+  matching `csv:`-sourced score's `late` in place (both directions), counting
+  changes into `summary["reconciled"]` and surfacing a 🩹 message. Never
+  re-ingests (which would purge-replace CAM-side edits), never touches
+  `late_flags`. Idempotent; legacy/exam/unreadable CSVs reconcile nothing.
+- **Hole 2 — the edit dialog materialised overrides.** The Save handler wrote
+  `late_flags[key]` on **every** Save, so hundreds of "overrides" merely echoed
+  the effective value; each redundant `False` permanently suppressed a future
+  CSV-synced Late.
+  **Fix (Phase B, CAM `app.py`):** sticky-manual write — create a `late_flags`
+  key *only* when the checkbox actually moved off the pre-save effective value
+  (`if key in lf or late != is_late(...)`). Once manual, always manual: updated
+  on later Saves, never auto-deleted.
+- **One-time cleanup (Phase C, CAM `app.py`).** A marker-guarded
+  (`late_flags_cleanup_v1`, persisted in the session payload) purge at the start
+  of the first Sync deletes every `late_flags` key redundant against the synced
+  value, keeping only real waives/forces. Runs **before** Phase A reconciliation
+  (so a redundant `False` on a still-stale cell is deleted while still
+  redundant, not frozen as a phantom waive). Deliberate keys kept: 101092 /
+  101114 Feature Studies (v1 Phase 6) and 111102 Concept planning (B).
+- **Verified:** `app.py` byte-compiles; a sandbox harness driving
+  `sync_from_cloud()` on a temp data home asserts all 23 cases from the plan's
+  §7 — reconcile heals exactly the stale flag and is idempotent; legacy/exam/
+  manual-source rows are untouched; cleanup deletes only redundant keys and the
+  marker round-trips through save/load; the sticky-write guard creates no key on
+  an untouched Save. Docs: ARCHITECTURE §8 (new reconciliation invariant),
+  DATA_DICTIONARY A.7 (the two lateness layers). Live-data acceptance (press 🔄
+  Sync once on the restarted app; ~28 flags reconciled, 101109 pill appears) is
+  the teacher's step per the plan's §6.
+
+## 2026-07-09 — Late-flag integrity (deadline resets + duplicate exports)
+
+Per [LATE_FLAG_INTEGRITY_PLAN.md](LATE_FLAG_INTEGRITY_PLAN.md), which also
+serves as the incident post-mortem. Symptom: late works flagged in the grading
+workspace stopped showing the Late marker in CAM Window 3 for Year 10 1Z
+(2026-27). Not a code regression — a data-flow wipe from two interacting design
+flaws. Phases 1–4 below; Phase 5 is this entry plus the ARCHITECTURE §8 /
+DATA_DICTIONARY A.1 + B.3 updates.
+
+- **Flaw A — deadline changes clobbered manual Late ticks (CGW).** The
+  `#deadlineInput` change handler re-derived *every* student's `late_marked`
+  from timestamps, so restoring a lost deadline silently zeroed hand-set flags.
+  **Fix:** a new per-student `late_manual` flag (`cam_grading_workspace/app.py`)
+  set whenever the teacher toggles the Late checkbox; the deadline handler now
+  re-derives **only** non-manual students (`if (!st.late_manual) …`). Manual
+  ticks *and* waivers are sticky. `late_manual` is CGW-internal — persisted in
+  `grading_cache.json`, absent → auto-derived (no migration), and **not** added
+  to the export CSV (CAM's tri-state `Late` contract is untouched).
+- **Flaw B — duplicate-dated exports + purge-replace Sync (CGW + CAM).** One
+  assignment could accumulate two `*_Grades_<date>.csv` files (a due-date name
+  and an export-date fallback); Sync mapped both to the same assignment and
+  purge-replaced per file, so whichever ingested last silently won.
+  **Fix (CAM `app.py`):** `sync_from_cloud()` runs a per-class pre-pass
+  (`_scan_class_duplicate_groups`) and **skips any group of 2+ entirely** — no
+  ingest, no registry row, no completeness stamp — counting them under
+  `summary["duplicates"]` and raising a prominent alert that names the canonical
+  export (filename date == its `Due Date`) vs. the likely-stale fallback. Never
+  auto-tiebreaks, never deletes; re-nagged every Sync until resolved.
+  **Fix (CGW `api_export`):** a routed export now scans for differently-dated
+  sibling files and warns the teacher (`stale_siblings`) so the duplicate is
+  caught at export time too.
+- **Late-count tripwire (CAM).** On a re-ingest, `sync_from_cloud()` compares
+  the assignment's synced-layer Late count (`CriterionScore.late`, not
+  `is_late()`) before vs. after the purge-replace and appends an advisory
+  warning if it dropped from non-zero. Advisory only — the ingest still happens
+  (legitimate waivers must flow through) — but a silent wipe is now visible.
+- **Verified:** both apps byte-compile; sandbox `sync_from_cloud()` run asserts
+  a duplicate pair ingests neither file, adds no registry rows, counts the
+  duplicate and names the canonical file, and a re-exported singleton with
+  zeroed lates fires the tripwire.
+- **Phase 6 data repair (executed 2026-07-09).** Restored the Year 10 1Z
+  (2026-27) flags lost in the incident. **Correction to the plan:** CGW's Late
+  checkbox is waive-only (it only shows for auto-detected lateness), so the
+  two Feature Studies flags (students 101092, 101114 — not timestamp-late)
+  were restored via the **CAM Window 3** `late_flags` override, which wins over
+  the synced value and survives re-syncs — *not* by re-ticking in CGW as the
+  draft plan assumed. The three stale `_2026-07-08.csv` duplicate exports were
+  **moved** (not deleted) to `OneDrive\Documents\School\_stale_export_backup_2026-07-09\`,
+  outside the CAM tree; zero duplicate groups now remain in the class folder.
+  See [LATE_FLAG_INTEGRITY_PLAN.md](LATE_FLAG_INTEGRITY_PLAN.md) §8 for the
+  full record.
+
+## 2026-07-08 — "Grade" terminology + numberless-comment toggle
+
+Per `docs/GRADE_TERMINOLOGY_AND_NO_NUMBERS_PLAN.md`. Streamlit (`app.py`) plus
+the prompt-feeding strings in `engine/aggregation.py` and their verify scripts;
+additive and backward-compatible. No Python identifiers, session keys, persisted
+JSON fields, or the CGW handoff format were renamed.
+
+### 1 — New "Never mention numeric grades" toggle in the LLM parameters dialog
+
+- **Fix:** the ⚙ LLM parameters dialog gained a **Never mention numeric grades
+  in the comment** checkbox (`no_numbers`, default **off**). When on, the
+  compiled prompt instructs the model to describe achievement qualitatively
+  ('excellent', 'strong', 'developing', 'has room to improve') and to state no
+  criterion grades, scores, marks, percentages or counts in the comment body.
+- **Why:** some report cards should read as prose with no numbers quoted, even
+  though the prompt still carries the numeric evidence (criterion results, late
+  and missing-work rates) for the model's understanding.
+- **How:** additive `no_numbers` key in the `llm_cfg` defaults (persisted, merged
+  over defaults on load, so old databases need no migration); a checkbox in
+  `llm_params_dialog()` that writes it back on Apply; an instruction appended to
+  the `[OUTPUT REQUIREMENTS]` list in `compile_prompt()` when the flag is set;
+  and a `· no numbers` fragment in the cockpit prompt-status caption so the
+  teacher can see it is live. Default off preserves current output. Percentages
+  and counts are covered deliberately (the timeliness/missing-work blocks feed
+  "3 of 10 tasks (30%)"); dates and MYP year are not grades and are not carved
+  out.
+- **Verified:** `python extras/verify_llm_params.py` and `verify_refactor.py`
+  pass; `app.py` parses clean.
+
+### 2 — "Band" → "grade" in every user-visible and LLM-visible string
+
+- **Fix:** every string a user or the LLM sees now says "grade" instead of
+  "band": the Exam grading panel (was "Exam banding"), its "Grade (0–8)" column,
+  "Apply grades to gradebook" button and "Graded N student(s)" toast; the
+  assignment-metrics dialog ("Graded", "Avg grade", "Grade distribution", "Grade
+  (0–8)" axis); the student progression chart y-axis; the XLSX "Grade" / "Avg
+  grade" headers; the upload/sync captions ("Exam grading panel", "raw ·
+  ungraded", "Grade it in Window 1"); and the LLM prompt (criterion-results
+  header "MYP criterion grade 0-8", the `grade N` evidence lines, "counts as
+  grade 0", "the grade results above", and the trend narration from
+  `aggregation.py`, e.g. "started at grade 6 … finished at grade 5").
+- **Why:** students and the teacher UI have never heard the per-criterion 0–8
+  score called a "band"; a report or screen saying "band" confuses them. The
+  LLM prompt matters as much as the UI because the model echoes the prompt's
+  vocabulary into the student-facing comment.
+- **How:** only quoted strings shown to a user or sent to the LLM changed.
+  Internal identifiers stay put — `rounded_band`, `MIN_BAND`/`MAX_BAND`,
+  `_render_exam_banding`, `_apply_exam_bands`, `suggested_band()`, widget/session
+  keys like `band_{sel}_{sid}`, the `_banded_grade()` 1–7 boundary tables, the
+  `note="banded from raw …"` audit strings already in databases, and the CGW
+  interchange JSON are load-bearing or persisted and were left alone. The two
+  senses of "grade" are disambiguated where they collide: per-criterion 0–8 is
+  "grade (0–8)", the final IB score is "final grade (1–7)".
+- **Verified:** `grep -in "band" app.py engine/aggregation.py` shows only
+  identifiers, comments, docstrings and the persisted `note` string — no rendered
+  or prompt string survives; both verify scripts pass with the updated
+  expectations.
+
+---
+
+## 2026-07-08 — Window 3 comment boxes follow the focused student
+
+Per `docs/STALE_COMMENT_BOX_FIX_PLAN.md`. Streamlit-side (`app.py`) only; bug
+fix, no data-model change.
+
+### 1 — Overall comment / Remarks / Comments log no longer show the previous student
+
+- **Fix:** switching the focused student in Window 3 (Evaluation Cockpit) now
+  updates the Overall comment box, the Remarks popover, and the Comments log
+  immediately; previously they kept showing the previous student's text until a
+  full browser refresh (which starts a fresh Streamlit session).
+- **Why:** the three text areas used static widget keys (`resp_box`, `rem_box`,
+  `cmt_box`). Streamlit caches a keyed widget's value in `session_state` and
+  ignores `value=` on every rerun after the first, so a focus (or term) change
+  re-rendered the same widget with the previous student's cached text. The
+  write-back guard under the Overall comment box could in principle have
+  persisted one student's comment into another's record — a latent
+  data-corruption hazard.
+- **How:** the Overall comment box is now keyed per student+term
+  (`resp_box_{sid}_{term}`) and the Remarks box per student (`rem_box_{sid}`),
+  so a focus/term change creates a fresh widget initialised from that student's
+  stored value; the read-only Comments log dropped its key entirely (same
+  pattern as the compiled-prompt box). The Settings height-override CSS moved
+  from exact `.st-key-rem_box` / `.st-key-resp_box` classes to
+  `[class*="st-key-rem_box"]` / `[class*="st-key-resp_box"]` substring selectors
+  so it keeps matching the now-dynamic keys.
+- **Verified:** `py -m compileall app.py` clean; `grep -n "resp_box\|rem_box\|cmt_box"`
+  shows only dynamic keys (Overall/Remarks) and substring CSS selectors, and no
+  remaining `cmt_box` key. Live app (OneDrive database, Year 7 class): focusing a
+  student rebuilds the box under a per-student class (`st-key-resp_box_131079_Term_1`)
+  and the height-override CSS still applies (box resized to the slider value),
+  and the focus switch performed no spurious save (write-back guard saw equal
+  values). Note: the fix prevents *new* cross-writes but does not repair data a
+  prior session's static-key code already corrupted on disk.
+
+---
+
+## 2026-07-08 — Batch AI comments skip students who already have one
+
+Per `docs/SKIP_EXISTING_COMMENTS_PLAN.md`. Streamlit-side (`app.py`) only;
+additive and backward-compatible.
+
+### 1 — "Generate for whole class" now fills only the gaps
+
+- **Fix:** "Generate for whole class" now skips students who already have a
+  non-empty comment for the current term (generated earlier or hand-typed),
+  controlled by a default-on **Skip students who already have a comment** toggle
+  in the LLM parameters dialog; the status banner reports the skipped count.
+- **Why:** a partial batch run (e.g. the Gemini free tier's 5-requests/minute cap
+  aborting after 6 of 35) previously could only be completed by regenerating the
+  whole class, redoing — and potentially overwriting — the comments that already
+  succeeded, and burning quota on them.
+- **How:** `_generate_class_comments()` gained a `skip_existing` guard
+  (`lc.get("skip_existing", True)`) that `continue`s past any student whose
+  current-term `llm_response` entry is non-blank, counts skips, and returns a
+  4-tuple `(n_ok, n_fail, n_skipped, first_error)`; the caller folds the skip
+  count into the banner. Because manual and generated comments share the
+  `comments_by_term` store, one check covers both. The single-student generate
+  button is unaffected. The new `skip_existing` key is additive and defaults on
+  for old databases.
+- **Verified:** `py -m compileall app.py` clean; `grep "_generate_class_comments"`
+  — one definition + one caller, both on the 4-tuple; live app — toggle persists
+  across Apply/reopen; batch run reports a non-zero Skipped count and leaves
+  existing comments intact; unchecking regenerates all.
+
+---
+
+## 2026-07-08 — Per-student, per-term calculation method with auto default
+
+Per `docs/MISSING_WORK_AND_CALC_METHOD_PLAN.md`, Workstream 2. Streamlit-side
+only; the new persisted store is additive and backward-compatible.
+
+### 1 — The grade-calculation method is now per student, per term
+
+- **Fix:** the calculation method (which algorithm turns marks into a band) is
+  a **per-student, per-term** setting with a live **Auto** default, replacing
+  the single global dropdown value. Window 3's dropdown gains an Auto option
+  labelled with the live context (e.g. `Auto — 60/40 Recency (12 assignments
+  this term)`); picking a method pins it for that (term, student), picking Auto
+  releases the pin. Pins persist across restarts in a new `calc_method_by_term`
+  store (`term -> {sid -> method}`), mirroring `effort_by_term`.
+- **Why:** the old Window 3 dropdown *looked* per-student but wrote one global
+  `calc_method`, so changing it for one student changed every student, class and
+  term at once; nothing reset at term boundaries, and the default never adapted
+  to how much work a term held.
+- **How:** `calculation_method(sid)` (now a **required** arg — no zero-argument
+  form, so a missed call site fails loudly) returns the stored pin when present
+  and still a known method, else `auto_calc_method()`, which counts the term's
+  *qualifying* assignments (On, criteria-bearing, not a `(Reflection)` adjunct;
+  banded exams count) and picks **≤ 15 → 60/40 Recency, > 15 → Weighted
+  Median**, recomputed live. Method resolution moved **inside** every per-student
+  loop (`aggregate_with_policy`, the report-card and mail-merge packs, the
+  single report), so two students in one class can compute under different
+  methods. A new term opens empty → everyone on Auto. **Old databases fall back
+  to Auto** — the legacy top-level `calc_method` (and `w_new`) keys are ignored
+  on load, no migration, so a teacher who had hand-picked a global method
+  re-pins it per student once.
+- Verified: `py -m compileall app.py engine cam_grading_workspace` clean;
+  `grep "calculation_method("` — every call passes a student id; live app on the
+  4-class DB — Auto label shows the right count (excluding `(Reflection)` and
+  formatives), pinning student A leaves student B's bands unchanged, a new term
+  opens on Auto for everyone, and a pin survives save→reload while the
+  pre-change DB (legacy `calc_method` present, new key absent) still loads.
+
+---
+
+## 2026-07-08 — `[MISSING WORK]` prompt block (toggleable)
+
+Per `docs/MISSING_WORK_AND_CALC_METHOD_PLAN.md`, Workstream 1. Streamlit-side
+only; the config change is additive and backward-compatible (saved LLM configs
+merge over defaults, so `inc_missing` arrives as `True` with no migration).
+
+### 1 — The LLM now receives an explicit missing-submission count
+
+- **Fix:** a new toggleable **`[MISSING WORK]`** prompt block reports the share
+  of this term's *assessed* tasks (submitted + missing) the student did not
+  submit — `X of Y (Z%)` plus the unsubmitted task names — with a matching
+  `[OUTPUT REQUIREMENTS]` line asking the model to note the habit once, briefly,
+  without double-penalizing (the synthetic zeros have already dragged the bands
+  down). New "Inject missing-work rate" checkbox (`inc_missing`, default on).
+- **Why:** the prompt carried no explicit missing-work *count*, yet it *leaked*
+  the info in a place no toggle controlled — `[CURRICULUM CONTEXT]`
+  unconditionally appended an "Unsubmitted tasks…" line. So the teacher could
+  not actually suppress the signal (e.g. when a zero was an academic-dishonesty
+  penalty, not a non-submission).
+- **How:** new `_missing_work_stats()` reuses `missing_assignment_rows()` (the
+  single Missing = 0 / Awaiting-Grade gate — now its fifth consumer) for the
+  numerator and adds `_late_submission_stats()`'s *submitted* count for the
+  denominator, so Excused, ⏳ Awaiting Grade, formative and unbanded-exam work
+  are all excluded for free; stored band-0 scores are never scanned (a stored 0
+  means something *was* submitted). Counted per distinct assignment. The block
+  is **omitted entirely at 0 missing**. The always-on `[CURRICULUM CONTEXT]`
+  unsubmitted line was **moved into** the block, so OFF removes every
+  missing-work signal from the prompt.
+- Verified: `py -m compileall app.py` clean; live app — block shows the right
+  `X of Y (Z%)` and names for a student with missing work, is gone (names too)
+  when the toggle is off, and absent for a student with nothing missing; an
+  excused assignment leaves both numerator and denominator.
+
+---
+
+## 2026-07-08 — LLM comment-generation hardening (pre-batch-run)
+
+Seven fixes to the comment pipeline before the term's 120+-student batch run,
+per `docs/LLM_PARAMS_IMPROVEMENT_PLAN.md`. All persistence changes are additive
+and backward-compatible (old DBs load unchanged via the `d.get(key, default)`
+pattern).
+
+### 1 — Late submissions now travel CGW → CAM → LLM
+
+- **Fix:** CGW's Late checkbox now reaches CAM as data. The workspace CSV export
+  gained a tri-state **`Late`** column (`"1"`/`"0"`/`""` from each student's
+  `late_marked`); `ingest_csv` reads it (new `late_column="Late"` kwarg) into a
+  new `CriterionScore.late` field, purge-replace re-ingest refreshing it each
+  Sync.
+- **Why:** previously lateness lived only in CGW's auto-comment text and CAM's
+  manual `late_flags`; nothing populated the flag from a sync, so the prompt
+  carried no timeliness signal.
+- **How:** `is_late()` became a **two-layer read** — a manual `late_flags`
+  override wins *when its key is present* (the teacher's CAM-side waive/force
+  layer, persisted, survives re-syncs), else it falls back to the synced
+  `score.late`. All four call sites pass the score object. A new toggleable
+  `[SUBMISSION TIMELINESS]` prompt block reports the share of this term's graded
+  tasks submitted late (distinct-assignment ratio, non-excused, ≥1 valid
+  included score), **omitted entirely at 0%**; a matching `[OUTPUT
+  REQUIREMENTS]` line asks the model to acknowledge habits briefly. New
+  "Inject late-submission rate" checkbox (default on).
+- Verified: CSV round-trip unit checks (`extras/verify_llm_params.py`);
+  persist round-trip of `late`; live app — block correctly absent for a student
+  with no late work.
+
+### 2 — Unit plans persist across restarts
+
+- **Fix:** uploaded unit plans no longer vanish on restart. `unit_plans` is now
+  in `build_session_payload()` / `restore_session()` (new
+  `engine.persistence.unit_plan_to_dict` / `unit_plan_from_dict`), and
+  `ingest_unit_plan()` calls `persist()` immediately.
+- **Why:** the map was explicitly session-only and never serialized, so the
+  prompt silently lost its `[CURRICULUM CONTEXT]` plan lines after any restart.
+- **How:** restore is defensive (a malformed entry is skipped). **Bonus:**
+  `_split_concepts` now also drops `related concept(s)` / `key concept(s)`, and
+  `unit_plan_from_dict` filters that boilerplate on read — so plans persisted
+  before the fix stop surfacing the leaked literal label
+  `Core/Key Concepts: Related concept(s)` (teachers may re-upload to be clean).
+- Verified: unit-plan round-trip + concept-filter unit checks; live DB-copy
+  round-trip.
+
+### 3 — Streamlit `st.components.v1.html` deprecation removed
+
+- **Fix:** the copy-to-clipboard button (`clipboard_button`) renders through
+  **`st.iframe`** (raw-HTML mode) instead of the deprecated
+  `st.components.v1.html`; the now-unused import was dropped.
+- **Why:** `st.components.v1.html` is slated for removal after 2026-06-01 and
+  logged a deprecation line on every render.
+- Verified: live app — no deprecation line on stderr, and the copy button still
+  copies (iframe script runs; "copied" confirmation appears).
+
+### 4 + 5 — New comment defaults, and `llm_cfg` persists
+
+- **Fix:** default `word_limit 120→100`, `n_strengths 2→1`, `n_growth 2→1`. The
+  whole `llm_cfg` now round-trips in the session payload (**excluding the API
+  key**, which stays memory-only), restored by **merging saved keys over the
+  `init_state` defaults** so a future new key keeps its default.
+- **Why:** the teacher's tuned dialog choices silently reverted on every
+  restart — annoying mid-batch-run.
+- Verified: live app — dialog reads 100 / 1 / 1; DB-copy round-trip preserves
+  `llm_cfg`.
+
+### 6 — Richer, word-budget-aware trend narrative
+
+- **Fix:** `TrendInfo` gained spread/shape fields (`vmin`, `vmax`, `range`,
+  `typical` modal band, interior `min_pos`/`max_pos`, `recovery`).
+  `format_trend_sentence(..., detail=)` renders **compact** (today's sentence +
+  a spread clause when the swing exceeds the net move) or **detailed** (narrates
+  a mid-term dip/peak and the modal band). `_trend_lines` picks detail from the
+  word budget: **≥130 words → detailed**, else compact.
+- **Why:** a whole term was reduced to first-vs-last, hiding dips/recoveries
+  (e.g. B = 6,3,6,6,5 read as a plain "decline").
+- **How:** all phrasing is deterministic template text from the math — the model
+  paraphrases, the engine never speculates.
+- Verified: unit checks against the screenshot shapes (B, D), a steady series, a
+  2-point series and a monotonic rise; live prompt carries `[TREND SUMMARY]`.
+
+### 7 — Evidence lines stop echoing themselves
+
+- **Fix:** `Evidence.as_text()` now emits **only** the quoted comment when
+  present, falling back to the keyword list only when the comment is blank.
+- **Why:** CGW auto-builds each comment *from* the checked keywords, so printing
+  both halves near-duplicated the content
+  (`… Zoom in Closer, … — "Zoom in Closer, …"`). `has_qualitative` /
+  `select_evidence` are unchanged — keywords still qualify a piece for
+  selection.
+- Verified: unit checks (comment-only, keyword fallback, bare header).
+
+Verified overall: `py -m compileall app.py engine cam_grading_workspace` clean;
+`extras/main.py` harness passes; new `extras/verify_llm_params.py` all-pass;
+live-DB-copy load→save→reload preserved unit plans / `llm_cfg` / `late` and the
+pre-change DB still loaded. CGW→Sync round-trip not exercised end-to-end here
+(needs the Flask workspace + Drive) but both code paths are unit-covered.
+
+---
+
+## 2026-07-07 — Classroom Entry export tab stays in Latin (first-name/surname) order
+
+- **Fix (follow-up to the gojūon roster sort below):** the Excel master's
+  **Classroom Entry** tab is once again ordered in **Latin name order — first
+  name, then surname** — matching how Google Classroom lists students, so a
+  copied mark column pastes back row-for-row. The gojūon roster sort had carried
+  through to this tab and mis-aligned it.
+- **Why:** the on-screen roster is now gojūon (see below), but that is the wrong
+  order for the paste-back workflow — Google Classroom orders by Latin first
+  name / surname. The two consumers need different orders.
+- **How:** `_append_classroom_entry_sheet()` now re-sorts its incoming students
+  locally via `_latin_key` (`(first_name, surname)`, casefolded) before emitting
+  rows. The sort is scoped to this one tab; the on-screen roster and the other
+  export tabs (Final Suggestions, Raw Scores) keep gojūon order. Purely cosmetic:
+  the mark/comment lookup matches on `student_id`, never row position, so no mark
+  can be mis-filed — only the print row shifts.
+- Verified: `app.py` compiles; Latin ordering simulated against the live Year 9
+  roster (rows run Aira, Ange, Coen, Dylan … by first name).
+
+---
+
+## 2026-07-07 — Roster imports auto-sort into gojūon (hiragana あいうえお) order
+
+- **New behaviour:** applying a Google Classroom CSV in Window 2 now orders the
+  roster by gojūon reading — **surname first, then given name** — instead of
+  leaving it in the export's Latin-alphabet order. The intake note says so, and
+  the ↑/↓ buttons still let a teacher fine-tune.
+- **Why:** a Japanese classroom register is read in あいうえお order, and romaji
+  *alphabetical* order is not the same as gojūon (alphabetically `Sato` < `Kato`;
+  in gojūon か precedes さ, so it is the reverse). Sorting the Latin spelling
+  directly produces the wrong register order.
+- **How:**
+  - **New module `engine/collation.py`** — `gojuon_sort_key()` reads a romaji
+    string into a list of `(row, vowel, voicing)` kana-mora tuples (a pragmatic
+    Hepburn/Kunrei mapping; foreign names degrade gracefully). Comparing the
+    lists yields gojūon order, with vowel outranking voicing so か→が→き→ぎ
+    interleave as a dictionary does.
+  - **`sort_roster_gojuon()` in `app.py`** peels the given name off the stored
+    "Surname First" display name to isolate the (possibly multi-token) surname,
+    then sorts by `(surname_key, given_key)`. Wired into the Window 2 import
+    apply path only.
+  - **Existing rosters migrated once.** Year 7–10 in the live DB were re-sorted
+    in place. Re-ordering is display-only: marks live in the gradebook keyed by
+    `student_id`, independent of roster position (same reason ↑/↓ is safe), so
+    the migration left `gradebook` byte-identical and only permuted each roster
+    list. A timestamped `.bak-gojuon-*` backup was written first.
+- Verified: `engine`/`app.py` import clean; gojūon order eyeballed across all
+  four live classes (e.g. Ishii → Ito → Irukuvarjula = し<と<る); migration
+  asserted each class's student set unchanged and confirmed `gradebook` identical
+  to the pre-sort backup. Not yet runtime-checked in a live Streamlit session.
+
+---
+
+## 2026-07-06 — Excel master gains a "Classroom Entry" tab for keying marks back to Google Classroom
+
+- **New export tab:** `build_excel_bytes()` now appends a fourth sheet,
+  **Classroom Entry**, after Final Suggestions / Raw Scores / Assignments. It
+  lists every student with a paired **Mark / Comment** column per folder
+  assignment, so the teacher copy-pastes each column straight into Google
+  Classroom.
+- **Why:** CAM/CGW order students by numeric id (email local part); Google
+  Classroom orders by surname / first name / status / group. The two never line
+  up, so pasting a mark column from CAM into Classroom mis-filed every row and
+  forced a manual student-by-student re-match.
+- **How:**
+  - **Order = Classroom order.** Rows follow `students_for_active_class()`,
+    which yields roster students in stored roster order — and the roster is
+    saved in the exact order Window 2 ingested it from the Classroom roster
+    export. Marks match on `student_id`, never the name, so a misspelled surname
+    never breaks alignment.
+  - **Folder assignments only.** `_classroom_folder_assignment_names()` picks
+    assignments CAM ingested from Classroom (a CGW `source_file` or a watched
+    `folder_ref`), non-exam, with ≥1 criterion, in date order. Crit D
+    `(Reflection)` tasks are excluded by name — graded separately, no artwork
+    comment. The set is dynamic: sync a new folder assignment and its column
+    pair appears on the next export.
+  - **Blanks, not zeros.** A student with no record for an assignment leaves
+    that pair blank — the tab is a transcription aid, outside the grade math, so
+    Missing = 0 does not apply.
+- Verified: `app.py` parses clean; selection + matching logic simulated against
+  the live database (correct folder assignments, Classroom order, marks/comments
+  matched) and the openpyxl sheet built + reloaded standalone (merged headers,
+  paired columns, frozen panes render with no errors). Not runtime-checked
+  through the live Streamlit session — glance at the tab after the next export.
+
+Detail in [ARCHITECTURE.md §11 "The Excel master's Classroom Entry tab"](ARCHITECTURE.md).
+
+---
+
+## 2026-07-06 — Mail-merge pack withholds Effort/English Use and School Grade
+
+- **Change:** the mail-merge pack (`build_reportcards_zip`) no longer prints the
+  **Effort / English Use** or **School Grade** rows. The **MYP Grade** and
+  everything else (criterion A–D finals, marks, trend chart, comment) stay.
+- **Why:** these reports go to students *before* their official report cards, so
+  those two figures must stay withheld until then. School is dropped alongside
+  Effort because the School grade folds effort in and would otherwise leak it.
+- **How:** `_student_docx()` gained an `include_effort_school` flag (default
+  `True`); only `build_reportcards_zip` passes `False`. Every other deliverable
+  (Excel master, combined report-card pack, single-student report) is unchanged
+  and still carries all three grades.
+- Verified: `app.py` parses clean. Not runtime-checked (live-data prefs) — glance
+  at one drafted PDF after rebuilding to confirm the two rows are gone.
+
+Detail in [ARCHITECTURE.md §10 "Withheld grades"](ARCHITECTURE.md).
+
+---
+
+## 2026-07-06 — Mail-merge report pack (per-student DOCX named by email); archived students no longer leak into exports
+
+- **New export — "Build mail-merge pack":** alongside the combined report-card
+  pack, CAM can now emit a **ZIP of one `.docx` per student, each named
+  `<student-email>.docx`** (`build_reportcards_zip`). It reuses the same
+  `_student_docx` builder as the combined pack, so every file is byte-for-byte
+  the same layout — just split per student and named by send address. Built for
+  batch emailing: unzip into a Google Drive folder and a mail-merge script mails
+  each file to the address in its own filename (see
+  [BATCH_SEND_REPORTS.md](BATCH_SEND_REPORTS.md)).
+- **Why the email is the filename:** it makes the filename the single source of
+  truth for *who a file goes to*, removing the filename↔roster matching step
+  (and its mis-send risk) from the send script entirely.
+- **Safety:** a student with **no roster email**, a **duplicate email**, or an
+  email containing a filename-illegal character is **left out and listed** in a
+  full-width warning under the export row — never silently mis-filed. The email
+  is never sanitized, since altering it would change who the file mails itself
+  to.
+- **Symptom that surfaced a deeper bug:** building the Y9 mail-merge pack warned
+  that an archived (left-school) student was "left out — no email." He should
+  not have been in the pack at all.
+  - **Root cause:** `students_for_active_class()` unions roster students with
+    any student who has a score in a class assignment. Archiving removes a
+    student from the roster but *keeps their grades*, so the score-only path
+    silently re-added them — leaking archived students into **every** export
+    (Excel master, both DOCX packs, class comments) and the grade-sync / LLM
+    comment-generation passes.
+  - **Fix:** the score-only path now skips any key in
+    `archived_students[class]`. Archived students are excluded everywhere;
+    **Restore** brings them (and their grades) back unchanged.
+- **UI:** the deliverable row is now five buttons — **Excel master ·
+  Report-card pack · Mail-merge pack · Class comments · Single report** — so the
+  mail-merge button sits with the other report-card deliverable instead of
+  stranded at the page bottom. The skipped-student note renders full-width below
+  the row (it lists names and would overflow the narrow column).
+- Verified: `app.py` parses clean. Not runtime-checked — the app's prefs point
+  at live data, so placement is eyeballed on next launch.
+
+Detail in [ARCHITECTURE.md §10](ARCHITECTURE.md).
+
+---
+
+## 2026-07-06 — DOCX exports get a fixed A4 page setup; report cards show the student email
+
+- **Change:** every Word document the app builds now has a consistent page
+  geometry — **A4 paper (21 × 29.7 cm) with 2 cm margins on all four sides** —
+  instead of python-docx's US-Letter default. Applies to all three DOCX
+  builders: the report-card pack (`build_reportcards_docx`), the single-student
+  report (`build_single_docx`) and the class-comments export
+  (`build_class_comments_docx`).
+- **Why:** the school prints on A4, so the Letter default left an oversized
+  right/bottom margin and risked reflowing tables when opened. Centralising the
+  setup also means a future page-format change is a one-line edit.
+- **How:** a shared `_new_report_document()` factory creates the `Document` and
+  stamps the A4 size + 2 cm margins onto every section; the three builders call
+  it instead of `Document()` directly.
+- **Report-card email line:** the report-card pack and single-student report now
+  print the student's **school email address** as a line directly under the
+  `Report Card - <Name>` title. The email is not stored on the `Student` record
+  (only its email-derived numeric id is), so `_student_docx` looks it up from
+  the roster via a new `student_email_for()` helper — mirroring `roster_gender`
+  / `first_name_for`. Folder-derived students with no roster email get no blank
+  line (the paragraph is only added when an email is on file). The class-comments
+  export is unaffected (it carries no per-student title).
+- Verified: python-docx reports 210 × 297 mm and 2 cm margins for the shared
+  factory (isolated check); `app.py` parses clean.
+
+Detail in [ARCHITECTURE.md §9](ARCHITECTURE.md).
+
+---
+
+## 2026-07-06 — A `/` or `\` in an assignment name no longer orphans its marks on the round-trip
+
+- **Symptom:** an assignment whose name contains a slash or other
+  filesystem-illegal character — e.g. `Maquette / Mock Up` — graded fine in CGW
+  but its marks never synced back. Instead of updating the folder-backed row,
+  Sync spawned a **duplicate** with the character flattened to `_`
+  (`Maquette _ Mock Up`), which absorbed the marks while the original kept its
+  stale grades (its count stuck at 0). Deleting the duplicate and re-exporting
+  didn't help — the marks still wouldn't appear.
+- **Root cause — two independent gaps:**
+  1. **The CAM⇄CGW join is name-keyed, but the round-trip can't preserve this
+     name.** CGW names each export CSV after CAM's assignment name, first running
+     it through a filesystem-safe sanitizer (`re.sub(r'[\\/*?:"<>|]', "_", …)`,
+     mirrored by CAM's `_safe_dirname`). So `Maquette / Mock Up` leaves as
+     `Maquette _ Mock Up_Grades_<date>.csv`. Sync derives the assignment name
+     back from that filename (`clean_assignment_name`) and matched on an exact
+     `a.name` — which no longer equalled the original — so `_ingest_cloud_file`
+     purge-replaced *nothing* and appended a fresh `_`-mangled orphan with no
+     `folder_ref`. (Same failure class as the 2026-07-05 rename work below, but
+     that fix carried the *unchanged* name across; here the filesystem mangles
+     it, so carrying it isn't enough.)
+  2. **Deleting an assignment didn't forget its Sync registry rows.**
+     `delete_assignment_permanent()` dropped the record and scores but left the
+     file's `ingested_files` entry intact. Because Sync dedups on **content
+     hash** (`_file_fingerprint`, md5), a byte-identical re-export of an
+     already-registered file is skipped ("already in the database") — so the
+     ingest, and any fix, never runs. This is why deleting the duplicate and
+     re-exporting did nothing: the file was permanently "already ingested".
+- **Fix:**
+  - **Round-trip rebind (`_rebind_import_name`).** Before the purge/ingest,
+    `_ingest_cloud_file` re-maps the filename-derived name back to the existing
+    assignment whose name matches it *through the same sanitize→clean round-trip*
+    (`clean_assignment_name(_safe_dirname(a.name)) == incoming`). A folder-backed
+    original outranks a `_`-mangled orphan a past sync left behind, and an exact
+    name match breaks any tie (an assignment literally named `Maquette _ Mock Up`
+    keeps its own row). The graded import then updates the real folder-backed
+    assignment **in place**, `folder_ref` and all. `_sync_stamp_completeness`
+    uses the same rebind so the Awaiting-Grade flag stamps the right row too.
+  - **Delete now releases the file.** `delete_assignment_permanent()` forgets the
+    `ingested_files` rows feeding the deleted assignment (matched by the same
+    round-trip key, scoped to the assignment's class), so a later re-export/Sync
+    re-ingests instead of skipping the file as unchanged — mirroring what
+    `delete_class()` already did per class.
+- **One-off remediation for an already-stranded file:** because the stale
+  registry row predated the delete-fix, the code fix alone couldn't re-ingest
+  it. The single `ingested_files` entry for the affected CSV was removed by hand
+  (database backed up first), CAM restarted onto the fixed code, and one 🔄 Sync
+  then landed the marks on the original row. Going forward the delete-fix makes
+  this automatic.
+- Verified: the sanitize→clean round-trip is symmetric for `/`, `\` and `:`
+  (isolated check); the rebind selects the folder-backed original over an orphan
+  and respects an exact match; live fix confirmed — 18 marks moved onto
+  `Maquette / Mock Up` (count 0 → 18) with its folder pin intact, and the
+  separate `Maquette/Mock Up (Reflection)` sibling untouched.
+
+Detail in [ARCHITECTURE.md §8](ARCHITECTURE.md) (new "filesystem-illegal
+character" invariant beside the rename invariant) and
+[DATA_DICTIONARY.md §B.2](DATA_DICTIONARY.md) (`cam_name` → sanitized export
+filename).
+
+---
+
+## 2026-07-06 — "Awaiting Grade" unlocks once folder grading is complete (missing folder work now counts as 0)
+
+- **Symptom:** Window 3 showed a permanently disabled **⏳ Awaiting Grade**
+  pill for *any* folder-backed assignment (`folder_ref` set) where the focused
+  student had no score. A teacher could never open the edit dialog to excuse a
+  student who never submitted — a mid-year transfer, a school-approved absence —
+  because the locked pill was the only row that work ever produced. The pill
+  also couldn't tell "this folder is still being graded" apart from "grading is
+  finished and this student simply handed nothing in": both looked identical and
+  both stayed locked forever.
+- **Root cause:** when CGW's export CSV was synced into CAM, rows with files but
+  a blank grade produced no score at all (`_coerce_grade` returns `None`, the
+  row is skipped), so CAM never learned which students had submitted or whether
+  grading was finished. That information was sitting unused in the CSV's
+  **File Count** and **Files (newest first)** columns. With no signal, the only
+  safe behaviour was to keep every scoreless folder row awaiting — the fix
+  behind the 2026-07-05 *"never a fake 0"* entry — which correctly stopped
+  inventing 0s but left the excuse path permanently blocked.
+- **Fix — a two-state rule driven by a new `grading_complete` flag:**
+  - **New field.** `Assignment.grading_complete` (`engine/models.py`,
+    serialized/deserialized in `engine/persistence.py` exactly like
+    `folder_ref`, defaulting to `False` so old databases load unchanged).
+  - **Read-only completeness pass in Sync.** `sync_from_cloud()` now computes
+    completeness for **every** CSV it encounters — newly ingested, modified,
+    *and* files skipped as unchanged — and stamps the flag onto the matching
+    folder-backed assignment (located by cleaned filename + class). An
+    assignment is *complete* when, in its most recent CSV, every **submitted**
+    row (File Count > 0, or a non-empty Files cell, or — for a legacy CSV
+    lacking both columns — every row) has at least one non-blank cell among the
+    `Grade*` columns. The pass is **strictly read-only on the CSV**: it parses
+    the rows but never calls `ingest_csv` and never purges an unchanged
+    assignment — re-ingesting an old CSV would purge-replace the record and
+    destroy grades the teacher edited in CAM since the last export, the exact
+    data-loss bug the 2026-07-05 round-trip work fixed. Running the pass on
+    already-synced files means one press of 🔄 Sync unlocks assignments whose
+    CSVs predate this fix, with no re-export from the workspace. Exam CSVs are
+    skipped — they never gate this pill.
+  - **The gate moves from `folder_ref` to `folder_ref AND NOT grading_complete`.**
+    A single helper `awaiting_grade(row)` is the one predicate, used at all four
+    sites so it can never drift: `missing_assignment_rows()` (the gate for the
+    trend, grade math and AI prompt), the Window 3 cockpit rows, the report
+    export's marks table, and Window 2's missing-work ⚠ popover.
+  - **Physical-zero decision.** Once grading of a folder completes, a scoreless
+    student falls through to the **same Missing = 0 policy** non-folder tasks
+    already use: one editable **"0 (missing)"** row per criterion in Window 3
+    (click to enter a mark or tick Excused), and a **real mathematical 0**
+    injected into the trend, the grade calculations and the AI prompt until the
+    teacher acts. This is deliberate, implemented identically to existing
+    missing rows with no softer variant, so unsubmitted folder work is noticed
+    quickly — the teacher then either excuses the student or chases the work.
+    Excused students leave the math entirely, as before.
+  - **Self-correcting.** A later export that adds a new ungraded submission (a
+    late submitter) flips `grading_complete` back to `False` on the next Sync,
+    and scoreless students show the Awaiting pill again.
+- Verified with 22 automated checks (sandboxed temp DB + synthetic CSVs, no
+  live data touched): incomplete → awaiting + excluded from the math; complete →
+  clickable 0 (missing) + 0 injected + Excused removes it; unchanged-file stamp
+  without re-ingest (a CAM-edited band absent from the CSV survives); regression
+  flip on a new ungraded row; legacy-CSV fallback; exam CSV never stamps;
+  old-format database loads with the field defaulting to `False`.
+
+Detail in [ARCHITECTURE.md §8](ARCHITECTURE.md) (rewritten "Awaiting Grade"
+subsection: the two-state rule and the read-only completeness pass) and
+[DATA_DICTIONARY.md](DATA_DICTIONARY.md) (Part A: File Count / Files now consumed
+for completeness; the new `grading_complete` field on the Assignment record).
+
+---
+
+## 2026-07-05 — Renaming a folder-backed assignment survives the round-trip; workspace no longer orphans
+
+Follow-ups to the same-day round-trip work below. Two independent fixes.
+
+### 1. Renaming an assignment in CAM now propagates to CGW and Sync
+
+- **Symptom:** teacher renames a folder-backed assignment in Window 1's Manage
+  menu (e.g. `Technique Studies (Crit B)` → `Technique Studies`, dropping the
+  redundant criterion tag). Grading in CGW still shows the *old* name and
+  exports `Technique Studies (Crit B)_Grades_<date>.csv`. Sync then ingests a
+  **second** assignment under the old name — the renamed one gets no scores,
+  and the new one is "not a folder assignment" (no `folder_ref`).
+- **Root cause:** the CAM⇄CGW join is **name-keyed** and assumed *assignment
+  name == physical Drive folder name*. `rename_assignment()` deliberately never
+  renames the Drive folder (see ARCHITECTURE §2), so a rename broke that
+  assumption in two places: (a) CGW named its export CSV from the physical
+  `folder_name`, so Sync's filename→name derivation landed on the old name;
+  and (b) even had the name matched, Sync's purge-and-reingest
+  (`_ingest_cloud_file` → `_purge_assignment_in_class` → `ingest_csv`) dropped
+  the record's `folder_ref`, and Watch only re-adopts a folder when
+  `folder_name == assignment name` — which the rename broke — so it stayed
+  scoreless *and* respawned the old-named duplicate.
+- **Fix — carry CAM's display name across, and keep the folder pin welded on:**
+  - **CGW adopts CAM's name.** CAM already stamps its current assignment name
+    into the `cam_grades_<folderId>.json` handoff file (DATA_DICTIONARY §B.6).
+    `load_cam_published_name()` reads it; `api_load` stores it as
+    `STATE["cam_name"]` and persists it in the cache entry (`cam_name`, §B.2)
+    so it survives the handoff file's consumption and later manual reloads.
+    `api_export` names the CSV after `cam_name` when set (falling back to
+    `folder_name` for non-CAM use), so a rename flows straight into Sync and
+    updates the renamed assignment **in place**.
+  - **CGW header shows the CAM name.** `api_load` returns `cam_name`; the
+    frontend titles the grading header with it. The assignment **dropdown**
+    stays folder-named on purpose — it lists the real Drive subfolders, and
+    only the loaded one has a known CAM name.
+  - **CAM preserves `folder_ref` through Sync.** `_ingest_cloud_file` now
+    captures the prior copy's `folder_ref` *before* the purge and re-stamps it
+    onto the freshly-ingested record, so a graded folder assignment stays
+    folder-backed across every round-trip and Watch never spawns a parallel
+    row (ARCHITECTURE §8 invariant).
+- **Note:** CGW is a long-lived `debug=False` process with no auto-reload, so
+  the CGW-side changes only take effect after the workspace is restarted (see
+  fix 2 — a full CAM restart now does this for you).
+
+### 2. The Flask workspace no longer lingers as an orphan process
+
+- **Symptom:** CGW runs as a windowless background `python.exe` on port 5001,
+  spawned by CAM. Closing its Chrome tab (only a viewer) left the server
+  running; Ctrl-C on CAM's terminal orphaned it too (Windows does not kill
+  `subprocess.Popen` children with the parent). Orphans accumulated across CAM
+  restarts and, being stale code, silently served old behaviour.
+- **Fix:** `_bind_workspace_to_cam()` ties the child's lifetime to CAM's with
+  two layers — an `atexit` handler for graceful shutdown (Ctrl-C / normal
+  exit), and a **Windows Job Object** with `KILL_ON_JOB_CLOSE` for hard kills
+  where `atexit` never runs (`taskkill /F`, closing the terminal). Verified in
+  isolation: hard-killing the parent takes the child with it.
+- **Deliberately kept warm, not per-assignment.** Cold start is ~6 s (Flask +
+  Google libs + PyMuPDF + OAuth). CGW is spawned lazily on the first handoff
+  and then reused across assignments in the session, so each subsequent *Grade
+  This* is instant; an idle-exit timeout was considered and rejected to avoid a
+  mid-session teacher returning to a cold app. A pre-existing orphan already on
+  5001 when CAM starts is **not** adopted (CAM didn't spawn it) and needs a
+  one-time manual kill.
+
+---
+
+## 2026-07-05 — CAM is the single source of truth: two-way grade round-trip + "Awaiting Grade" in Window 3
+
+Two related data-integrity fixes to how grades move between the dashboard
+(CAM) and the grading workspace (CGW).
+
+### 1. Partial re-grades in CGW no longer wipe grades edited in CAM
+
+- **Symptom:** teacher grades a class in CGW, exports, Syncs into CAM, then
+  fixes a couple of students' bands in CAM Window 3. Later they re-grade a
+  *different* student in CGW and export again — and the CAM edits are gone.
+- **Root cause:** grades flowed one way. CGW never read what CAM held, so a
+  re-export was built on CGW's own stale state; Sync's whole-assignment
+  purge-replace (`_ingest_cloud_file` → `_purge_assignment_in_class`) then
+  faithfully replaced CAM's newer values with it.
+- **Fix — close the loop, CAM's copy is authoritative:**
+  - **CAM publishes at handoff.** `launch_grading_workspace()` now calls
+    `_publish_workspace_grades()` after `_seed_workspace_class()`: CAM's
+    current bands + comments for the target assignment go into
+    `[db folder]/[class]/cam_grades_<folderId>.json` (schema:
+    DATA_DICTIONARY §B.6). A publish failure cancels the launch.
+  - **CGW reconciles on load.** `api_load` merges the file over its own
+    saved state: any band that differs from its last-export baseline was
+    changed in CAM → the value (and comment) is adopted and the work is
+    flagged **MODIFIED** — a large marker before its grades in the matrix
+    and on its card, plus an instruction above the checklist to re-check it
+    (CAM carries only the final 0–8 band, not the checklist detail).
+    Markers persist (cached per student as `cam_modified`) until clicked
+    away or exported. The file is **consumed** (deleted) once the merged
+    state is persisted, so a stale copy can never overwrite later marking.
+  - **CGW exports the full snapshot.** `api_export` carries every held band
+    forward: columns widen to all criteria that actually hold grades, and
+    CAM-graded students with no files in the folder (`cam_extra`, e.g. after
+    Watch adopts a manually-graded assignment) are appended as extra rows —
+    so purge-replace on Sync loses nothing. A successful routed export
+    clears all MODIFIED markers.
+- Verified end-to-end (Flask test client + engine ingest, 31 checks): grade
+  → export → sync → edit two students in CAM → relaunch shows exactly those
+  two MODIFIED with CAM's values → re-grade a third in CGW → export → CAM
+  holds the new grade AND both CAM edits.
+
+### 2. Window 3 "⏳ Awaiting Grade" — folder-backed work is visible, and never a fake 0
+
+- **Symptom:** Window 1 listed every assignment but Window 3 silently
+  omitted any assignment with no score for the focused student and no
+  criteria — exactly what Watch creates from a work folder. The teacher saw
+  a full list in one window and a partial list in the other.
+- **Change:** Window 3 rows now have three states: editable mark(s) as
+  before; a read-only **⏳ Awaiting Grade** chip for a folder-backed
+  (`folder_ref` set) assignment with no score; and the editable
+  **0 (missing)** rows only for criteria-bearing tasks with no work folder.
+  The math matches the display: `missing_assignment_rows()` skips
+  `folder_ref` rows, so awaiting work injects no 0 into the trend, the
+  grade panel, the AI prompt or the report exports (the report's marks
+  table shows an *awaiting grade* row; Window 2's ⚠ popover tags such items
+  *(awaiting grade)*). Grades for folder-backed work arrive only through
+  the round-trip above.
+
+Detail in [ARCHITECTURE.md §8](ARCHITECTURE.md) (rewritten: publish →
+reconcile → export loop, Awaiting Grade) and
+[DATA_DICTIONARY.md](DATA_DICTIONARY.md) (§B.2/B.3 cache additions, new
+§B.6).
+
+---
+
+## 2026-07-05 — Grading-workspace startup: missing dependency no longer masquerades as a Drive/OAuth failure
+
+**Symptom:** clicking 🔗 Connect Google Drive (or any Grade/Exam handoff)
+opened `http://127.0.0.1:5001/signin` in the browser and showed
+*"This site can't be reached — ERR_CONNECTION_REFUSED"*. It looked like an
+OAuth/credentials problem, but the credentials were fine.
+
+**Root cause:** the Flask grading workspace crashed on startup because
+**PyMuPDF (`fitz`) wasn't installed** — `cam_grading_workspace/app.py` imports
+`exam_engine`, which imported `fitz` at module top level. The port therefore
+never opened. Two things then hid the real error: `exam_engine` needed `fitz`
+just to *load* (even for the OAuth path, which uses no PDF handling), and
+`_ensure_workspace_running()` returned `True` regardless of whether the port
+came up, so CAM opened a browser tab to a server that wasn't there. The root
+`requirements.txt` also never pulled in the workspace's own deps, so a fresh
+install (here, a Python 3.14 env) silently lacked PyMuPDF.
+
+**Fixes:**
+- **Lazy `fitz` import** (`cam_grading_workspace/exam_engine.py`): PyMuPDF is
+  now imported on demand via `_fitz()`. A missing PyMuPDF breaks only the two
+  PDF paths (`page_count`, `load_page_image`) with a `RuntimeError` naming the
+  fix — the workspace, and OAuth sign-in, boot fine without it.
+- **Honest startup check** (`_ensure_workspace_running()` in `app.py`): the
+  spawned sub-app's output is captured to
+  `cam_grading_workspace/workspace_startup.log`; if the port never opens within
+  ~10 s the function returns `False` and the status banner shows the log's last
+  line (usually the `ImportError`) plus the log path — instead of silently
+  returning `True`.
+- **Dependency install unified**: root `requirements.txt` now includes
+  `-r cam_grading_workspace/requirements.txt` (which already pins
+  `PyMuPDF>=1.24`), so one `pip install -r requirements.txt` covers both
+  processes. `workspace_startup.log` added to `.gitignore`.
+
+Detail in [ARCHITECTURE.md](ARCHITECTURE.md) §1 (launch bridge) and §4 (Exam
+Slicing).
+
+---
+
+## 2026-07-04 — App-wide button-size standardization (two-tier control sizing)
+
+UI only; no schema or data-flow changes. Rules documented in
+[UI_STYLE_GUIDE.md](UI_STYLE_GUIDE.md).
+
+- **Every command button now shares one SHORT height (~28 px).** Buttons had
+  drifted into two sizes: `st.button`s rendered compact, but any button given
+  a `help=` tooltip (deliverable **Build** buttons, 🔄 Sync, 👁 Watch,
+  🔗 Connect Google Drive, ✎ Add / Edit class, "Generate for whole class",
+  missing-mark cells), every `st.download_button` (the ⬇ deliverable
+  downloads) and every `st.form_submit_button` (**Save settings**, **Save
+  changes**, **Create**, **Apply**) rendered at the taller default (~40 px).
+  Root cause for the tooltip case: `help=` wraps the button in a tooltip
+  container, so `DENSE_CSS`'s `.stButton > button` (direct-child) rule never
+  matched. Fix: one grouped descendant rule sizes `.stButton`,
+  `.stDownloadButton` and `.stFormSubmitButton` buttons identically.
+- **TALL tier (~40 px) reserved for fields and pickers.** Dropdowns, text
+  inputs, popover triggers (Remarks, ⚠ missing-work) and uploader buttons
+  keep Streamlit's default field height. The read-only **MYP / School grade
+  chips** are bumped `2rem → 2.5rem` to exactly match the Effort selectbox in
+  their row — kept deliberately big for easy copy/paste.
+- **All file-upload dropzones now share one grey container.** The Window 2
+  roster dropzone was compacted (`min-height: 2.2rem`) and looked squashed
+  next to the Upload & stage files modal's default-height ones. A single
+  global rule now pins every dropzone to the default `4.25rem` box with the
+  ⬆ Upload button flush left and vertically centered (Streamlit's default is
+  top-aligned); the roster-specific compaction rule is gone.
+- **Mixed-height rows center on their midlines.** Added
+  `vertical_alignment="center"` to the rows that lacked it: archived-
+  assignments (Restore / Confirm / Delete), Window 3 mark-cell rows
+  (caption + mark chip), and the AI deck's LLM-parameters and generate rows.
+
+## 2026-07-04 — ✎ Add / Edit class dialog + roster-upload centering (supersedes parts of the entry below)
+
+Two teacher-facing UI changes; no schema or data-flow changes.
+
+- **Roster upload chip now truly vertically centred (Window 2).** The earlier
+  fix (below) set `justify-content: center` on the dropzone but the chip still
+  hugged the top of the grey box. Two causes, both DOM drift in the current
+  Streamlit build: (1) the uploaded file renders inside a
+  `[data-testid="stFileChips"]` container — the old `stFileUploaderFile`
+  selectors matched nothing, so the redundant **"+" add-another** button
+  (`stBaseButton-borderlessIcon`) stayed visible under the chip and pushed it
+  up; (2) hiding only the *inner* div of the drag-drop instructions left a
+  zero-height flex item that skewed the centring. Fix: hide the whole
+  instructions node and the "+" button, and stretch `stFileChips` full-width.
+  The chip's own ✕ remove button is a different button kind and is untouched.
+  Verified in-browser: equal gaps above/below the chip in both empty and
+  file-chosen states, matching the Upload modal's alignment.
+- **Class lifecycle consolidated into one ✎ Add / Edit class dialog (top
+  bar).** The ⚙ Settings **Class name** rename section (added below) let a
+  teacher rename a class but not touch its other fields (grade level, MYP
+  year, subject, master directory). It is removed, and the separate **➕ Add
+  class** button is gone too: one top-bar button opens a single dialog
+  (`class_dialog`) with a two-button mode toggle at the top — **✎ Edit
+  current class** (the default every time it opens) or **➕ Add a class** —
+  where the selected mode's button renders red (`type="primary"`) so the
+  active mode is unmistakable. Both modes share one form body
+  (`_class_dialog_body(edit=...)`, per-mode widget keys so flipping the
+  toggle never carries half-typed values across). Edit mode pre-fills every
+  field from the *active* class and saves through `update_class()` —
+  `rename_class()` (so a rename still moves every name-keyed store together)
+  plus the descriptive fields. Window 1's **📁 Class folder** expander is
+  gone too: **👁 Watch**, the **🔗 Connect Google Drive** sign-in button and
+  the long master-directory / Google-setup instructions (now an `ℹ` expander)
+  all live in the dialog. **Saving a new or changed master directory runs
+  Watch automatically in both modes** — pasting a folder into a brand-new
+  class and adding one to an existing, already-graded class behave
+  identically; Watch's adoption rule (see 2026-07-03 §3) stamps the folder
+  onto same-name rows created via ➕ Add assignment/exam instead of
+  duplicating them. On a failed scan (e.g. a Drive ID before the one-time
+  sign-in) the save still stands and the status banner names the fix. The
+  👁 Watch button (Edit mode, acting on the *saved* directory, outside the
+  form) remains for rescanning after new subfolders appear. **Connect Google
+  Drive shows
+  in both modes** — the sign-in writes a device-wide `token.json` and is not
+  class-specific, so a first-time user can sign in *before* creating their
+  first Drive-backed class (in Edit mode it appears when the saved master
+  directory is a Drive ID; in Add mode always, with a caption noting it's
+  only needed for Drive folder IDs). A legacy class with no MYP year shows
+  **(not set)**
+  and keeps it on Save — the rubric phase keeps falling back to the unit plan
+  instead of being silently stamped MYP 1. The now-orphaned
+  `set_class_master_dir()` helper was removed (master-dir edits flow through
+  `update_class`).
+
+---
+
+## 2026-07-04 — Window UI polish (rename class, Manage modal, roster upload, grade chips)
+
+Four small teacher-facing UI improvements; no schema or data-flow changes.
+
+- **Editable class name.** The ⚙ Settings dialog now has a **Class name**
+  section that renames the *active* class in place. New helper
+  `rename_class(old, new)` (`app.py`, beside `create_class` / `delete_class`)
+  moves **every reference keyed by the class name together** — the class entry,
+  its roster, archived students, unit plan, each assignment's `class_name`, the
+  cloud-sync registry rows (`ingested_files[*]["class"]`), the `active_class`
+  pointer, and the on-disk data folder (`class_data_dir`, best-effort
+  `os.rename`; recreated empty if the move fails). Blank or duplicate names are
+  rejected. Previously a class name was fixed at creation with no rename path.
+- **Manage menu is now a centered modal, not a row popover.** Window 1's per-row
+  **⋯ Manage** control was a `st.popover` anchored to the narrow Manage column;
+  on a small screen BaseWeb positioned it partly off-screen (negative `left`)
+  and it clipped. It is now a proper `@st.dialog` (`manage_assignment_dialog`),
+  centred and width-independent of Window 1, so rename / due-date / term-inclusion
+  / archive are always fully reachable. (A CSS `min-width` on the popover body was
+  tried first but fought the popover's own positioning — the dialog is the clean
+  fix, and it leaves the other two popovers untouched.)
+- **Roster upload tidy-up (Window 2).** A small reminder caption under the
+  uploader states the file must be a Google Classroom CSV export (roster *or*
+  assignment grades), matched by the numeric ID in each email. The uploader is
+  a single-file input (now `accept_multiple_files=False` explicitly — it was
+  already the default), and its content is **left-aligned and vertically
+  centred** against the **Apply** button. The Streamlit dropzone is a flex
+  *column*, so the alignment is set with `align-items: flex-start` (left) +
+  `justify-content: center` (vertical) — an earlier pass used
+  `align-items: center`, which on a column axis centred it *horizontally* by
+  mistake. Once a file is chosen its name fills the grey box: the chip is
+  stretched full-width and the now-redundant browse button is hidden
+  (`dropzone:has(…File) > button`), so the file is swapped via its ✕ then a
+  fresh upload rather than a misleading "add another" control.
+- **MYP / School grade chips (Window 3).** The read-only **MYP Grade** and
+  **School Grade** numbers, previously bare bold text hard against the column's
+  left edge, now render in a rounded bordered box (`.cam-grade-box`, helper
+  `_grade_chip`) matching the criterion selectboxes above them — but with **no
+  fill** so they read as display-only, not editable.
+
+---
+
+## 2026-07-04 — Automatic MYP Grade & School Grade on Window 3 + exports
+
+- **Symptom:** Every term the two report-card numbers — the **MYP Grade** and
+  the **School Grade** — had to be worked out by hand from each student's
+  final criterion grades and copied into the school's report-card app, a slow
+  and error-prone manual lookup.
+- **Change:** CAM now computes both. The School lookup tables
+  (`MYP_GRADE_BOUNDS`, `SCHOOL_GRADE_BOUNDS` — fixed school policy, not IB's
+  method) plus pure helpers `myp_grade()` / `school_grade()` live in
+  `engine/aggregation.py`. Both are banded lookups on the sum of the term's
+  final criterion grades, table chosen by how many criteria were assessed
+  (2/3/4; anything else shows N/A). A new per-term **Effort / English Use**
+  score (0–5, default 4, persisted as `effort_by_term` alongside
+  `comments_by_term`) feeds the School lookup only. One shared helper —
+  `student_term_grades()` in `app.py`, resolving each criterion exactly as
+  the grade panel (override if locked, else auto band, rounded to ints) —
+  drives **Window 3** (new one-line row: Effort selectbox + read-only
+  MYP/School grades), the **Excel master** Tab 1 (three new columns after
+  `Crit A..D`), and the **report-card pack / single report** (three rows
+  appended to the "Final criterion grades" table), so UI and exports can
+  never disagree. Out-of-range totals clamp to the lowest/highest band, so an
+  all-missing 0 maps to grade 1 rather than crashing. See
+  [ARCHITECTURE.md §9](ARCHITECTURE.md) and
+  [DATA_DICTIONARY.md Part C](DATA_DICTIONARY.md).
+- **Also:** the calculation-method dropdown labels now carry usage hints
+  (e.g. *"60/40 Recency (Best for < 10 assignments)"*) via a display-only
+  `format_func` + `METHOD_LABELS`; the stored `calc_method` values and
+  dropdown order are unchanged.
+
+---
+
+## 2026-07-03 — CAM ↔ Grading Workspace round-trip
+
+A cluster of fixes to the handoff between the Streamlit dashboard (CAM) and the
+Flask grading workspace (CGW). All relate to grades marked in CGW failing to
+reach CAM, or corrupting the timeline once they did.
+
+### 1. Grades marked in CGW never reached CAM's Sync
+
+- **Symptom:** After grading in CGW and clicking **🔄 Sync** in CAM, the
+  dashboard reported *"All N file(s) already in the database — nothing new to
+  sync."* Grades, deadline and submission counts never appeared.
+- **Root cause:** CGW writes its CSV exports into `class_output_dir()` =
+  `[cloud_dir]/[class]/`. CAM's Sync scans `db_folder()/[class]/`. The launch
+  bridge (`_seed_workspace_class`) seeded only the class → Drive-folder-ID map,
+  never `cloud_dir`, so CGW fell back to its own app root and exports landed
+  somewhere CAM never scanned (or streamed as a browser download).
+- **Fix:** `_seed_workspace_class` (`app.py`) now also seeds
+  `cloud_dir = db_folder()` on every handoff (skipped only when no custom
+  database path is set, and when the workspace already points at the same
+  folder). Exports now route into the folder Sync scans.
+
+### 2. Sync appended a duplicate assignment → render crash
+
+- **Symptom:** `StreamlitDuplicateElementKey: key='act_Term 1_<name>'` crashing
+  Window 1.
+- **Root cause:** The CAM→CGW handoff leaves a manual *placeholder* assignment
+  on the timeline. A first-time sync of that assignment's CSV **appended a
+  second record** of the same name+class; the timeline keys per-row widgets on
+  the name, so two records collide.
+- **Fix (two guards):**
+  - `_ingest_cloud_file` now **always** purges a prior same-name assignment in
+    the class before ingesting (not only on a file re-sync), so the graded
+    import updates the placeholder in place.
+  - `_dedupe_assignments()` runs every rerun in `main()`, collapsing any
+    pre-existing name+class duplicates (keeping the richest record) and
+    persisting once — self-healing databases that already picked one up.
+
+### 3. Ingested grades silently vanished (scoreless placeholder)
+
+- **Symptom:** A synced assignment showed **Subs 0** with no grades even though
+  the CSV had marks and the sync registry recorded it as ingested; re-syncing
+  did nothing (the registry hash matched, so the file was skipped).
+- **Root cause:** Class-folder **Watch** (`_watch_class_master`) pins
+  assignments by `folder_ref`; **CSV ingest** keys by name with no `folder_ref`.
+  The same real assignment became two records — graded `"X"` (no ref) beside a
+  watched `"X (2)"` placeholder. Because scores are stored on students **by
+  name**, a later always-replace purge of `"X"` dropped the scores while the
+  placeholder lingered, leaving a scoreless row and orphaned grades.
+- **Fix:** Watch now **adopts** — when a scanned subfolder's name matches an
+  existing *unpinned* assignment in the class, it stamps `folder_ref` onto that
+  record instead of creating a parallel `"X (2)"`. Graded assignment and source
+  folder stay one record; Watch skips it on every later pass. See
+  [ARCHITECTURE.md §8](ARCHITECTURE.md) → *"Watch and CSV-ingest describe ONE
+  assignment"*.
+- **Data repair:** affected databases need the lost scores re-ingested once
+  (re-run the CSV through `ingest_csv`, pin the resulting assignment's
+  `folder_ref`); the always-adopt guard prevents recurrence.
+
+### 4. CGW Settings hardened to read-only
+
+- **Change:** Now that CAM manages `cloud_dir` and the class map (§1), the CGW ⚙
+  Settings dialog **displays** them read-only rather than letting a teacher edit
+  them. Removed: *Save Settings*, *+ Add class*, *Refresh Classes*, rename,
+  delete. Kept editable: device-local **Theme**.
+- **Why:** A manual edit in CGW could silently misroute exports or invent a
+  class the dashboard didn't know about — the exact drift the seeding is meant
+  to prevent. The `POST /api/config` endpoints remain (CAM's seeding uses them);
+  only the workspace's own editing controls were withdrawn.

@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="860" height="470" rx="14" fill="#E9E7E2"/>
+  <text x="30" y="42" font-size="24" font-weight="700" fill="#38352F">The three-window cockpit</text>
+  <text x="30" y="66" font-size="14" fill="#6b6559">Left to right, CAM follows how you actually grade: pick the work, score it, write the report.</text>
+
+  <!-- Window 1 -->
+  <rect x="30" y="92" width="255" height="340" rx="10" fill="#DDDAD3" stroke="#C6C2B9"/>
+  <rect x="30" y="92" width="255" height="40" rx="10" fill="#B3554D"/>
+  <text x="46" y="118" font-size="16" font-weight="700" fill="#ffffff">1 · Classes &amp; Assignments</text>
+  <text x="46" y="162" font-size="13" fill="#38352F">▸ Choose the class in focus</text>
+  <text x="46" y="190" font-size="13" fill="#38352F">▸ Ingest grade CSVs</text>
+  <text x="46" y="218" font-size="13" fill="#38352F">▸ Watch a synced folder</text>
+  <text x="46" y="246" font-size="13" fill="#38352F">▸ Timeline of assessed work</text>
+  <rect x="46" y="266" width="223" height="30" rx="6" fill="#EDEBE6" stroke="#C6C2B9"/>
+  <text x="58" y="286" font-size="12" fill="#6b6559">Artist Study — Crit A</text>
+  <rect x="46" y="302" width="223" height="30" rx="6" fill="#EDEBE6" stroke="#C6C2B9"/>
+  <text x="58" y="322" font-size="12" fill="#6b6559">Changing Views — Crit B</text>
+  <rect x="46" y="338" width="223" height="30" rx="6" fill="#EDEBE6" stroke="#C6C2B9"/>
+  <text x="58" y="358" font-size="12" fill="#6b6559">Final Composition — Crit C, D</text>
+
+  <!-- Window 2 -->
+  <rect x="302" y="92" width="255" height="340" rx="10" fill="#DDDAD3" stroke="#C6C2B9"/>
+  <rect x="302" y="92" width="255" height="40" rx="10" fill="#B3554D"/>
+  <text x="318" y="118" font-size="16" font-weight="700" fill="#ffffff">2 · Students &amp; Evidence</text>
+  <text x="318" y="162" font-size="13" fill="#38352F">▸ Each student's A–D scores</text>
+  <text x="318" y="190" font-size="13" fill="#38352F">▸ Flag, exclude or mark late</text>
+  <text x="318" y="218" font-size="13" fill="#38352F">▸ Recency-weighted per criterion</text>
+  <!-- mini grade chips -->
+  <g font-size="12" font-weight="700" fill="#ffffff">
+    <rect x="318" y="244" width="34" height="26" rx="6" fill="#7f9b74"/><text x="329" y="262">A6</text>
+    <rect x="358" y="244" width="34" height="26" rx="6" fill="#7f9b74"/><text x="369" y="262">B7</text>
+    <rect x="398" y="244" width="34" height="26" rx="6" fill="#c9a24b"/><text x="409" y="262">C7</text>
+    <rect x="438" y="244" width="34" height="26" rx="6" fill="#7f9b74"/><text x="449" y="262">D6</text>
+  </g>
+  <text x="318" y="300" font-size="12" fill="#6b6559">Alex Rivera · Sam Chen · Priya…</text>
+  <rect x="318" y="312" width="223" height="1" fill="#C6C2B9"/>
+  <text x="318" y="336" font-size="13" fill="#38352F">▸ Gender → comment pronouns</text>
+  <text x="318" y="364" font-size="13" fill="#38352F">▸ Choose weighting method</text>
+
+  <!-- Window 3 -->
+  <rect x="574" y="92" width="255" height="340" rx="10" fill="#DDDAD3" stroke="#C6C2B9"/>
+  <rect x="574" y="92" width="255" height="40" rx="10" fill="#B3554D"/>
+  <text x="590" y="118" font-size="16" font-weight="700" fill="#ffffff">3 · Report &amp; Comment</text>
+  <g font-size="13" font-weight="700">
+    <rect x="590" y="150" width="102" height="34" rx="8" fill="#EDEBE6" stroke="#C6C2B9"/>
+    <text x="602" y="166" font-size="10" font-weight="400" fill="#6b6559">MYP Grade</text>
+    <text x="602" y="180" fill="#B3554D">6</text>
+    <rect x="700" y="150" width="115" height="34" rx="8" fill="#EDEBE6" stroke="#C6C2B9"/>
+    <text x="712" y="166" font-size="10" font-weight="400" fill="#6b6559">School Grade</text>
+    <text x="712" y="180" fill="#B3554D">8</text>
+  </g>
+  <text x="590" y="212" font-size="13" fill="#38352F">▸ Teacher remarks</text>
+  <rect x="590" y="224" width="223" height="52" rx="6" fill="#EDEBE6" stroke="#C6C2B9"/>
+  <text x="600" y="244" font-size="11" fill="#6b6559">Strong observational drawing;</text>
+  <text x="600" y="260" font-size="11" fill="#6b6559">develop tonal range next term.</text>
+  <text x="590" y="300" font-size="13" fill="#38352F">▸ Generated report comment</text>
+  <rect x="590" y="312" width="223" height="66" rx="6" fill="#EDEBE6" stroke="#C6C2B9"/>
+  <text x="600" y="332" font-size="11" fill="#6b6559">"Alex has shown real growth in</text>
+  <text x="600" y="348" font-size="11" fill="#6b6559">observational work this term…"</text>
+  <rect x="590" y="390" width="120" height="26" rx="13" fill="#B3554D"/>
+  <text x="606" y="408" font-size="12" font-weight="700" fill="#ffffff">Generate comment</text>
+
+  <!-- arrows between windows -->
+  <g stroke="#B3554D" stroke-width="2" fill="#B3554D">
+    <line x1="287" y1="262" x2="300" y2="262"/><polygon points="300,258 308,262 300,266"/>
+    <line x1="559" y1="262" x2="572" y2="262"/><polygon points="572,258 580,262 572,266"/>
+  </g>
+</svg>

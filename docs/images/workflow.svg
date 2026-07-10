@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 300" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="860" height="300" rx="14" fill="#E9E7E2"/>
+  <text x="30" y="42" font-size="24" font-weight="700" fill="#38352F">The grading workflow</text>
+  <text x="30" y="66" font-size="14" fill="#6b6559">From a folder of student work to a finished report comment — five steps.</text>
+
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <!-- Step boxes -->
+    <g>
+      <circle cx="90" cy="150" r="26" fill="#B3554D"/>
+      <text x="90" y="158" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+      <text x="90" y="205" font-size="13" font-weight="700" fill="#38352F" text-anchor="middle">Ingest</text>
+      <text x="90" y="223" font-size="11" fill="#6b6559" text-anchor="middle">Import grade CSVs</text>
+      <text x="90" y="238" font-size="11" fill="#6b6559" text-anchor="middle">or watch a folder</text>
+    </g>
+    <g>
+      <circle cx="255" cy="150" r="26" fill="#B3554D"/>
+      <text x="255" y="158" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+      <text x="255" y="205" font-size="13" font-weight="700" fill="#38352F" text-anchor="middle">Review</text>
+      <text x="255" y="223" font-size="11" fill="#6b6559" text-anchor="middle">Weight the evidence;</text>
+      <text x="255" y="238" font-size="11" fill="#6b6559" text-anchor="middle">flag or exclude scores</text>
+    </g>
+    <g>
+      <circle cx="420" cy="150" r="26" fill="#B3554D"/>
+      <text x="420" y="158" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">3</text>
+      <text x="420" y="205" font-size="13" font-weight="700" fill="#38352F" text-anchor="middle">Grade</text>
+      <text x="420" y="223" font-size="11" fill="#6b6559" text-anchor="middle">A–D roll up into</text>
+      <text x="420" y="238" font-size="11" fill="#6b6559" text-anchor="middle">MYP &amp; School grades</text>
+    </g>
+    <g>
+      <circle cx="585" cy="150" r="26" fill="#B3554D"/>
+      <text x="585" y="158" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">4</text>
+      <text x="585" y="205" font-size="13" font-weight="700" fill="#38352F" text-anchor="middle">Comment</text>
+      <text x="585" y="223" font-size="11" fill="#6b6559" text-anchor="middle">Generate a report</text>
+      <text x="585" y="238" font-size="11" fill="#6b6559" text-anchor="middle">comment per student</text>
+    </g>
+    <g>
+      <circle cx="770" cy="150" r="26" fill="#7f9b74"/>
+      <text x="770" y="158" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">5</text>
+      <text x="770" y="205" font-size="13" font-weight="700" fill="#38352F" text-anchor="middle">Finalize</text>
+      <text x="770" y="223" font-size="11" fill="#6b6559" text-anchor="middle">Export the pack;</text>
+      <text x="770" y="238" font-size="11" fill="#6b6559" text-anchor="middle">snapshot the term</text>
+    </g>
+
+    <!-- connectors -->
+    <g stroke="#C6A24B" stroke-width="3" fill="#C6A24B">
+      <line x1="120" y1="150" x2="223" y2="150"/><polygon points="223,144 235,150 223,156"/>
+      <line x1="285" y1="150" x2="388" y2="150"/><polygon points="388,144 400,150 388,156"/>
+      <line x1="450" y1="150" x2="553" y2="150"/><polygon points="553,144 565,150 553,156"/>
+      <line x1="615" y1="150" x2="738" y2="150"/><polygon points="738,144 750,150 738,156"/>
+    </g>
+  </g>
+</svg>

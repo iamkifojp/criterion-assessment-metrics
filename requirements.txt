@@ -1,0 +1,15 @@
+streamlit==1.58.0
+plotly>=5.20
+matplotlib>=3.8          # report-card trend charts (replaces kaleido — do NOT install kaleido)
+openpyxl>=3.1
+python-docx>=1.1.0
+
+# Grading workspace sub-app (Flask + Google Drive sync + PDF exam slicing). It
+# runs as its own process but is launched by this app on demand, so its deps
+# must be present or the workspace crashes on startup (e.g. missing PyMuPDF ->
+# the Connect Google Drive / Watch handoff fails with "connection refused").
+-r cam_grading_workspace/requirements.txt
+
+# Optional - only needed for native "API call" mode (clipboard mode works without these)
+anthropic>=0.39          # Claude
+google-genai>=0.3        # Gemini (legacy google-generativeai also supported)

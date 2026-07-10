@@ -1,0 +1,31 @@
+# Art Criterion Metrics — app theme.
+#
+# Calm neutral grey canvas with a muted brick-red accent, replacing the stark
+# white default light theme. Streamlit >= 1.46 supports separate palettes for
+# light and dark mode; the toggle in the app menu (or the OS preference) picks
+# between them, and both keep the same grey/red character.
+#
+# app.py adds a small theme-aware CSS layer on top (tinted secondary buttons,
+# elevated dialog/popover surfaces) via theme_css() — keep the two in sync.
+
+[theme.light]
+primaryColor = "#B3554D"                   # muted brick red (was default #FF4B4B)
+backgroundColor = "#E9E7E2"                # soft warm grey instead of white
+secondaryBackgroundColor = "#DDDAD3"       # inputs, uploaders, code, sidebar
+textColor = "#38352F"                      # soft near-black, gentler contrast
+linkColor = "#9C4A43"
+borderColor = "#C6C2B9"
+showWidgetBorder = true
+codeBackgroundColor = "#DEDBD4"
+dataframeHeaderBackgroundColor = "#DEDBD4"
+
+[theme.dark]
+primaryColor = "#C4675F"                   # same brick red, lifted for dark bg
+backgroundColor = "#252423"                # warm dark grey (not pure black)
+secondaryBackgroundColor = "#32312F"
+textColor = "#D8D5CF"
+linkColor = "#D18C84"
+borderColor = "#4B4945"
+showWidgetBorder = true
+codeBackgroundColor = "#32312F"
+dataframeHeaderBackgroundColor = "#32312F"
