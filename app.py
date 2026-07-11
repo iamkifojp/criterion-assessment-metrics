@@ -502,6 +502,12 @@ DENSE_CSS = """
      (or red) notification never stretches across the whole tray. */
   .st-key-save_status_bar { max-width: 520px; }
   .st-key-save_status_bar [data-testid="stAlert"] { max-width: 520px; }
+  /* Window 3 email chip: shrink the click-to-copy code block into a compact
+     pill pushed to the right of the name heading, hugging the baseline. */
+  .st-key-w3_email_chip { margin-left: auto; width: fit-content; max-width: 100%; }
+  .st-key-w3_email_chip [data-testid="stCode"] { margin: 0; }
+  .st-key-w3_email_chip pre { margin: 0; padding: 2px 8px; }
+  .st-key-w3_email_chip code { font-size: 0.72rem; }
 </style>
 """
 
@@ -6981,15 +6987,18 @@ def render_window3() -> None:
         st.caption("Select a student in Window 2 to load their full details.")
         return
 
-    # Full name at the top (student_label falls back to ID when name is blank).
-    st.markdown(f"### {student_label(student)}")
-
-    # Roster email under the name — click-to-copy for pasting into report tools
-    # or an email client. st.code renders a compact single line with a native
-    # copy icon. Blank email (not on the roster) renders nothing.
+    # Name heading + roster email on one line: name left, a small click-to-copy
+    # code chip pushed right (st.code keeps its native copy icon on hover). The
+    # chip lives in a keyed container so theme_css can shrink it. Blank email
+    # (not on the roster) → render the heading full-width, no empty chip.
     _email = student_email_for(student)
     if _email:
-        st.code(_email, language=None)
+        _name_col, _email_col = st.columns([3, 2], vertical_alignment="bottom")
+        _name_col.markdown(f"### {student_label(student)}")
+        with _email_col.container(key="w3_email_chip"):
+            st.code(_email, language=None)
+    else:
+        st.markdown(f"### {student_label(student)}")
 
     # --- Scrollable analytical TOP -------------------------------------------
     # Fixed-height scroll region keeps the cockpit compact. The AI comment deck
