@@ -6,6 +6,48 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-11 — audience reframe + Gyoshu-specific report grades made optional
+
+**Symptom it addresses:** two things blocked a clean public release. (1) The docs
+pitched CAM as a tool "for IB MYP **Arts** teachers," which undersells it — the
+app grew from artwork grading into a Google-Classroom grading + reporting toolkit
+useful to any MYP teacher, and the exam-slicing workflow helps any subject. (2)
+Three report-card figures — **MYP Grade (1–7)**, **Effort / English-use**, and
+**School Grade (1–10)** — are Gyoshu report-card conventions, not universal, yet
+were always shown, so every public user saw school-specific fields they don't use.
+
+**What this change does:**
+
+- **Docs reframed** (`README.md`, `docs/USER_MANUAL.md`, `docs/ARCHITECTURE.md`).
+  CAM is now described as being for **IB MYP teachers who use Google Classroom**,
+  with the origin story (artwork grading of images/video → PDFs and Google Docs →
+  exam slicing for all subjects) and the OAuth caveat spelled out: Google Docs
+  grading needs OAuth, so a plain local folder grades PDFs. The `engine/`
+  docstrings ("MYP Arts criteria A–D") were left as-is — they describe the grading
+  model CAM actually computes, not the audience.
+- **The three report grades are now opt-in**, gated by a new shared config
+  `st.session_state["report_cfg"]` (`show_myp_grade`, `show_effort`,
+  `show_school_grade`, plus a configurable `effort_min`/`effort_max` range). It
+  round-trips in the DB session payload exactly like `llm_cfg` (merge over defaults
+  on restore), so the choice follows the teacher across devices. **All three
+  default OFF** — a fresh/public install reports only the criterion A–D grades.
+- **New ⚙ Settings → Report-card grades panel** (own form, `persist()` on save)
+  holds the three toggles and the Effort range.
+- **Scope of an OFF toggle:** the figure is still computed, stored, and kept in the
+  **CAM master Excel export** (unchanged). It is withheld only from the
+  student-facing surfaces — the Window 3 chips and every DOCX report (individual,
+  combined pack, mail-merge ZIP), all gated at the one `_student_docx` chokepoint.
+  The LLM comment prompt never injected these figures, so it needed no change.
+- **Effort range plumbing:** `effort_bounds()` + `student_effort()` clamp the score
+  into the configured range; the Window 3 selectbox offers `range(min, max+1)`. The
+  banded lookup tables (`MYP_GRADE_BOUNDS` / `SCHOOL_GRADE_BOUNDS`) stay hard-coded
+  school policy — only visibility and the Effort range are user-configurable.
+
+Verified with a `CAM_DB_PATH`-sandboxed launch on the fictional sample: default
+boot showed no report-grade chips; with `report_cfg` all-on (effort 1–8) the
+sample student showed Effort 4 / MYP 6 / School 8, confirming persist → restore →
+display and the lookup math.
+
 ## 2026-07-11 — remote-history hygiene: verified clean + footgun defused (safety plan Phase 6)
 
 **Symptom it addresses:** the old *private* history (real student export

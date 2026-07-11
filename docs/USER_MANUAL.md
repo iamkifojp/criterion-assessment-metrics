@@ -21,7 +21,7 @@ write the report.**
 |---|---|
 | **1 · Classes & Assignments** | Switch between the classes you teach, import grade CSVs, watch a synced folder for new work, and see the timeline of assessed assignments. |
 | **2 · Students & Evidence** | See every student's Criterion A–D scores, flag or exclude a piece, mark work late, and set the weighting method. Each student's gender (optional) sets the pronouns used in their comment. |
-| **3 · Report & Comment** | Read the auto-computed **MYP Grade** and **School Grade**, jot teacher remarks, and generate the report-card comment. |
+| **3 · Report & Comment** | Read the final criterion grades — plus, if you switch them on in Settings, the school-specific **MYP Grade** / **Effort** / **School Grade** — jot teacher remarks, and generate the report-card comment. |
 
 You can drag the column widths and panel heights to suit your screen; those
 preferences are saved to your device only.
@@ -50,16 +50,24 @@ preferences are saved to your device only.
 ## How a grade is worked out
 
 Each MYP criterion is scored **0–8**, and a student collects several scores per
-criterion across the term. CAM weights **recent** work more heavily, sums the
-per-criterion results, and looks the total up to produce the two report grades.
+criterion across the term. CAM weights **recent** work more heavily and sums the
+per-criterion results — that criterion picture is always the core of the grade.
 
 ![Criteria roll up into the MYP grade and School grade](images/grade-rollup.svg)
 
-- **MYP Grade (1–7)** comes straight from the criterion sum.
-- **School Grade (1–10)** folds in an **Effort / English-use** score through a
-  configurable lookup table, so it reflects more than the criteria alone.
 - The **weighting method** (for example *"60/40 Recency"*) is yours to choose in
   Window 2.
+- **Optional school-specific roll-ups.** Some schools also report banded grades
+  on top of the criteria. These are **off by default**; turn on the ones you use
+  in **⚙ Settings → Report-card grades**:
+  - **MYP Grade (1–7)** — looked up straight from the criterion sum.
+  - **Effort / English-use** — a per-student, per-term score you set (its range
+    is configurable in the same settings section).
+  - **School Grade (1–10)** — folds the Effort/English-use score in with the
+    criterion sum through a lookup table.
+
+  When enabled they appear in Window 3 and in the report cards; when off, CAM
+  reports the criterion grades alone.
 
 Nothing here is a black box: every score that feeds a grade is visible in Window
 2, and you can exclude or re-weight any of it.

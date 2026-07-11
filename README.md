@@ -1,9 +1,17 @@
 # Criterion Assessment Metrics (CAM)
 
-A desktop dashboard for **IB MYP Arts** teachers. CAM tracks each student's
-criterion grades (A–D) across a whole school year, turns a term's worth of
-evidence into a defensible grade suggestion, and drafts report-card comments —
-so grading and reporting take minutes instead of evenings.
+A desktop grading-and-reporting toolkit for **IB MYP** teachers who work in
+**Google Classroom**. CAM tracks each student's criterion grades (A–D) across a
+whole school year, turns a term's worth of evidence into a defensible grade
+suggestion, and drafts report-card comments — so grading and reporting take
+minutes instead of evenings.
+
+CAM started life as a tool for grading **artworks** — images and video handed in
+through Google Classroom and its Drive folders — and has since grown to assess
+PDFs and Google Docs as well, and to slice and mark scanned exam papers. It now
+suits any MYP teacher who collects and grades student work in Google Classroom.
+In particular, the **exam-slicing** workflow is immediately useful to anyone who
+sets and marks exam papers, whatever their subject.
 
 > **Note on data:** This repository ships with **fictional sample data only**.
 > No real student information is included. See [Sample data](#sample-data).
@@ -16,15 +24,22 @@ so grading and reporting take minutes instead of evenings.
   grades from CSV exports; each score is stamped with a date so recent work can
   be weighted more heavily than older work.
 - **Criterion-based aggregation.** MYP criteria A–D are each graded on the 0–8
-  band scale. CAM computes a recency-weighted suggestion per criterion and rolls
-  them up into an overall **MYP Grade (1–7)** and a configurable **School Grade
-  (1–10)** via lookup tables.
+  band scale, and CAM computes a recency-weighted suggestion per criterion.
+  Optional school-specific roll-ups — an overall **MYP Grade (1–7)**, an
+  **Effort / English-use** score, and a **School Grade (1–10)** via lookup
+  tables — can be switched on in **⚙ Settings → Report-card grades** (all off by
+  default, so a fresh install reports just the criterion grades).
 - **Report-card comments.** Generate a per-student comment from the evidence,
   either by copying a ready-made prompt to your clipboard or — optionally —
   through the Claude or Gemini API. Comments are pronoun-aware and term-aware.
-- **Grading workspace (sub-app).** An optional Flask companion app for grading
-  student work synced from a Google Drive / OneDrive folder, including a
-  thumbnail-grid matching view, an anonymous grading mode, and PDF exam slicing.
+- **Grading workspace (sub-app).** An optional Flask companion app for marking
+  student work synced from Google Classroom / a Google Drive (or OneDrive)
+  folder: images and video (the original artwork use case), PDFs, and Google
+  Docs — with a thumbnail-grid matching view and an anonymous grading mode. It
+  also hosts **exam slicing**, which cuts a scanned exam PDF into per-student,
+  per-question pieces for fast marking — handy for any teacher who sets exam
+  papers, not just art teachers. Google Docs grading requires OAuth; pointed at
+  a plain local folder (no OAuth) the workspace grades PDFs.
 - **Calm, dense UI.** A three-window "cockpit" layout (roster → evidence →
   report) built on Streamlit, themed for long grading sessions.
 
