@@ -6,6 +6,54 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-12 — one design language across the deliverables tray
+
+**Symptom it addresses:** the five tray deliverables looked like they came from
+different apps. The Excel master's tabs 1–3 ("Final Suggestions", "Raw Scores",
+"Assignments") were bare `ws.append` rows — no fonts, fills, widths, or freeze
+panes — while tab 4 ("Classroom Entry") was fully styled in a standalone office
+**navy** (`1F4E78`) that matched neither the others nor the app. The Word
+reports used python-docx defaults with no shared identity.
+
+**What this change does** (Phase 4 of
+[UI_AND_DELIVERABLES_POLISH_PLAN.md](UI_AND_DELIVERABLES_POLISH_PLAN.md)):
+standardise every deliverable on the app's **own brick-red light theme**
+(`.streamlit/config.toml`), not the generic navy.
+
+- **Shared openpyxl style kit.** New module-level palette constants plus
+  `_xl_style_kit()` (reusable Fonts/Fills/Borders/Alignments) and helpers
+  `_style_header_row()` / `_finish_sheet()`, keyed to the theme: `B3554D` brick
+  header band with white bold text, `DDDAD3` warm-grey sub-header with `9C4A43`
+  bold text, `E9E7E2` label-column fill, `C6C2B9` thin borders, Arial throughout
+  (matches tab 4, universally available in Excel/Word).
+- **All four Excel tabs now share the system.** Classroom Entry is restyled from
+  navy to the kit (same structure, new colours). Final Suggestions gets a header
+  band, ID/Name on the label fill, centred grade cells, and freeze `C2`; Raw
+  Scores gets a header band, a wide wrapped Comment column, soft warm-grey zebra
+  striping, and freeze `A2`; Assignments styles its 4-row class/subject/term
+  block as a title card, then a header band + table with freeze `A7`. Gridlines
+  off and column widths on all.
+- **Word pass (typography, not layout).** `_apply_report_styles()` — called from
+  `_new_report_document()`, so the report-card pack, single report, mail-merge
+  ZIP, and class-comments doc all inherit it — sets the base style (Arial
+  10.5 pt, `38352F`) and brick heading styles (`B3554D` H1 / Title, `9C4A43`
+  H2/H3), with a thin warm-grey rule under the H1 page title.
+
+**Deliberately unchanged:** styling only — no deliverable's *content* changes.
+Excel data values are byte-for-byte what they were, so the Classroom Entry
+paste-back workflow keeps its exact shape and its Latin first-name ordering; the
+report documents keep the same paragraphs, tables, and page breaks; the
+matplotlib trend PNG (`_trend_png`) is untouched.
+
+Covered by `tests/test_deliverable_style.py` (10 tests): the kit palette,
+save/reload round-trips of the two helpers, the tab-4 restyle with paste-back
+data left intact, and the docx base font / heading colour. A sandboxed build of
+all five deliverables confirms every Excel tab reloads with header fill
+`B3554D`, gridlines off, and freeze panes set, and every Word doc opens with
+Arial body text and the brick accent.
+
+---
+
 ## 2026-07-12 — per-class roster name order (4 modes)
 
 **Symptom it addresses:** the roster was always sorted one way — hiragana
