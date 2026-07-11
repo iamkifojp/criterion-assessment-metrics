@@ -78,6 +78,8 @@ from engine import (
     trend_for_series,
     format_trend_sentence,
     load_term_summaries,
+    load_class_mirror,
+    save_class_mirror,
 )
 # METHOD_60_40 / METHOD_WEIGHTED_MEDIAN are the two methods the auto default
 # picks between; they live in the aggregation module (not re-exported by the
@@ -617,6 +619,17 @@ def init_state() -> None:
         "db_load_blocked": None,  # Phase-1 quarantine: {reason,path} when the
                                   # configured DB is unreadable/unavailable and
                                   # persist() must refuse to overwrite it.
+        # Comment cloud-mirror (docs/COMMENT_CLOUD_MIRROR_PLAN.md, Phase 2):
+        #   mirror_ready               one-shot gate — mirroring only runs after
+        #                              the boot heal/restore (invariant 1).
+        #   mirror_fingerprints        class -> fingerprint of its last mirrored
+        #                              slice; skips churn-free rewrites (inv. 3).
+        #   mirror_deletions_this_session  a comment/remark was cleared in-app,
+        #                              so the shrink tripwire (inv. 2) must allow
+        #                              a legitimate mass reduction to reach disk.
+        "mirror_ready": False,
+        "mirror_fingerprints": {},
+        "mirror_deletions_this_session": False,
         "db_switch_pending": None,  # Phase-2 adopt-vs-overwrite: {path,counts,
                                     # old_custom} while the settings dialog asks
                                     # whether to load an existing DB at a newly
@@ -699,6 +712,13 @@ def init_state() -> None:
             if loaded and (loaded["gradebook"].students or loaded["gradebook"].assignments):
                 st.session_state["gradebook"] = loaded["gradebook"]
                 restore_session(loaded.get("session", {}))
+            # Cloud-mirror invariant 1 (heal before mirror): only clear the
+            # per-class mirror to write once we've reached a restored/healed
+            # state, never from a quarantined boot. Phase 3 runs its heal pass
+            # right here (and seeds the fingerprints); until then the mirror is
+            # simply enabled after restore, so the first persist() backfills
+            # every class file from the restored session.
+            st.session_state["mirror_ready"] = True
         st.session_state["db_loaded"] = True
 
 
@@ -721,7 +741,11 @@ def build_session_payload() -> dict:
         "excused_flags": ss["excused_flags"],
         "final_override": ss["final_override"],
         "teacher_remarks": ss["teacher_remarks"],
-        "llm_response": ss["llm_response"],        # legacy alias (current term)
+        # ``llm_response`` (the current term's comment map) is NOT persisted: it
+        # is a live in-memory alias of ``comments_by_term[current term]`` (see
+        # ensure_term_context), so writing it duplicated ~11% of the DB for
+        # nothing. The loader already prefers ``comments_by_term`` and keeps
+        # ``llm_response`` only as a read-only fallback for pre-multi-term DBs.
         "comments_by_term": ss["comments_by_term"],
         "effort_by_term": ss["effort_by_term"],
         "calc_method_by_term": ss["calc_method_by_term"],
@@ -925,6 +949,12 @@ def persist(show: bool = False, allow_shrink: bool = False) -> None:
             st.session_state["save_status"] = ("ok", f"Saved to {path}.")
     except Exception as exc:  # disk full / permissions / etc.
         st.session_state["save_status"] = ("error", f"Save failed: {exc}")
+        return
+    # Cloud-mirror the per-class teacher input AFTER the DB write succeeds, so a
+    # mirror hiccup can never abort the primary save. Runs outside the try above:
+    # it has its own never-raises contract, and a shrink-tripwire refusal here
+    # deliberately overwrites the "Saved" status with its own warning.
+    _mirror_classes_to_cloud()
 
 
 def _db_file_counts(path: str) -> dict:
@@ -1182,6 +1212,174 @@ def past_term_context_for(student) -> list:
         if text:
             out.append((term, text))
     return out
+
+
+# --------------------------------------------------------------------------
+# Teacher-input cloud mirror (per-class files; docs/COMMENT_CLOUD_MIRROR_PLAN.md)
+# --------------------------------------------------------------------------
+#
+# Every teacher-typed input the app cannot rebuild from the export CSVs — overall
+# comments, teacher remarks, effort scores, final-grade overrides and CAM-typed
+# score comments — lives only in the DB session. The 2026-07-10 wipe destroyed a
+# term of it. persist() mirrors each class's slice of that state into the class's
+# own cloud folder (``acm_term_summaries_<class>.json``, the v2 payload written
+# by engine.save_class_mirror) so a wipe leaves a durable cloud twin for the
+# heal-on-load pass (Phase 3) to restore. The DB session stays the runtime source
+# of truth; the class files are its durable twin.
+#
+# Three safety invariants gate the write (all enforced in _mirror_classes_to_cloud):
+#   1. Heal before mirror — never push a freshly-wiped/quarantined session's
+#      emptiness over good class files (``mirror_ready`` / ``db_load_blocked``).
+#   2. Shrink tripwire — refuse to collapse a term's comment count below half of
+#      what the file holds, unless a comment/remark was deliberately cleared
+#      in-app this session (``mirror_deletions_this_session``).
+#   3. No churn — skip the write when the slice is byte-identical to the last one
+#      mirrored (per-class fingerprint), so OneDrive isn't spammed on every edit.
+
+# Shrink tripwire: a term must keep >= half its on-disk comments (invariant 2),
+# but only once the file holds enough of them to be worth guarding.
+MIRROR_SHRINK_MIN_COMMENTS = 4
+MIRROR_SHRINK_KEEP_RATIO = 0.5
+
+
+def _class_sids(cls: str) -> set:
+    """Every student id owned by a class: its live roster plus its archived
+    (departed-but-grades-kept) students, so a departed student's typed comment
+    still earns a durable cloud twin instead of silently dropping out."""
+    ss = st.session_state
+    sids = {e["key"] for e in ss["rosters"].get(cls, []) if e.get("key")}
+    for e in ss.get("archived_students", {}).get(cls, []):
+        if e.get("key"):
+            sids.add(e["key"])
+    return sids
+
+
+def build_class_mirror(cls: str) -> dict:
+    """Assemble the v2 teacher-input mirror slice for one class from live session
+    state + the gradebook. Every global teacher-input map is filtered to this
+    class's own students so the per-class file never carries another class's
+    content; blank leaves and empty containers are dropped by the engine on
+    write (engine.save_class_mirror -> _clean_mirror)."""
+    ss = st.session_state
+    sids = _class_sids(cls)
+
+    terms: dict = {}
+    for term, by_sid in ss["comments_by_term"].items():
+        slice_ = {sid: txt for sid, txt in by_sid.items()
+                  if sid in sids and str(txt).strip()}
+        if slice_:
+            terms[term] = slice_
+
+    remarks = {sid: txt for sid, txt in ss["teacher_remarks"].items()
+               if sid in sids and str(txt).strip()}
+
+    effort: dict = {}
+    for term, by_sid in ss["effort_by_term"].items():
+        slice_ = {sid: v for sid, v in by_sid.items() if sid in sids}
+        if slice_:
+            effort[term] = slice_
+
+    final_override = {sid: dict(crits)
+                      for sid, crits in ss["final_override"].items()
+                      if sid in sids and crits}
+
+    class_assignments = {a.name for a in gb().assignments
+                         if getattr(a, "class_name", "") == cls}
+    score_comments: dict = {}
+    for sid in sids:
+        student = gb().students.get(sid)
+        if student is None:
+            continue
+        for crit, bucket in student.scores.items():
+            for sc in bucket:
+                text = (sc.comment or "").strip()
+                if not text or sc.assignment not in class_assignments:
+                    continue
+                score_comments.setdefault(sc.assignment, {}).setdefault(
+                    sid, {})[crit] = sc.comment
+
+    return {
+        "terms": terms,
+        "remarks": remarks,
+        "effort": effort,
+        "final_override": final_override,
+        "score_comments": score_comments,
+    }
+
+
+def _mirror_fingerprint(mirror: dict) -> str:
+    """Stable content hash of a class slice, for the no-churn guard (invariant
+    3). Rebuilt identically from unchanged session state, so an autosave that
+    didn't touch this class's teacher input reproduces the same fingerprint."""
+    blob = json.dumps(mirror, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _mirror_shrink_would_lose(folder: str, cls: str, new_mirror: dict) -> bool:
+    """True when writing ``new_mirror`` would drop some term's overall-comment
+    count below half of what the class file already holds (invariant 2). Only
+    the ``terms`` section is guarded — it is the human-typed content a wipe
+    cannot rebuild. Best-effort: an unreadable/absent file never blocks."""
+    try:
+        existing = load_class_mirror(folder, cls)
+    except Exception:
+        return False
+    old_terms = existing.get("terms", {}) or {}
+    new_terms = new_mirror.get("terms", {}) or {}
+    for term, old_map in old_terms.items():
+        old_n = len(old_map)
+        if old_n < MIRROR_SHRINK_MIN_COMMENTS:
+            continue
+        if len(new_terms.get(term, {})) < old_n * MIRROR_SHRINK_KEEP_RATIO:
+            return True
+    return False
+
+
+def _mark_teacher_input_deleted() -> None:
+    """Record that a comment/remark was deliberately cleared in-app this session,
+    so the mirror shrink tripwire (invariant 2) lets the reduction reach disk
+    instead of mistaking a real deletion for catastrophic mass loss."""
+    st.session_state["mirror_deletions_this_session"] = True
+
+
+def _mirror_classes_to_cloud() -> None:
+    """Mirror every class's teacher-input slice to its cloud file. Called from
+    persist() after a successful DB write.
+
+    Never raises (invariant 4): one class's cloud hiccup degrades to a
+    ``save_status`` note and never blocks the other classes or the autosave that
+    already succeeded. The three write gates are invariants 1-3 above."""
+    ss = st.session_state
+    # Invariant 1: never mirror before the boot heal/restore, nor from a
+    # quarantined boot (that state is demo/empty and would clobber good files).
+    if ss.get("db_load_blocked") or not ss.get("mirror_ready"):
+        return
+    fingerprints = ss.setdefault("mirror_fingerprints", {})
+    allow_shrink = ss.get("mirror_deletions_this_session", False)
+    blocked: list = []
+    for cls in class_names():
+        try:
+            mirror = build_class_mirror(cls)
+            fp = _mirror_fingerprint(mirror)
+            if fingerprints.get(cls) == fp:
+                continue  # invariant 3: unchanged slice -> no churn
+            folder = class_data_dir(cls, create=True)
+            if not allow_shrink and _mirror_shrink_would_lose(folder, cls, mirror):
+                blocked.append(cls)
+                continue  # invariant 2: refuse a catastrophic comment-mass loss
+            save_class_mirror(folder, cls, mirror)
+            fingerprints[cls] = fp
+        except Exception:
+            continue  # invariant 4: degrade gracefully, never take autosave down
+    if blocked:
+        ss["save_status"] = (
+            "error",
+            "Cloud comment backup skipped for "
+            + ", ".join(f"'{c}'" for c in blocked)
+            + ": the class file holds many more comments than this session, so "
+            "the backup was held back to avoid overwriting them. If you did "
+            "clear comments on purpose, edit any comment to confirm and it will "
+            "save.")
 
 
 def sync_roster_into_students() -> None:
@@ -3674,6 +3872,10 @@ def delete_class(name: str) -> bool:
         ss["sel_assignment"] = None
         ss["edit_cell"] = None
     ensure_class_context()  # recreate a default class if none remain
+    # Deleting a class deliberately drops its students' teacher input from the
+    # session: flag it so the mirror shrink tripwire treats the reduction as
+    # intended rather than as catastrophic mass loss (invariant 2).
+    _mark_teacher_input_deleted()
     persist()
     return True
 
@@ -3705,6 +3907,10 @@ def wipe_database_full() -> None:
     ss["sel_assignment"] = None
     ss["edit_cell"] = None
     ensure_class_context()  # recreate the default empty class
+    # A checkbox-confirmed wipe is a deliberate mass deletion: tell the cloud
+    # mirror so its shrink tripwire doesn't fight the reduction (the old classes'
+    # files aren't rewritten anyway — those classes are gone from the session).
+    _mark_teacher_input_deleted()
     # Deliberate, checkbox-confirmed wipe: bypass the Phase-3 shrink tripwire
     # (that is exactly the mass loss it exists to catch). The daily .bak-auto
     # snapshot inside persist() still captures the pre-wipe DB.
@@ -6799,10 +7005,15 @@ def _render_ai_deck(student) -> None:
     hdr[0].markdown(f"**Overall comment — {first_name_for(student)} · "
                     f"{current_term()} (editable)**")
     with hdr[1].popover("Remarks", width="stretch"):
+        prev_rem = st.session_state["teacher_remarks"].get(student.student_id, "")
         rem = st.text_area(
             "Teacher remarks (notes that steer the generated comment)",
-            value=st.session_state["teacher_remarks"].get(student.student_id, ""),
+            value=prev_rem,
             key=f"rem_box_{student.student_id}")
+        # Clearing a remark is a deliberate deletion — flag it for the mirror
+        # shrink tripwire the same way the overall-comment box does.
+        if prev_rem.strip() and not rem.strip():
+            _mark_teacher_input_deleted()
         st.session_state["teacher_remarks"][student.student_id] = rem
     overall = st.text_area(
         "Overall comment", label_visibility="collapsed",
@@ -6812,7 +7023,12 @@ def _render_ai_deck(student) -> None:
              f"saved under {current_term()} — switch the term in the top bar "
              "to view or edit another term's comment for this student. The "
              "report-card pack collates one of these per student.")
-    if overall != st.session_state["llm_response"].get(student.student_id, ""):
+    prev_overall = st.session_state["llm_response"].get(student.student_id, "")
+    if overall != prev_overall:
+        # Clearing a comment is a deliberate deletion: tell the cloud mirror so
+        # its shrink tripwire lets the reduced slice reach disk (invariant 2).
+        if prev_overall.strip() and not overall.strip():
+            _mark_teacher_input_deleted()
         st.session_state["llm_response"][student.student_id] = overall
         persist()
 
