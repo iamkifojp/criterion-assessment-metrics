@@ -656,6 +656,19 @@ def init_state() -> None:
             "skip_existing": True,     # batch: skip students who already have a comment
             "model": "",
         },
+        # School-specific report-card figures layered on top of the MYP
+        # criterion grades. All OFF by default so a fresh/public install shows
+        # only the criterion A-D grading; a school that uses them enables them
+        # in ⚙ Settings. Round-trips in the shared DB (like llm_cfg) so the
+        # choice follows the teacher across devices. The CAM master (Excel)
+        # export always carries all three regardless of these toggles.
+        "report_cfg": {
+            "show_myp_grade": False,     # MYP Grade (1-7) banded lookup
+            "show_effort": False,        # Effort / English-use score (editable)
+            "show_school_grade": False,  # School Grade (1-10) banded lookup
+            "effort_min": 0,             # inclusive Effort/English-use range
+            "effort_max": 5,
+        },
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -730,6 +743,8 @@ def build_session_payload() -> dict:
                        for cls, p in ss["unit_plans"].items() if p},
         # Tuned LLM parameters (never the API key — that stays memory-only).
         "llm_cfg": {k: v for k, v in ss["llm_cfg"].items() if k != "api_key"},
+        # School-specific report-card figure toggles + Effort range.
+        "report_cfg": dict(ss["report_cfg"]),
     }
 
 
@@ -801,6 +816,15 @@ def restore_session(session: dict) -> None:
             if k in merged_cfg and k != "api_key":
                 merged_cfg[k] = v
         ss["llm_cfg"] = merged_cfg
+    # Report-card figure toggles + Effort range: same merge-over-defaults, so a
+    # key added in a future release keeps its default on an older database.
+    saved_rc = session.get("report_cfg")
+    if isinstance(saved_rc, dict):
+        merged_rc = dict(ss["report_cfg"])
+        for k, v in saved_rc.items():
+            if k in merged_rc:
+                merged_rc[k] = v
+        ss["report_cfg"] = merged_rc
     # Legacy databases carry a top-level "calc_method" (the retired global method
     # dropdown) and "w_new" (the retired recency slider); both are ignored — the
     # calculation method is now per-student/per-term (calc_method_by_term, parsed
@@ -2236,15 +2260,31 @@ def aggregate_with_policy(student, crit_letter: str, names=None):
     )
 
 
+def report_cfg() -> dict:
+    """School-specific report-card figure toggles + Effort range (shared cfg)."""
+    return st.session_state["report_cfg"]
+
+
+def effort_bounds() -> tuple[int, int]:
+    """The configured inclusive (min, max) for the Effort/English-use score."""
+    rc = report_cfg()
+    lo, hi = int(rc.get("effort_min", 0)), int(rc.get("effort_max", 5))
+    return (hi, lo) if hi < lo else (lo, hi)
+
+
 def effort_map() -> dict:
-    """The CURRENT term's Effort/English-use map ({sid -> 0-5})."""
+    """The CURRENT term's Effort/English-use map ({sid -> score})."""
     return st.session_state["effort_by_term"].setdefault(current_term(), {})
 
 
 def student_effort(sid: str) -> int:
-    """This student's current-term Effort score (default 4 when unset)."""
+    """This student's current-term Effort score, clamped to the configured
+    range (defaults to EFFORT_DEFAULT when unset, then clamped)."""
     v = effort_map().get(sid, EFFORT_DEFAULT)
-    return v if isinstance(v, int) and 0 <= v <= 5 else EFFORT_DEFAULT
+    if not isinstance(v, int):
+        v = EFFORT_DEFAULT
+    lo, hi = effort_bounds()
+    return max(lo, min(hi, v))
 
 
 def student_term_grades(student):
@@ -3995,9 +4035,11 @@ def _student_docx(document, student, method, include_effort_school=True):
     marks, the progression graph, final criterion grades, the term's overall
     comment, and a generation timestamp.
 
-    ``include_effort_school`` gates the Effort/English Use and School Grade rows
-    of the grades table. The mail-merge pack passes ``False`` — those reports go
-    to students before their official report cards, so those two figures are
+    Which report-card grade rows appear at all is set in ⚙ Settings →
+    Report-card grades (Effort / MYP Grade / School Grade — all off by default).
+    On top of that, ``include_effort_school`` gates the Effort/English Use and
+    School Grade rows: the mail-merge pack passes ``False`` — those reports go to
+    students before their official report cards, so those two figures are
     withheld until then (the MYP Grade, which students do see, stays)."""
     document.add_heading(f"Report Card - {student_label(student)}", level=1)
     email = student_email_for(student)
@@ -4085,13 +4127,23 @@ def _student_docx(document, student, method, include_effort_school=True):
             cells[1].text = str(res.rounded_band) if res else "-"
 
     # ---- School report-card grades (shared helper — matches Window 3) ----
+    # Only the figures enabled in ⚙ Settings → Report-card grades appear here
+    # (all off by default). The CAM master Excel export keeps all three
+    # regardless — this gating is for the student-facing reports only.
+    rc = report_cfg()
     _n, _total, effort, myp, gyo = student_term_grades(student)
-    grade_rows = [("Effort / English Use", str(effort)),
-                  ("MYP Grade", str(myp) if myp is not None else "N/A"),
-                  ("School Grade", str(gyo) if gyo is not None else "N/A")]
+    grade_rows = []
+    if rc.get("show_effort", False):
+        grade_rows.append(("Effort / English Use", str(effort)))
+    if rc.get("show_myp_grade", False):
+        grade_rows.append(("MYP Grade", str(myp) if myp is not None else "N/A"))
+    if rc.get("show_school_grade", False):
+        grade_rows.append(
+            ("School Grade", str(gyo) if gyo is not None else "N/A"))
     if not include_effort_school:
         # Withheld until report cards are issued; School goes too because it
-        # folds effort in and would otherwise leak it. MYP Grade stays.
+        # folds effort in and would otherwise leak it. MYP Grade stays (only if
+        # it is enabled at all).
         grade_rows = [r for r in grade_rows if r[0] == "MYP Grade"]
     for label, value in grade_rows:
         cells = table.add_row().cells
@@ -4719,6 +4771,55 @@ def settings_dialog() -> None:
         st.session_state["dlg_settings"] = False
         st.rerun()
     st.caption(f"Active database file: `{db_path()}`")
+
+    # ---- Report-card grades (shared, saved with the database) ------------
+    # School-specific figures on top of the MYP criterion grades. Off by
+    # default; a school that uses them enables them here. Saved into the shared
+    # database (not device prefs) so the choice follows the teacher's data
+    # across machines, and kept in its own form so it never rides along with
+    # the DB-path adopt/overwrite flow above.
+    st.markdown("---")
+    st.markdown("**Report-card grades**")
+    st.caption("School-specific figures layered on top of the MYP criterion "
+               "grades. Saved with the database (shared across your devices). "
+               "All off by default — switch on the ones your report cards use.")
+    rc = st.session_state["report_cfg"]
+    with st.form("report_cfg_form"):
+        rc_myp = st.checkbox(
+            "MYP Grade (1–7)", value=bool(rc.get("show_myp_grade", False)),
+            help="Banded lookup from the sum of the final criterion grades.")
+        rc_eff = st.checkbox(
+            "Effort / English-use score",
+            value=bool(rc.get("show_effort", False)),
+            help="A per-student, per-term teacher score, editable in Window 3. "
+                 "Also feeds the School Grade when that is enabled.")
+        rc_sch = st.checkbox(
+            "School Grade (1–10)", value=bool(rc.get("show_school_grade", False)),
+            help="Banded lookup from the criterion-grade sum plus the "
+                 "Effort/English-use score.")
+        erange = st.columns(2)
+        rc_emin = erange[0].number_input(
+            "Effort / English-use min", min_value=0, max_value=20, step=1,
+            value=int(rc.get("effort_min", 0)), key="rc_emin",
+            help="Inclusive lowest selectable Effort score.")
+        rc_emax = erange[1].number_input(
+            "Effort / English-use max", min_value=0, max_value=20, step=1,
+            value=int(rc.get("effort_max", 5)), key="rc_emax")
+        rc_saved = st.form_submit_button("Save report-card grades",
+                                         width="stretch")
+    if rc_saved:
+        lo, hi = int(rc_emin), int(rc_emax)
+        if hi < lo:
+            lo, hi = hi, lo
+        rc.update({"show_myp_grade": bool(rc_myp),
+                   "show_effort": bool(rc_eff),
+                   "show_school_grade": bool(rc_sch),
+                   "effort_min": lo, "effort_max": hi})
+        persist()
+        st.session_state["save_status"] = (
+            "ok", "Report-card grade settings saved.")
+        st.session_state["dlg_settings"] = False
+        st.rerun()
 
     # ---- Manual re-scan (Sync is otherwise automatic) --------------------
     st.markdown("---")
@@ -6224,28 +6325,46 @@ def _render_grade_panel(student) -> None:
                    + ", ".join(f"{k}={v}" for k, v in sorted(overrides.items())))
 
     # ---- Effort + school report-card grades (one row) ----
-    # Effort is the only editable control; MYP/School recompute live from the
-    # shared student_term_grades helper (also used by every export).
-    erow = st.columns(3)
-    emap = effort_map()
-    stored = student_effort(student.student_id)
-    with erow[0]:
-        st.caption("Effort / English Use")
-        pick = st.selectbox(
-            "effort", list(range(6)), index=stored,
-            key=f"effort_{student.student_id}",
-            label_visibility="collapsed",
-        )
-    if pick != emap.get(student.student_id, EFFORT_DEFAULT):
-        emap[student.student_id] = int(pick)
-        persist()
-    _n, _total, _effort, myp, gyo = student_term_grades(student)
-    with erow[1]:
-        st.caption("MYP Grade")
-        st.markdown(_grade_chip(myp), unsafe_allow_html=True)
-    with erow[2]:
-        st.caption("School Grade")
-        st.markdown(_grade_chip(gyo), unsafe_allow_html=True)
+    # Each figure is School-specific and shown only when enabled in ⚙ Settings →
+    # Report-card grades (all off by default). Effort is the only editable
+    # control; MYP/School recompute live from the shared student_term_grades
+    # helper (also used by every export).
+    rc = report_cfg()
+    show_eff = bool(rc.get("show_effort", False))
+    show_myp = bool(rc.get("show_myp_grade", False))
+    show_sch = bool(rc.get("show_school_grade", False))
+    if show_eff or show_myp or show_sch:
+        cols = st.columns(sum((show_eff, show_myp, show_sch)))
+        idx = 0
+        if show_eff:
+            emap = effort_map()
+            stored = student_effort(student.student_id)
+            elo, ehi = effort_bounds()
+            opts = list(range(elo, ehi + 1))
+            with cols[idx]:
+                st.caption("Effort / English Use")
+                pick = st.selectbox(
+                    "effort", opts,
+                    index=opts.index(stored) if stored in opts else 0,
+                    key=f"effort_{student.student_id}",
+                    label_visibility="collapsed",
+                )
+            if pick != emap.get(student.student_id, EFFORT_DEFAULT):
+                emap[student.student_id] = int(pick)
+                persist()
+            idx += 1
+        # Compute after the Effort edit so the chips reflect the new value this run.
+        _n, _total, _effort, myp, gyo = student_term_grades(student)
+        if show_myp:
+            with cols[idx]:
+                st.caption("MYP Grade")
+                st.markdown(_grade_chip(myp), unsafe_allow_html=True)
+            idx += 1
+        if show_sch:
+            with cols[idx]:
+                st.caption("School Grade")
+                st.markdown(_grade_chip(gyo), unsafe_allow_html=True)
+            idx += 1
 
 
 def clean_comment(text: str) -> str:

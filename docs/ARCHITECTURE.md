@@ -949,8 +949,17 @@ many MYP criteria were assessed this term** (2, 3 or 4).
   lowest/highest band, so an all-missing total of 0 maps to grade 1 rather
   than crashing.
 
-The boundary values are fixed school policy and deliberately hard-coded — no
-settings/config layer.
+The boundary values themselves are fixed school policy and deliberately
+hard-coded. Whether these figures are shown at all is a separate, per-database
+config: `st.session_state["report_cfg"]` (`show_myp_grade`, `show_effort`,
+`show_school_grade`, plus the configurable `effort_min`/`effort_max` range).
+It round-trips in the shared session payload exactly like `llm_cfg` (merge over
+defaults on restore), so the choice follows the teacher across devices. **All
+three default off** — a fresh or public install reports only the criterion
+grades. The toggles gate the Window 3 chips and the student-facing report cards
+(individual report, combined pack, mail-merge ZIP), but **not** the CAM master
+Excel export, which always carries all three; the LLM comment prompt never
+included them. Effort clamps to the configured range in `student_effort`.
 
 ### The counting rule + one shared helper (`app.py`)
 
