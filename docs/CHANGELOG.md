@@ -6,6 +6,75 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-11 — comment & teacher-input cloud mirror (durable twin of human-typed content)
+
+**Symptom it addresses:** the 2026-07-10 DB wipe
+([CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md))
+destroyed every AI-generated report comment and every other human-typed input.
+Grades self-heal — Sync rebuilds scores from each class folder's export CSVs —
+but content that lives only in the DB session had **no cloud twin and could not
+be rebuilt**: `comments_by_term`, `teacher_remarks`, `effort_by_term`,
+`final_override`, and CAM-side score comments. Losing Term 1 comments also
+silently degraded later terms, whose prompts fold in the previous term's
+`[PREVIOUS TERM FINALIZED SUMMARY]` blocks. Root cause was **dead code, not
+missing architecture**: the per-class cloud-summary read path was fully wired,
+but the write path died when the Finalize button was removed, so nothing ever
+called `save_term_summary` and no `acm_term_summaries_*.json` files existed.
+
+**What this change does** (full plan + verified anchors in
+[COMMENT_CLOUD_MIRROR_PLAN.md](COMMENT_CLOUD_MIRROR_PLAN.md)):
+
+- **Engine — payload v2** (`engine/persistence.py`). Extended the per-class
+  summary file into a full teacher-input mirror with five sections (`terms`,
+  `remarks`, `effort`, `final_override`, `score_comments`). New
+  `load_class_mirror` / `save_class_mirror` (canonical 5-section shape; v1 files
+  load transparently with the new sections empty). `load_term_summaries` is now
+  a thin `{term: {sid: comment}}` view over the full loader, and
+  `save_term_summary` loads-merges-saves so it **preserves** the new sections
+  instead of clobbering them — public names unchanged. Same atomicity
+  (tmp + `os.replace`) + blank-dropping; `effort`/`final_override` coerce to
+  whole ints. Never raises; malformed/non-dict → all-empty mirror.
+- **Write path — mirror on autosave** (`app.py`). `build_class_mirror(cls)`
+  assembles the v2 slice from session state + gradebook scoped to that class's
+  sids (roster **plus** archived students, so a departed student's comment still
+  earns a twin and archiving never trips the tripwire).
+  `_mirror_classes_to_cloud()` runs from `persist()` after a successful DB write
+  under four non-negotiable invariants: **heal-before-mirror + no-quarantine**
+  (a wiped/demo session can't push its emptiness over good files),
+  **shrink tripwire** (refuse a rewrite that would halve a term's comment count
+  unless comments were explicitly deleted in-app this session),
+  **no-churn per-class fingerprint** (skip identical rewrites — these folders are
+  OneDrive-synced), and **never-raises** (per-class try; refusal surfaces on
+  `save_status`). Also dropped the `llm_response` duplicate from the session
+  payload (~11% DB size cut) since the loader already prefers `comments_by_term`.
+- **Read path — heal on load** (`app.py`). `_heal_from_class_mirrors()` runs in
+  boot hydrate right after `restore_session` (before the first mirror write),
+  filling **blank slots only** — session text always wins where both are
+  non-blank; effort heals on presence so a set `0` is never re-healed away.
+  `_heal_score_comments_from_mirrors()` runs after Sync's purge-replace to refill
+  blank `sc.comment` slots. `_seed_mirror_fingerprints()` seeds the no-churn
+  fingerprint for classes whose twin already matches, so a pure heal doesn't
+  rewrite an identical file — while a class with a missing/staler twin (the
+  incident's root cause) is left unseeded, so the first `persist()` backfills its
+  first-ever cloud twin.
+- **Window 3 — student email under the name** (`app.py`, `render_window3`).
+  Below the student name, the roster email now renders via
+  `st.code(email, language=None)` — a compact single line with a native copy icon
+  for pasting into report tools or an email client. Blank email (not on the
+  roster) renders nothing.
+
+**Verified:** engine + app-level unit tests, stdlib `unittest` (no pytest in this
+env), all green — `tests/test_class_mirror.py` (v2 round-trip, v1 back-compat,
+malformed→`{}`, blank-dropping, atomic replace), `tests/test_app_mirror.py`
+(slice scoping + archived capture, first-boot backfill, no-churn mtime untouched,
+not-ready/quarantined writes nothing, shrink tripwire blocks mass loss / deletion
+flag lets it through, never-raises), `tests/test_app_heal.py` (wiped maps refilled
+incl. effort-0, session text wins, in-app deletion not resurrected, score-comment
+refill, matching-twin seeded→no churn, missing/richer→backfill). Run:
+`python -m unittest tests.test_class_mirror tests.test_app_mirror tests.test_app_heal`.
+The teacher-input mirror is session-only human-typed content, never real student
+identity data — the git separation in [CLAUDE.md](../CLAUDE.md) is preserved.
+
 ## 2026-07-11 — audience reframe + Gyoshu-specific report grades made optional
 
 **Symptom it addresses:** two things blocked a clean public release. (1) The docs
