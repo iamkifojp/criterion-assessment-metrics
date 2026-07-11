@@ -282,6 +282,30 @@ manual `.bak-replaced-*` / `.bak-<purpose>-*` snapshots are never touched. This 
 Phase 3 in
 [CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
 
+**Term backup & restore — a teacher-controlled, per-term third line of defence.**
+Behind the automatic guards above (the cloud mirror's self-healing twins and the
+rotating `.bak-auto` snapshots) sits a *deliberate* snapshot the teacher makes
+and owns. ⚙ Settings → **🗄 Term backup & restore** (`build_term_backup` /
+`write_term_backup` / `restore_term_backup`, `app.py`;
+[TERM_BACKUP_RESTORE_PLAN.md](TERM_BACKUP_RESTORE_PLAN.md)) scopes strictly by
+**term tag**, never dates: a single stable predicate `_term_of_assignment`
+(blank/legacy → `TERMS[0]`, independent of the active term so backup and restore
+always agree) partitions the gradebook. **Backup** writes one self-describing
+`cam_term_backup_<slug>_<ts>.json` (atomic tmp + `os.replace`) to a
+teacher-chosen folder — only ever *outside* the DB, so it is zero-risk.
+**Restore** is a disaster tool that **replaces the term's slice wholesale**
+(including removing term-tagged rows that postdate the backup) behind a **dry-run
+diff** (`diff_term_backup`, writes nothing), a **staleness warning** (the
+backup's `created_at`) and a **typed `RESTORE {term}` confirmation** — then
+writes `acm_database.json.bak-pre-term-restore-<ts>` (never pruned) *before* any
+mutation and closes with the single typed-confirmed `persist(allow_shrink=True)`
+(seeding the mirror-deletion flag + clearing fingerprints so the restored slice
+re-mirrors). Non-term-scoped maps (`teacher_remarks`, `final_override`) are
+filled **blank-slots-only**, so restoring one term never clobbers another's;
+every other term is left byte-identical. Because the term tag is the scoping
+key, the retired Finalize button's job (marking a term "done") is subsumed —
+there is nothing to finalize, only a term to snapshot.
+
 **⚠ A new computer bootstraps to the shared database without ever wiping it.** A
 machine that has not chosen a data home — no `CAM_DB_PATH`, a **blank**
 `db_custom_path`, and the one-time `setup_done` pref unset (`_needs_first_boot_setup()`,

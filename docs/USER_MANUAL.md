@@ -109,3 +109,32 @@ ideally a cloud-synced one so every device shares it and it's backed up. CAM
 never stores real student data inside the program folder. To change the
 location, open **⚙ Settings → Custom database location**
 ([details](SETUP.md#5-point-cam-at-your-own-data)).
+
+## Backing up and restoring a term
+
+Under **⚙ Settings → 🗄 Term backup & restore** you can take a deliberate,
+end-of-term snapshot of one whole term and, if disaster strikes, put it back.
+
+**Back up a term.** Pick a **backup folder** (anywhere you like — a USB stick or
+a non-cloud folder is fine, for an off-site copy) and a **term**, then press
+**⬇ Back up term**. CAM writes one self-describing file,
+`cam_term_backup_<term>_<date-time>.json`, holding everything it knows for that
+term: assignments, grades, exam results, overall comments, effort scores and the
+On/late/excused settings. It only ever writes *outside* your database, so
+backing up can never harm your live data. Do this at the end of each term.
+
+**Restore a term** — a rescue tool, not an editing tool. Reach for it only if
+your database has been damaged: normally you'd just edit the data directly.
+First recover the file itself if needed (from your cloud's version history or a
+`.bak` beside it), *then* use restore to recover a term's finer detail. Press
+**⬆ Restore from backup…**, choose a backup file, and CAM shows a **preview** of
+exactly what would change — class by class — plus the date the backup was made.
+
+> ⚠ Restore **replaces that whole term**. Anything you entered for that term
+> *after* the backup was made is **not** in the file and will be lost. Every
+> other term is left untouched.
+
+To go ahead you type `RESTORE Term 1` (matching the term) to confirm. CAM writes
+an automatic safety copy of your current database first, then restores. Your
+teacher remarks and final-grade overrides are only *filled in where blank*, so
+restoring one term never overwrites another term's remarks.

@@ -185,6 +185,41 @@ def unit_plan_from_dict(d: Dict[str, Any]) -> UnitPlan:
     )
 
 
+# Public wrappers over the per-record (de)serializers, so a caller that needs to
+# persist an individual score / assignment / exam result (e.g. the term backup,
+# which stores per-class, per-student score lists) can reuse the exact on-disk
+# shape ``serialize_gradebook`` produces instead of re-deriving it.
+
+def score_to_dict(sc: CriterionScore) -> Dict[str, Any]:
+    """JSON-safe dict for one :class:`CriterionScore` (see ``_score_to_dict``)."""
+    return _score_to_dict(sc)
+
+
+def score_from_dict(d: Dict[str, Any]) -> CriterionScore:
+    """Rebuild a :class:`CriterionScore` from :func:`score_to_dict` output."""
+    return _score_from_dict(d)
+
+
+def assignment_to_dict(a: Assignment) -> Dict[str, Any]:
+    """JSON-safe dict for one :class:`Assignment` (see ``_assignment_to_dict``)."""
+    return _assignment_to_dict(a)
+
+
+def assignment_from_dict(d: Dict[str, Any]) -> Assignment:
+    """Rebuild an :class:`Assignment` from :func:`assignment_to_dict` output."""
+    return _assignment_from_dict(d)
+
+
+def exam_result_to_dict(r: ExamResult) -> Dict[str, Any]:
+    """JSON-safe dict for one :class:`ExamResult` (see ``_exam_result_to_dict``)."""
+    return _exam_result_to_dict(r)
+
+
+def exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
+    """Rebuild an :class:`ExamResult` from :func:`exam_result_to_dict` output."""
+    return _exam_result_from_dict(d)
+
+
 def serialize_gradebook(gradebook: Gradebook) -> Dict[str, Any]:
     """Convert a :class:`Gradebook` into a JSON-safe dict."""
     students = []

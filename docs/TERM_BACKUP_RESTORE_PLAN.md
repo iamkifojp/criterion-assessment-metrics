@@ -1,10 +1,36 @@
 # Term backup & restore — plan v1
 
-**Status:** v1, ready for implementation (target: Opus 4.8 High running Claude
-Code, this public checkout). **Prerequisite:**
-`docs/COMMENT_CLOUD_MIRROR_PLAN.md` must land first — this feature reuses its
-per-class mirror serialization and is the *third* line of defense behind
-mirror-heal and the rotating `.bak` files.
+**Status:** v1, **implemented 2026-07-12** (Opus 4.8, this public checkout). The
+prerequisite `docs/COMMENT_CLOUD_MIRROR_PLAN.md` landed first; this feature is
+the *third* line of defense behind mirror-heal and the rotating `.bak` files.
+
+**What landed:**
+
+- Engine (`engine/persistence.py`): public per-record serializers
+  `score_to_dict`/`from_dict`, `assignment_to_dict`/`from_dict`,
+  `exam_result_to_dict`/`from_dict` (exported from `engine/__init__.py`) so the
+  backup can store per-class, per-student score lists in the exact on-disk shape.
+- App (`app.py`): `TERM_BACKUP_VERSION`/`KIND` constants; a stable term
+  predicate `_term_of_assignment` (blank/legacy → `TERMS[0]`, independent of the
+  active term so backup and restore always agree); `build_term_backup` /
+  `write_term_backup` (atomic tmp+replace); `validate_term_backup`;
+  `diff_term_backup` (dry-run, writes nothing); `restore_term_backup`
+  (`.bak-pre-term-restore-<stamp>` first, wholesale term-slice replace,
+  fill-blanks-only remarks/overrides, seeds the mirror-deletion flag + clears
+  fingerprints, single `persist(allow_shrink=True)`). `term_backup_folder` added
+  to device prefs.
+- UI: `⚙ Settings → 🗄 Term backup & restore` — folder input, term dropdown +
+  ⬇ Back up term, and ⬆ Restore-from-backup file uploader → dry-run diff →
+  `RESTORE {term}` typed confirmation.
+- Tests: `tests/test_term_backup.py` (stdlib `unittest`, 17 cases) — build
+  scoping, validation refusals, lossless round-trip, other-term invariance,
+  live-only-assignment removal, no-duplicate restore-over-live, fill-blanks-only
+  remarks/overrides, and the pre-restore `.bak` equals the pre-restore DB. Run:
+  `python -m unittest tests.test_term_backup`.
+
+**Note:** the file/line anchors below are from planning time and have since
+drifted (the Settings dialog and Finalize references moved); the intent is
+unchanged.
 
 ---
 
