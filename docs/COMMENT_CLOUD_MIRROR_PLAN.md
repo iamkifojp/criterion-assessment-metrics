@@ -3,7 +3,8 @@
 **Status:** v1, in progress (target: Opus 4.8 High running Claude Code, this
 public checkout). All file/line anchors verified against this tree on
 2026-07-11. **Phase 1 landed 2026-07-11** (engine payload v2 + unit tests);
-Phases 2–4 pending.
+**Phase 2 landed 2026-07-11** (app mirror-on-autosave + `llm_response` drop +
+app-level tests); Phases 3–4 pending.
 **Companion plan:** `docs/TERM_BACKUP_RESTORE_PLAN.md` (explicit term
 backup/restore button — separate, implement after this one).
 
@@ -118,21 +119,35 @@ cloud twin.
   file → `{}`, blank-dropping, atomic replace (no tmp leftovers, original file
   intact on write failure). Run: `python -m unittest tests.test_class_mirror`.
 
-### Phase 2 — App: mirror on autosave (`app.py`)
+### Phase 2 — App: mirror on autosave (`app.py`) ✅ done 2026-07-11
 
-- Build the per-class mirror slice from session state + gradebook
-  (`comments_by_term`/`remarks`/`effort`/`final_override` filtered to the
-  class's roster sids; `score_comments` from that class's students' score
-  entries, non-empty comments only).
-- Call it from `persist()` after a successful DB write, guarded by the
-  fingerprint check (invariant 3) and the shrink tripwire (invariant 2).
-  Deletion tracking: set the session flag wherever a comment/remark can be
-  cleared (comment editor, remarks editor, class deletion `app.py:3691`).
-- **Drop the `llm_response` duplicate from `build_session_payload`**
-  (`app.py:724`) — the loader already prefers `comments_by_term`
-  (`app.py:857-863`) and keeps `llm_response` as a read-only legacy fallback.
-  ~11% DB size reduction for free. Do not touch the in-memory alias repoint
-  (`app.py:2038`).
+- ✅ `build_class_mirror(cls)` assembles the v2 slice from session state +
+  gradebook (`comments_by_term`/`teacher_remarks`/`effort_by_term`/
+  `final_override` filtered to the class's sids; `score_comments` from that
+  class's students' score entries, non-empty only). Class sids = the roster
+  **plus** the class's archived (departed-but-grades-kept) students, so a
+  departed student's typed comment still earns a cloud twin and archiving never
+  trips the shrink tripwire.
+- ✅ `_mirror_classes_to_cloud()` runs from `persist()` after a successful DB
+  write, enforcing all four invariants: heal-before-mirror + no-quarantine
+  (`mirror_ready` / `db_load_blocked`, invariant 1), the shrink tripwire
+  (`_mirror_shrink_would_lose`, invariant 2), the no-churn per-class fingerprint
+  (`mirror_fingerprints`, invariant 3), and never-raises (per-class try, refusal
+  surfaces on `save_status`, invariant 4). Deletion tracking
+  (`_mark_teacher_input_deleted` → `mirror_deletions_this_session`) fires at the
+  overall-comment box, the remarks box, `wipe_database_full`, and `delete_class`.
+- ✅ Dropped the `llm_response` duplicate from `build_session_payload` — the
+  loader already prefers `comments_by_term` and keeps `llm_response` as a
+  read-only legacy fallback; the in-memory alias repoint (`ensure_term_context`)
+  is untouched, so the live alias is still rebuilt every rerun. ~11% DB size
+  reduction for free.
+- ✅ App-level tests (`tests/test_app_mirror.py`, stdlib `unittest`; `app.st` /
+  `app.gb` / `app.class_data_dir` swapped for doubles — no Streamlit runtime):
+  slice roster-filtering + score-comment scoping + archived capture; first-boot
+  backfill; no-churn (file mtime untouched across many passes); not-ready and
+  quarantined boot write nothing; shrink tripwire blocks a mass loss and the
+  deletion flag lets it through; mirror failure never raises. Run:
+  `python -m unittest tests.test_app_mirror`.
 
 ### Phase 3 — App: heal on load (`app.py`)
 
