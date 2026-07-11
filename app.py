@@ -80,6 +80,12 @@ from engine import (
     load_term_summaries,
     load_class_mirror,
     save_class_mirror,
+    score_to_dict,
+    score_from_dict,
+    assignment_to_dict,
+    assignment_from_dict,
+    exam_result_to_dict,
+    exam_result_from_dict,
 )
 # METHOD_60_40 / METHOD_WEIGHTED_MEDIAN are the two methods the auto default
 # picks between; they live in the aggregation module (not re-exported by the
@@ -102,6 +108,12 @@ ACADEMIC_MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3]
 # School terms (Japanese 3-term year). Assignments are tagged with one of these;
 # the prompt engine treats earlier terms as "past" (summarised, not raw).
 TERMS = ["Term 1", "Term 2", "Term 3"]
+
+# Explicit term backup files (docs/TERM_BACKUP_RESTORE_PLAN.md): a teacher-
+# initiated, self-describing snapshot of one term written OUTSIDE the database,
+# and the loader that can put that term back after a database disaster.
+TERM_BACKUP_VERSION = 1
+TERM_BACKUP_KIND = "cam_term_backup"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -136,6 +148,10 @@ PREFS_FILENAME = "local_device_prefs.json"
 PREFS_PATH = os.path.join(BASE_DIR, PREFS_FILENAME)
 DEFAULT_PREFS = {
     "db_custom_path": "",   # blank -> acm_database.json beside app.py
+    # Folder the explicit end-of-term backups are written to. Per-device (like
+    # every path pref) — the teacher may point it at a USB stick or a non-cloud
+    # folder for an off-site copy. Blank until they choose one in ⚙ Settings.
+    "term_backup_folder": "",
     "col_w1": 4, "col_w2": 3, "col_w3": 5,   # 3-column width ratios
     "h1": 520, "h2": 520, "h3": 640,         # per-window scroll heights (px)
     "h_remarks": 80, "h_comment": 90,        # Window 3 editable text-area heights (px)
@@ -1497,6 +1513,470 @@ def _seed_mirror_fingerprints() -> None:
                 fingerprints[cls] = session_fp
         except Exception:
             continue
+
+
+# --------------------------------------------------------------------------
+# Term backup & restore (docs/TERM_BACKUP_RESTORE_PLAN.md)
+# --------------------------------------------------------------------------
+#
+# The THIRD line of defence behind the mirror-heal (above) and the rotating
+# ``.bak-auto`` files: a deliberate, teacher-initiated snapshot of one whole
+# term — every assignment, score, exam result, comment, effort, override and
+# flag CAM holds for that term — written as one self-describing JSON to a folder
+# the teacher chooses (may be outside OneDrive), plus a loader that can put that
+# term back after a database disaster.
+#
+# Scope is by TERM TAG, never by dates. Every assignment carries its term, so a
+# single stable predicate (``_term_of_assignment``) partitions the gradebook;
+# the loader touches only rows tagged with the backup's term and leaves every
+# other term byte-identical. Restore REPLACES the term's slice wholesale (it is
+# a disaster tool, not an editing tool) behind a dry-run diff, a typed
+# confirmation and an automatic pre-restore DB backup.
+
+
+def _term_of_assignment(a) -> str:
+    """The term an assignment belongs to for backup/restore scoping.
+
+    Its own tag, or ``TERMS[0]`` for a blank/legacy tag. Deliberately STABLE —
+    independent of the active term (unlike :func:`assignment_term`) — so the
+    same assignment always maps to the same backup no matter what term the UI
+    happens to be showing when a backup or a restore runs."""
+    return getattr(a, "term", "") or TERMS[0]
+
+
+def _term_backup_slug(term: str) -> str:
+    """Filesystem-safe lowercase slug for a term (``"Term 1"`` -> ``"term-1"``)."""
+    slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in (term or ""))
+    return "-".join(part for part in slug.split("-") if part) or "term"
+
+
+def _sid_to_class_index() -> dict:
+    """Reverse index ``{student_id: class_name}`` from every class's owned sids
+    (roster + archived). A sid on no class falls to ``""`` so a term map entry is
+    grouped under a catch-all rather than silently dropped from a backup."""
+    idx: dict = {}
+    for cls in class_names():
+        for sid in _class_sids(cls):
+            idx.setdefault(sid, cls)
+    return idx
+
+
+def build_term_backup(term: str) -> dict:
+    """Assemble the self-describing backup dict for one whole term.
+
+    Everything CAM knows for ``term``: its assignments (all classes), the scores
+    and exam results those assignments produced, the term's overall comments,
+    effort scores, active-map and per-student calc-method pins, plus the
+    late/excused flags for its assignments. Teacher remarks and final overrides
+    are NOT term-scoped in the session (a single flat map spans the year), so the
+    whole non-blank map is captured for reference; restore fills only blank slots
+    from them (see :func:`restore_term_backup`).
+
+    Comments / effort / remarks / overrides / scores / exam results are grouped
+    per class so a human (and the dry-run diff) can read the file class by class;
+    active / calc-method / late / excused are the term's flat maps verbatim."""
+    ss = st.session_state
+    gbk = gb()
+
+    term_asgs = [a for a in gbk.assignments if _term_of_assignment(a) == term]
+    names_by_class: dict = {}
+    for a in term_asgs:
+        names_by_class.setdefault(getattr(a, "class_name", ""), set()).add(a.name)
+    all_term_names = {a.name for a in term_asgs}
+
+    sid_class = _sid_to_class_index()
+
+    def _group(flat: dict) -> dict:
+        """``{sid: value}`` -> ``{class: {sid: value}}`` via the reverse index."""
+        out: dict = {}
+        for sid, val in flat.items():
+            out.setdefault(sid_class.get(sid, ""), {})[sid] = val
+        return out
+
+    comments = _group({sid: txt for sid, txt
+                       in (ss["comments_by_term"].get(term, {}) or {}).items()
+                       if str(txt).strip()})
+    effort = _group(dict(ss["effort_by_term"].get(term, {}) or {}))
+    remarks = _group({sid: txt for sid, txt in ss["teacher_remarks"].items()
+                      if str(txt).strip()})
+    final_override = _group({sid: dict(crits) for sid, crits
+                             in ss["final_override"].items() if crits})
+
+    # Scores + exam results, per class per student, filtered to the term's
+    # assignment names. A class's students = its roster/archived set PLUS any
+    # score-only student who has evidence for one of these names (so a student
+    # not yet on the roster is never dropped from the snapshot).
+    scores: dict = {}
+    exam_results: dict = {}
+    for cls, names in names_by_class.items():
+        cls_sids = set(_class_sids(cls))
+        for student in gbk.students.values():
+            has_score = any(sc.assignment in names
+                            for bucket in student.scores.values() for sc in bucket)
+            has_exam = any(k in names for k in getattr(student, "exam_results", {}))
+            if has_score or has_exam:
+                cls_sids.add(student.student_id)
+        for sid in cls_sids:
+            student = gbk.students.get(sid)
+            if student is None:
+                continue
+            sc_list = [score_to_dict(sc) for bucket in student.scores.values()
+                       for sc in bucket if sc.assignment in names]
+            if sc_list:
+                scores.setdefault(cls, {})[sid] = sc_list
+            ex_list = [exam_result_to_dict(r) for k, r
+                       in getattr(student, "exam_results", {}).items() if k in names]
+            if ex_list:
+                exam_results.setdefault(cls, {})[sid] = ex_list
+
+    active = {n: bool(v) for n, v in (ss["active_by_term"].get(term, {}) or {}).items()
+              if n in all_term_names}
+    calc_method = {sid: m for sid, m
+                   in (ss["calc_method_by_term"].get(term, {}) or {}).items()
+                   if m in CALCULATION_METHODS}
+
+    late_flags = {k: bool(v) for k, v in ss["late_flags"].items()
+                  if len(k.split("||")) == 3 and k.split("||")[1] in all_term_names}
+    excused = {k: bool(v) for k, v in ss["excused_flags"].items()
+               if len(k.split("||")) == 2 and k.split("||")[1] in all_term_names}
+
+    assignments = [assignment_to_dict(a) for a in term_asgs]
+    classes = sorted({getattr(a, "class_name", "") for a in term_asgs}
+                     | set(comments) | set(effort) | set(scores))
+
+    counts = {
+        "students": len({sid for m in scores.values() for sid in m}
+                        | {sid for m in comments.values() for sid in m}),
+        "assignments": len(assignments),
+        "comments": sum(len(m) for m in comments.values()),
+        "scores": sum(len(lst) for m in scores.values() for lst in m.values()),
+        "exam_results": sum(len(lst) for m in exam_results.values()
+                            for lst in m.values()),
+    }
+
+    return {
+        "version": TERM_BACKUP_VERSION,
+        "kind": TERM_BACKUP_KIND,
+        "term": term,
+        "created_at": datetime.now().isoformat(),
+        "db_path": db_path(),      # provenance only
+        "classes": classes,
+        "counts": counts,
+        "payload": {
+            "assignments": assignments,
+            "scores": scores,
+            "exam_results": exam_results,
+            "comments": comments,
+            "effort": effort,
+            "active": active,
+            "calc_method": calc_method,
+            "late_flags": late_flags,
+            "excused": excused,
+            "remarks": remarks,
+            "final_override": final_override,
+        },
+    }
+
+
+def write_term_backup(term: str, folder: str, backup: Optional[dict] = None) -> str:
+    """Serialize :func:`build_term_backup` for ``term`` into ``folder`` atomically.
+
+    Filename ``cam_term_backup_<slug>_<YYYYMMDD-HHMMSS>.json``; written to a temp
+    file in the same folder then renamed over the target, so a crash mid-write
+    never leaves a truncated backup. Returns the path written. Pass a prebuilt
+    ``backup`` dict to avoid rebuilding it when the caller also needs its counts.
+    Raises on I/O failure — the caller (Settings) surfaces it on ``save_status``."""
+    if backup is None:
+        backup = build_term_backup(term)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    fname = f"cam_term_backup_{_term_backup_slug(term)}_{ts}.json"
+    directory = os.path.abspath(folder or ".")
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, fname)
+    fd, tmp = tempfile.mkstemp(suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(backup, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return path
+
+
+def validate_term_backup(payload) -> tuple:
+    """Cheap structural validation of a parsed backup file.
+
+    Returns ``(term, "")`` when the file is a well-formed term backup, or
+    ``(None, message)`` describing the first problem otherwise — checked BEFORE
+    any dry-run diff or confirmation is offered, so a malformed / wrong-kind /
+    wrong-version file is refused up front and never mutates anything."""
+    if not isinstance(payload, dict):
+        return None, "Not a CAM backup file (the JSON is not an object)."
+    if payload.get("kind") != TERM_BACKUP_KIND:
+        return None, ("This file is not a CAM term backup "
+                      f"(kind = {payload.get('kind')!r}).")
+    if payload.get("version") != TERM_BACKUP_VERSION:
+        return None, (f"Unsupported backup version {payload.get('version')!r} "
+                      f"(this CAM reads version {TERM_BACKUP_VERSION}).")
+    term = payload.get("term")
+    if term not in TERMS:
+        return None, f"Backup names an unknown term {term!r}."
+    if not isinstance(payload.get("payload"), dict):
+        return None, "Backup file is missing its payload section."
+    return term, ""
+
+
+def _merge_class_maps(by_class: dict) -> dict:
+    """Flatten a ``{class: {sid: value}}`` backup section back to ``{sid: value}``
+    for a wholesale term-slice replace. Class grouping is a storage/display
+    convenience only — the session maps it restores into are flat per term."""
+    out: dict = {}
+    for by_sid in (by_class or {}).values():
+        if isinstance(by_sid, dict):
+            out.update(by_sid)
+    return out
+
+
+def diff_term_backup(payload: dict) -> dict:
+    """Compute the dry-run diff of a validated backup against the live session.
+
+    Nothing is written. Returns a structure the Settings dialog renders so the
+    teacher sees exactly what a restore would do BEFORE typing the confirmation:
+    per class, which comments would be newly filled vs would overwrite a
+    different current comment, which assignments the backup adds vs which live
+    ones it would remove (they postdate the backup), and the backup-vs-live score
+    counts; plus how many remarks / overrides the fill-blanks pass would add."""
+    ss = st.session_state
+    gbk = gb()
+    term = payload["term"]
+    p = payload.get("payload", {})
+
+    backup_comments = p.get("comments", {}) or {}
+    backup_scores = p.get("scores", {}) or {}
+    backup_asgs = [assignment_from_dict(d) for d in p.get("assignments", [])]
+    backup_names_by_class: dict = {}
+    for a in backup_asgs:
+        backup_names_by_class.setdefault(getattr(a, "class_name", ""), set()).add(a.name)
+    live_names_by_class: dict = {}
+    for a in gbk.assignments:
+        if _term_of_assignment(a) == term:
+            live_names_by_class.setdefault(getattr(a, "class_name", ""), set()).add(a.name)
+
+    live_comments = ss["comments_by_term"].get(term, {}) or {}
+
+    def _live_score_count(cls: str) -> int:
+        names = live_names_by_class.get(cls, set())
+        if not names:
+            return 0
+        sids = _class_sids(cls) | set(backup_scores.get(cls, {}))
+        total = 0
+        for sid in sids:
+            student = gbk.students.get(sid)
+            if student is None:
+                continue
+            total += sum(1 for bucket in student.scores.values()
+                         for sc in bucket if sc.assignment in names)
+        return total
+
+    per_class: dict = {}
+    all_classes = (set(backup_comments) | set(backup_scores)
+                   | set(backup_names_by_class) | set(live_names_by_class))
+    for cls in sorted(all_classes):
+        bc = backup_comments.get(cls, {})
+        new_comments = [sid for sid, txt in bc.items()
+                        if not str(live_comments.get(sid, "")).strip()]
+        changed_comments = [
+            sid for sid, txt in bc.items()
+            if str(live_comments.get(sid, "")).strip()
+            and str(live_comments.get(sid, "")).strip() != str(txt).strip()]
+        b_names = backup_names_by_class.get(cls, set())
+        l_names = live_names_by_class.get(cls, set())
+        per_class[cls] = {
+            "new_comments": sorted(new_comments),
+            "changed_comments": sorted(changed_comments),
+            "assignments_added": sorted(b_names - l_names),
+            "assignments_removed": sorted(l_names - b_names),
+            "backup_scores": sum(len(v) for v in backup_scores.get(cls, {}).values()),
+            "live_scores": _live_score_count(cls),
+        }
+
+    # Fill-blanks-only maps: count how many entries the restore would actually add.
+    remarks = ss["teacher_remarks"]
+    remarks_fill = sum(
+        1 for by_sid in (p.get("remarks", {}) or {}).values()
+        for sid in by_sid if not str(remarks.get(sid, "")).strip())
+    fo = ss["final_override"]
+    override_fill = 0
+    for by_sid in (p.get("final_override", {}) or {}).values():
+        for sid, crits in by_sid.items():
+            live_crits = fo.get(sid, {})
+            override_fill += sum(1 for crit in crits if crit not in live_crits)
+
+    return {
+        "term": term,
+        "created_at": payload.get("created_at", ""),
+        "counts": payload.get("counts", {}),
+        "per_class": per_class,
+        "remarks_fill": remarks_fill,
+        "override_fill": override_fill,
+    }
+
+
+def _pre_restore_backup(path: str) -> str:
+    """Copy the live DB aside as ``…bak-pre-term-restore-<stamp>`` before a
+    restore mutates anything. Never pruned (only ``.bak-auto-*`` rotates), per
+    CLAUDE.md. Returns the backup path, or ``""`` when there was nothing to copy
+    or the copy failed (the wholesale slice replace is still guarded by the diff
+    + typed confirmation, so a copy hiccup does not abort the restore)."""
+    if not os.path.exists(path):
+        return ""
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = f"{path}.bak-pre-term-restore-{ts}"
+    try:
+        shutil.copy2(path, backup)
+    except OSError:
+        return ""
+    return backup
+
+
+def restore_term_backup(payload: dict) -> str:
+    """Replace the live term's slice wholesale with a validated backup's.
+
+    Disaster-recovery semantics (docs/TERM_BACKUP_RESTORE_PLAN.md §4):
+
+    * Term-tagged data — assignments, their scores/exam results, the term's
+      comments/effort/active/calc-method maps and the late/excused flags for its
+      assignments — is DELETED then REPLACED with the backup's, including
+      removing term-tagged rows that exist live but not in the backup (they
+      postdate the backup; the staleness warning covers this).
+    * Non-term-scoped maps (teacher_remarks, final_override) are filled for
+      students/criteria with no live entry only — a wholesale replace would
+      clobber another term's remarks while restoring this one.
+    * Data for every OTHER term is never touched.
+
+    Writes the automatic pre-restore ``.bak`` first, then a single
+    ``persist(allow_shrink=True)`` at the end (atomic tmp+replace) — so a crash
+    mid-restore leaves the pre-restore backup intact. Seeds the mirror-deletion
+    flag and clears the per-class fingerprints so the restored comments re-mirror
+    to their cloud twins and the mirror tripwire does not mistake the restore for
+    a mass deletion. Returns the pre-restore backup path (may be ``""``)."""
+    ss = st.session_state
+    gbk = gb()
+    term = payload["term"]
+    p = payload.get("payload", {})
+
+    backup_path = _pre_restore_backup(db_path())
+
+    # Term-assignment name sets to purge, per class: the LIVE term's names (to
+    # drop live-only rows) UNION the backup's names.
+    backup_asgs = [assignment_from_dict(d) for d in p.get("assignments", [])]
+    backup_names_by_class: dict = {}
+    for a in backup_asgs:
+        backup_names_by_class.setdefault(getattr(a, "class_name", ""), set()).add(a.name)
+    live_names_by_class: dict = {}
+    for a in gbk.assignments:
+        if _term_of_assignment(a) == term:
+            live_names_by_class.setdefault(getattr(a, "class_name", ""), set()).add(a.name)
+    scores_in = p.get("scores", {}) or {}
+    exams_in = p.get("exam_results", {}) or {}
+
+    # Purge the live term's scores/exam results per class. Roster-scoped like
+    # delete_class so a unit name shared with another class is never touched
+    # there; the backup's own sids extend the scope so a score-only student
+    # present in the snapshot is re-placed cleanly rather than duplicated.
+    for cls in set(backup_names_by_class) | set(live_names_by_class):
+        purge = backup_names_by_class.get(cls, set()) | live_names_by_class.get(cls, set())
+        if not purge:
+            continue
+        roster_keys = set(_class_sids(cls)) | set(scores_in.get(cls, {})) \
+            | set(exams_in.get(cls, {}))
+        for student in gbk.students.values():
+            if roster_keys and student.student_id not in roster_keys:
+                continue
+            for crit, bucket in list(student.scores.items()):
+                student.scores[crit] = [sc for sc in bucket if sc.assignment not in purge]
+            results = getattr(student, "exam_results", {})
+            for k in [n for n in results if n in purge]:
+                results.pop(k, None)
+
+    # Remove every live assignment tagged to this term, then register the
+    # backup's (their tags already resolve to this term by construction).
+    gbk.assignments = [a for a in gbk.assignments if _term_of_assignment(a) != term]
+    for a in backup_asgs:
+        gbk.register_assignment(a)
+
+    # Re-add the backup's scores + exam results.
+    for cls, by_sid in scores_in.items():
+        for sid, sc_list in by_sid.items():
+            student = gbk.get_or_create(sid)
+            for d in sc_list:
+                try:
+                    student.add_score(score_from_dict(d))
+                except (KeyError, ValueError, TypeError):
+                    continue
+    for cls, by_sid in exams_in.items():
+        for sid, ex_list in by_sid.items():
+            student = gbk.get_or_create(sid)
+            for d in ex_list:
+                try:
+                    r = exam_result_from_dict(d)
+                    student.exam_results[r.assignment] = r
+                except (KeyError, ValueError, TypeError):
+                    continue
+
+    # Wholesale-replace the term slice of the term-partitioned maps.
+    ss["comments_by_term"][term] = {str(s): str(t) for s, t
+                                    in _merge_class_maps(p.get("comments", {})).items()}
+    ss["effort_by_term"][term] = {str(s): int(v) for s, v
+                                  in _merge_class_maps(p.get("effort", {})).items()
+                                  if isinstance(v, (int, float))}
+    ss["active_by_term"][term] = {str(n): bool(v)
+                                  for n, v in (p.get("active", {}) or {}).items()}
+    ss["calc_method_by_term"][term] = {str(s): m for s, m
+                                       in (p.get("calc_method", {}) or {}).items()
+                                       if m in CALCULATION_METHODS}
+
+    # late/excused: global maps keyed by assignment name — drop this term's live
+    # entries, then add the backup's.
+    term_names = ({a.name for a in backup_asgs}
+                  | {n for names in live_names_by_class.values() for n in names})
+    lf = ss["late_flags"]
+    for k in [k for k in lf
+              if len(k.split("||")) == 3 and k.split("||")[1] in term_names]:
+        lf.pop(k, None)
+    for k, v in (p.get("late_flags", {}) or {}).items():
+        lf[str(k)] = bool(v)
+    ef = ss["excused_flags"]
+    for k in [k for k in ef
+              if len(k.split("||")) == 2 and k.split("||")[1] in term_names]:
+        ef.pop(k, None)
+    for k, v in (p.get("excused", {}) or {}).items():
+        ef[str(k)] = bool(v)
+
+    # Non-term-scoped maps: fill blank slots only (never clobber another term).
+    remarks = ss["teacher_remarks"]
+    for sid, text in _merge_class_maps(p.get("remarks", {})).items():
+        if not str(remarks.get(sid, "")).strip():
+            remarks[sid] = str(text)
+    fo = ss["final_override"]
+    for sid, crits in _merge_class_maps(p.get("final_override", {})).items():
+        dst = fo.setdefault(sid, {})
+        for crit, band in (crits or {}).items():
+            if crit not in dst:
+                dst[crit] = band
+
+    # Re-point the term/class aliases, then seed the mirror flags so the restored
+    # comments reach their cloud twins on this persist and the shrink tripwire
+    # treats the restore as an intended change, not catastrophic mass loss.
+    ensure_class_context()
+    ensure_term_context()
+    _mark_teacher_input_deleted()
+    ss["mirror_fingerprints"] = {}
+    # Deliberate, typed-confirmed, already-backed-up write: the shrink tripwire's
+    # exempt path (like the Danger-zone wipe and the Phase-2 Replace).
+    persist(allow_shrink=True)
+    return backup_path
 
 
 def sync_roster_into_students() -> None:
@@ -5018,6 +5498,138 @@ def _render_db_switch_panel(pending: dict) -> None:
         st.rerun()
 
 
+def _render_term_restore_confirm(payload: dict, term: str, sig: str) -> None:
+    """Render the dry-run diff + typed-confirmation for a validated backup.
+
+    Nothing is written until the teacher types ``RESTORE {term}`` exactly and
+    clicks Restore. Cancel remembers this file's signature so re-running the
+    dialog (which keeps the uploaded file in the widget) does not re-offer it."""
+    diff = diff_term_backup(payload)
+    counts = diff.get("counts", {})
+    created = diff.get("created_at", "") or "an unknown time"
+    st.warning(
+        f"⚠ This replaces **{term}** wholesale. Any change made to {term} "
+        f"**after this backup was created ({created})** is NOT in the file and "
+        f"**will be lost**. Every other term is left untouched.")
+    st.caption(
+        f"Backup holds {counts.get('assignments', 0)} assignment(s), "
+        f"{counts.get('scores', 0)} score(s), {counts.get('exam_results', 0)} "
+        f"exam result(s) and {counts.get('comments', 0)} comment(s) across "
+        f"{len(payload.get('classes', []))} class(es).")
+    st.markdown("**Dry-run preview — what a restore would change:**")
+    per_class = diff.get("per_class", {})
+    if not per_class:
+        st.caption("Nothing to change for this term.")
+    for cls, d in per_class.items():
+        st.markdown(f"**{cls or '(unassigned)'}**")
+        bits = []
+        if d["new_comments"]:
+            bits.append(f"{len(d['new_comments'])} comment(s) restored into blanks")
+        if d["changed_comments"]:
+            bits.append(f"⚠ {len(d['changed_comments'])} comment(s) will OVERWRITE "
+                        "a different current comment")
+        if d["assignments_added"]:
+            bits.append("adds assignment(s): " + ", ".join(d["assignments_added"]))
+        if d["assignments_removed"]:
+            bits.append("REMOVES live assignment(s) not in backup: "
+                        + ", ".join(d["assignments_removed"]))
+        bits.append(f"scores {d['live_scores']} → {d['backup_scores']}")
+        st.caption(" · ".join(bits))
+    if diff.get("remarks_fill") or diff.get("override_fill"):
+        st.caption(
+            f"Fill-blanks-only (existing entries kept): {diff.get('remarks_fill', 0)} "
+            f"teacher remark(s), {diff.get('override_fill', 0)} final-override "
+            "criterion/criteria added.")
+    st.markdown(f"To proceed, type `RESTORE {term}` below:")
+    typed = st.text_input("Confirm restore", key="tb_confirm",
+                          label_visibility="collapsed",
+                          placeholder=f"RESTORE {term}")
+    cc = st.columns(2)
+    do = cc[0].button("♻ Restore this term", type="primary", key="tb_do_restore",
+                      width="stretch",
+                      disabled=(typed.strip() != f"RESTORE {term}"))
+    cancel = cc[1].button("Cancel", key="tb_cancel_restore", width="stretch")
+    if do:
+        backup = restore_term_backup(payload)
+        if st.session_state.get("save_status", ("", ""))[0] != "error":
+            note = f"Restored {term} from backup."
+            if backup:
+                note += f" Pre-restore database backed up to {backup}."
+            st.session_state["save_status"] = ("ok", note)
+        st.session_state["tb_restore_dismissed"] = sig
+        st.session_state["dlg_settings"] = False
+        st.rerun()
+    if cancel:
+        st.session_state["tb_restore_dismissed"] = sig
+        st.rerun()
+
+
+def _render_term_backup_section(prefs: dict) -> None:
+    """The ⚙ Settings 'Term backup & restore' block (plan §3).
+
+    Backup writes one term's snapshot to a teacher-chosen folder (zero risk — it
+    only ever writes outside the database). Restore is a disaster tool behind a
+    dry-run diff, a typed confirmation and an automatic pre-restore DB backup."""
+    st.markdown("---")
+    st.markdown("**🗄 Term backup & restore**")
+    st.caption(
+        "A deliberate end-of-term snapshot of one whole term, written to a "
+        "folder you choose — it only ever writes OUTSIDE the database. Restore "
+        "is a disaster tool: it replaces that term's data wholesale, behind a "
+        "preview, a typed confirmation and an automatic backup.")
+
+    folder = st.text_input(
+        "Backup folder", value=prefs.get("term_backup_folder", ""),
+        placeholder=r"e.g. C:\Users\you\CAM-term-backups   or a USB drive",
+        key="tb_folder",
+        help="Where ⬇ Back up term writes its files. Per-device (like every "
+             "path setting); point it anywhere — even a USB stick or a non-cloud "
+             "folder — for an off-site copy.")
+    bc = st.columns([2, 1], vertical_alignment="bottom")
+    cur = current_term()
+    bk_term = bc[0].selectbox(
+        "Term to back up", TERMS,
+        index=TERMS.index(cur) if cur in TERMS else 0, key="tb_term")
+    if bc[1].button("⬇ Back up term", key="tb_backup", width="stretch",
+                    disabled=not folder.strip()):
+        prefs["term_backup_folder"] = folder.strip()
+        save_prefs(prefs)
+        try:
+            snapshot = build_term_backup(bk_term)
+            path = write_term_backup(bk_term, folder.strip(), snapshot)
+            c = snapshot["counts"]
+            st.session_state["save_status"] = (
+                "ok",
+                f"Backed up {bk_term} to {path} — {c.get('assignments', 0)} "
+                f"assignment(s), {c.get('scores', 0)} score(s), "
+                f"{c.get('comments', 0)} comment(s).")
+        except Exception as exc:
+            st.session_state["save_status"] = (
+                "error", f"Term backup failed: {exc}")
+        st.session_state["dlg_settings"] = False
+        st.rerun()
+
+    up = st.file_uploader("⬆ Restore from backup… (.json)", type=["json"],
+                          key="tb_restore_up")
+    if up is None:
+        return
+    sig = f"{up.name}:{up.size}"
+    if st.session_state.get("tb_restore_dismissed") == sig:
+        st.caption("This backup was dismissed. Choose a different file, or "
+                   "remove and re-add it to restore it.")
+        return
+    try:
+        payload = json.loads(up.getvalue().decode("utf-8"))
+    except Exception as exc:
+        st.error(f"Could not read this file as JSON: {exc}")
+        return
+    term, err = validate_term_backup(payload)
+    if err:
+        st.error(err)
+        return
+    _render_term_restore_confirm(payload, term, sig)
+
+
 @st.dialog("⚙ Settings — device & data", width="large")
 def settings_dialog() -> None:
     """Per-device UI prefs + custom (cloud) database path.
@@ -5167,6 +5779,9 @@ def settings_dialog() -> None:
         _report_sync(summary)
         st.session_state["dlg_settings"] = False
         st.rerun()
+
+    # ---- Term backup & restore -------------------------------------------
+    _render_term_backup_section(prefs)
 
     # ---- Danger zone: wipe data (device/window settings are always kept) ----
     st.markdown("---")

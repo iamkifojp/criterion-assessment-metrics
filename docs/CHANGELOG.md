@@ -6,6 +6,72 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-12 — explicit term backup & restore (disaster-recovery for one whole term)
+
+**Symptom it addresses:** the cloud mirror (below) gives every human-typed input
+a durable twin that self-heals on load, and the rotating `.bak-auto` snapshots
+guard the file itself — but neither is a snapshot the *teacher* deliberately
+made and controls. A teacher wanted an end-of-term artifact they could keep in a
+folder of their choosing (a USB stick or a non-cloud folder for an off-site
+copy) and, after a database disaster, put one term's data back wholesale. This
+is the **third line of defence** behind mirror-heal and the `.bak` files.
+
+**What this change does** (full plan in
+[TERM_BACKUP_RESTORE_PLAN.md](TERM_BACKUP_RESTORE_PLAN.md)):
+
+- **Scope is by term tag, never by dates.** Every assignment already carries its
+  term, so a single stable predicate (`_term_of_assignment` — blank/legacy tags
+  resolve to `TERMS[0]`, independent of the active term so a backup and a later
+  restore always agree) partitions the gradebook. The loader touches only rows
+  tagged with the backup's term and leaves every other term byte-identical
+  (asserted in tests). Date-range scoping was rejected — it would inherit the
+  known dup-dated-CSV / deadline-edge hazard class.
+- **Backup is zero-risk** (`build_term_backup` / `write_term_backup`, `app.py`).
+  ⚙ Settings → **🗄 Term backup & restore** → pick a folder + term → writes one
+  self-describing `cam_term_backup_<term-slug>_<YYYYMMDD-HHMMSS>.json` (atomic
+  tmp + `os.replace`) containing that term's assignments, scores, exam results,
+  overall comments, effort, active-map, calc-method pins and late/excused flags,
+  plus the (not-term-scoped) teacher remarks and final overrides for reference.
+  A `counts` header lets the restore dialog show its dry-run diff without parsing
+  the payload twice. It only ever writes **outside** the database.
+- **Restore is a disaster tool, not an editing tool** (`restore_term_backup`).
+  It **replaces the term's slice wholesale** behind three gates: a **dry-run
+  diff** (`diff_term_backup`, writes nothing — per class: comments newly filled
+  vs. those that would overwrite a *different* current comment, assignments the
+  backup adds vs. live ones it would remove, and backup-vs-live score counts), a
+  **loud staleness warning** showing the backup's `created_at` ("changes made to
+  {term} after this are NOT in the file and will be lost"), and a **typed
+  confirmation** (`RESTORE {term}` exactly, matching the Danger-zone wipe
+  pattern). An automatic `acm_database.json.bak-pre-term-restore-<stamp>` (never
+  pruned) is written **before** any mutation.
+- **Restore semantics** (§4 of the plan): term-tagged data is deleted then
+  replaced — *including removing term-tagged rows that exist live but not in the
+  backup* (they postdate it; the warning and diff cover this). The two
+  non-term-scoped maps (`teacher_remarks`, `final_override`) are **filled for
+  blank slots only**, so restoring Term 1 never clobbers a Term 2 remark. Other
+  terms are never touched. The single closing `persist(allow_shrink=True)` is the
+  shrink-tripwire's exempt, typed-confirmed path; it seeds the mirror-deletion
+  flag and clears the per-class fingerprints so the restored comments re-mirror
+  to their cloud twins and the tripwire doesn't mistake the restore for a mass
+  deletion.
+- **Engine** (`engine/persistence.py`): added public per-record serializers
+  `score_to_dict`/`from_dict`, `assignment_to_dict`/`from_dict`,
+  `exam_result_to_dict`/`from_dict` (exported from `engine/__init__.py`) so the
+  backup stores per-class, per-student score lists in the exact on-disk shape
+  `serialize_gradebook` produces, instead of re-deriving it.
+
+**Verified:** stdlib `unittest`, all green — `tests/test_term_backup.py`
+(17 cases: build scoping incl. exam results, validation refusals for
+malformed/wrong-kind/wrong-version/unknown-term, lossless backup→wipe→restore
+round-trip, other-term byte-invariance, live-only-assignment removal, no
+duplicate scores on restore-over-live, fill-blanks-only remarks/overrides, and
+the pre-restore `.bak` bytewise-equals the pre-restore DB). The existing suite
+(`test_class_mirror`, `test_app_mirror`, `test_app_heal`) stays green. All runs
+sandboxed to a temp folder — no real data folder is ever touched
+([CLAUDE.md](../CLAUDE.md) rules). Run: `python -m unittest tests.test_term_backup`.
+The backup file holds the teacher's own gradebook slice; like the cloud mirror
+it is written only to disk, never committed — the git separation is preserved.
+
 ## 2026-07-11 — comment & teacher-input cloud mirror (durable twin of human-typed content)
 
 **Symptom it addresses:** the 2026-07-10 DB wipe
