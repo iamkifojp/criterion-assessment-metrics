@@ -51,6 +51,8 @@ from .persistence import (
     term_summary_path,
     save_term_summary,
     load_term_summaries,
+    save_class_mirror,
+    load_class_mirror,
 )
 from .aggregation import (
     recency_weighted_score,
@@ -125,4 +127,6 @@ __all__ = [
     "term_summary_path",
     "save_term_summary",
     "load_term_summaries",
+    "save_class_mirror",
+    "load_class_mirror",
 ]

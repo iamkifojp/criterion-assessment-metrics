@@ -330,25 +330,50 @@ def db_file_state(path: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# Per-class finalized term summaries (cloud "class folder" files)
+# Per-class teacher-input cloud mirror (cloud "class folder" files)
 # --------------------------------------------------------------------------
 #
-# When a teacher finalizes a term, each student's polished report-card comment
-# is snapshotted into a small per-class JSON file that lives alongside the main
-# database (typically a OneDrive / Google Drive folder). Keeping summaries in a
-# *separate* file per class — rather than inside acm_database.json — means the
-# prompt engine can fold a completed term's narrative into the next term's
-# context without re-loading the whole gradebook, and a class's history travels
-# as its own portable artifact. Shape on disk:
+# Each class keeps a small per-class JSON file alongside the main database
+# (typically a OneDrive / Google Drive folder) that mirrors every teacher-typed
+# input that the app cannot otherwise rebuild from the export CSVs. Keeping this
+# in a *separate* file per class — rather than inside acm_database.json — means
+# the prompt engine can fold a completed term's narrative into the next term's
+# context without re-loading the whole gradebook, a class's history travels as
+# its own portable artifact, and (crucially) a DB wipe leaves a durable cloud
+# twin of the human-typed content behind for the heal-on-load pass to restore.
+#
+# The file grew from a v1 "term summaries only" shape into the v2 shape below.
+# v1 files (only ``terms``) still load: the extra sections simply come back
+# empty. Shape on disk (v2):
 #
 #     {
+#       "version": 2,
 #       "class_name": "1-4",
 #       "updated_at": "<iso>",
-#       "terms": { "Term 1": { "<student_id>": "<finalized comment>", ... } }
+#       "terms":          { "Term 1": { "<sid>": "<overall comment>" } },
+#       "remarks":        { "<sid>": "<teacher remarks>" },
+#       "effort":         { "Term 1": { "<sid>": 3 } },
+#       "final_override": { "<sid>": { "A": 7 } },
+#       "score_comments": { "<assignment>": { "<sid>": { "A": "<text>" } } }
 #     }
+#
+# ``load_class_mirror`` / ``save_class_mirror`` are the full-payload accessors;
+# ``load_term_summaries`` / ``save_term_summary`` keep their v1 public shape
+# (``{term: {sid: comment}}``) by delegating to the full-payload path so the two
+# never diverge on disk.
 
-# Filename prefix for the per-class summary files.
+# Filename prefix for the per-class mirror files (kept for on-disk compat).
 TERM_SUMMARY_PREFIX = "acm_term_summaries_"
+
+# The five teacher-input sections carried in a v2 mirror:
+#   terms          {term: {sid: text}}
+#   remarks        {sid: text}
+#   effort         {term: {sid: int}}
+#   final_override {sid: {crit: int}}
+#   score_comments {assignment: {sid: {crit: text}}}
+_MIRROR_SECTIONS = (
+    "terms", "remarks", "effort", "final_override", "score_comments",
+)
 
 
 def _safe_class_token(class_name: str) -> str:
@@ -365,49 +390,133 @@ def term_summary_path(folder: str, class_name: str) -> str:
     return os.path.join(folder or ".", fname)
 
 
-def load_term_summaries(folder: str, class_name: str) -> Dict[str, Dict[str, str]]:
-    """Return ``{term: {student_id: comment}}`` for a class (``{}`` if absent).
+def _empty_mirror() -> Dict[str, dict]:
+    """A fresh, fully-shaped (all sections present, all empty) mirror."""
+    return {section: {} for section in _MIRROR_SECTIONS}
 
-    Never raises: a missing or malformed file degrades to an empty mapping so a
-    sync hiccup never blocks comment generation.
+
+def _coerce_int(value: Any) -> Optional[int]:
+    """Best-effort int coercion; ``None`` when the value isn't a whole number."""
+    if isinstance(value, bool):  # bool is an int subclass — reject it explicitly
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _clean_text_by_key(raw: Any) -> Dict[str, str]:
+    """``{key: text}`` keeping only non-blank text values (coerced to str)."""
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for k, v in raw.items():
+        text = "" if v is None else str(v)
+        if text.strip():
+            out[str(k)] = text
+    return out
+
+
+def _clean_int_by_key(raw: Any) -> Dict[str, int]:
+    """``{key: int}`` dropping values that don't coerce to a whole number."""
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for k, v in raw.items():
+        num = _coerce_int(v)
+        if num is not None:
+            out[str(k)] = num
+    return out
+
+
+def _clean_mirror(mirror: Dict[str, Any]) -> Dict[str, dict]:
+    """Normalise a (possibly partial/malformed) mirror to the canonical v2
+    shape, dropping blank leaves and empty containers so blanks never overwrite
+    good data and the files stay churn-free.
+    """
+    src = mirror if isinstance(mirror, dict) else {}
+    out = _empty_mirror()
+
+    # terms: {term: {sid: text}}
+    raw_terms = src.get("terms")
+    if isinstance(raw_terms, dict):
+        for term, by_sid in raw_terms.items():
+            cleaned = _clean_text_by_key(by_sid)
+            if cleaned:
+                out["terms"][str(term)] = cleaned
+
+    # remarks: {sid: text}
+    out["remarks"] = _clean_text_by_key(src.get("remarks"))
+
+    # effort: {term: {sid: int}}
+    raw_effort = src.get("effort")
+    if isinstance(raw_effort, dict):
+        for term, by_sid in raw_effort.items():
+            cleaned = _clean_int_by_key(by_sid)
+            if cleaned:
+                out["effort"][str(term)] = cleaned
+
+    # final_override: {sid: {crit: int}}
+    raw_fo = src.get("final_override")
+    if isinstance(raw_fo, dict):
+        for sid, by_crit in raw_fo.items():
+            cleaned = _clean_int_by_key(by_crit)
+            if cleaned:
+                out["final_override"][str(sid)] = cleaned
+
+    # score_comments: {assignment: {sid: {crit: text}}}
+    raw_sc = src.get("score_comments")
+    if isinstance(raw_sc, dict):
+        for assignment, by_sid in raw_sc.items():
+            if not isinstance(by_sid, dict):
+                continue
+            per_student: Dict[str, Dict[str, str]] = {}
+            for sid, by_crit in by_sid.items():
+                cleaned = _clean_text_by_key(by_crit)
+                if cleaned:
+                    per_student[str(sid)] = cleaned
+            if per_student:
+                out["score_comments"][str(assignment)] = per_student
+
+    return out
+
+
+def load_class_mirror(folder: str, class_name: str) -> Dict[str, dict]:
+    """Return the full v2 teacher-input mirror for a class.
+
+    Always returns the canonical shape (all five sections present) with empty
+    sections when absent. v1 files (only ``terms``) load transparently — the
+    other sections simply come back empty. Never raises: a missing or malformed
+    file degrades to an all-empty mirror so a sync hiccup never blocks the app.
     """
     path = term_summary_path(folder, class_name)
     if not os.path.exists(path):
-        return {}
+        return _empty_mirror()
     try:
         with open(path, "r", encoding="utf-8") as fh:
             payload = json.load(fh)
     except (OSError, ValueError):
-        return {}
-    terms = payload.get("terms", {})
-    if not isinstance(terms, dict):
-        return {}
-    # Coerce defensively to the documented shape.
-    out: Dict[str, Dict[str, str]] = {}
-    for term, by_student in terms.items():
-        if isinstance(by_student, dict):
-            out[str(term)] = {str(k): str(v) for k, v in by_student.items()}
-    return out
+        return _empty_mirror()
+    if not isinstance(payload, dict):
+        return _empty_mirror()
+    return _clean_mirror(payload)
 
 
-def save_term_summary(folder: str, class_name: str, term: str,
-                      summaries: Dict[str, str]) -> str:
-    """Merge ``summaries`` ({student_id: comment}) for ``term`` into the
-    class's summary file and write it atomically. Returns the path written.
+def save_class_mirror(folder: str, class_name: str,
+                      mirror: Dict[str, Any]) -> str:
+    """Write the full v2 mirror for a class atomically. Returns the path.
 
-    Existing terms are preserved; the named term is replaced wholesale with the
-    supplied mapping (empty comments are dropped so blanks never overwrite a
-    previously finalized narrative).
+    ``mirror`` is the complete desired state (any subset of the five sections);
+    it is cleaned to the canonical shape — blank leaves and empty containers
+    dropped — and written wholesale, replacing the file's previous contents.
     """
-    os.makedirs(folder or ".", exist_ok=True)
-    existing = load_term_summaries(folder, class_name)
-    cleaned = {str(sid): str(text) for sid, text in summaries.items()
-               if str(text).strip()}
-    existing[str(term)] = cleaned
     payload = {
+        "version": 2,
         "class_name": class_name,
         "updated_at": datetime.now().isoformat(),
-        "terms": existing,
+        **_clean_mirror(mirror),
     }
     path = term_summary_path(folder, class_name)
     directory = os.path.dirname(os.path.abspath(path)) or "."
@@ -421,3 +530,31 @@ def save_term_summary(folder: str, class_name: str, term: str,
         if os.path.exists(tmp):
             os.remove(tmp)
     return path
+
+
+def load_term_summaries(folder: str, class_name: str) -> Dict[str, Dict[str, str]]:
+    """Return ``{term: {student_id: comment}}`` for a class (``{}`` if absent).
+
+    Thin v1-shaped view over :func:`load_class_mirror`. Never raises: a missing
+    or malformed file degrades to an empty mapping so a sync hiccup never blocks
+    comment generation.
+    """
+    return load_class_mirror(folder, class_name).get("terms", {})
+
+
+def save_term_summary(folder: str, class_name: str, term: str,
+                      summaries: Dict[str, str]) -> str:
+    """Merge ``summaries`` ({student_id: comment}) for ``term`` into the
+    class's mirror file and write it atomically. Returns the path written.
+
+    Every other section (remarks, effort, overrides, score comments) and every
+    other term is preserved; the named term is replaced wholesale with the
+    supplied mapping (empty comments are dropped so blanks never overwrite a
+    previously finalized narrative).
+    """
+    mirror = load_class_mirror(folder, class_name)
+    mirror.setdefault("terms", {})[str(term)] = {
+        str(sid): str(text) for sid, text in summaries.items()
+        if str(text).strip()
+    }
+    return save_class_mirror(folder, class_name, mirror)
