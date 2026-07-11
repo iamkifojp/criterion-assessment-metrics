@@ -712,12 +712,18 @@ def init_state() -> None:
             if loaded and (loaded["gradebook"].students or loaded["gradebook"].assignments):
                 st.session_state["gradebook"] = loaded["gradebook"]
                 restore_session(loaded.get("session", {}))
-            # Cloud-mirror invariant 1 (heal before mirror): only clear the
-            # per-class mirror to write once we've reached a restored/healed
-            # state, never from a quarantined boot. Phase 3 runs its heal pass
-            # right here (and seeds the fingerprints); until then the mirror is
-            # simply enabled after restore, so the first persist() backfills
-            # every class file from the restored session.
+            # Cloud-mirror invariant 1 (heal before mirror): restore the durable
+            # per-class twins into any blank session slot BEFORE the first mirror
+            # write, so a DB that lost its teacher input (the 2026-07-10 incident)
+            # is refilled from the class files instead of overwriting them with
+            # its own emptiness. Session text always wins; only blanks are filled.
+            _heal_from_class_mirrors()
+            # Seed the no-churn fingerprints from the healed state: a class whose
+            # twin already matches is marked so the first persist() won't rewrite
+            # it, while a class whose twin is missing/staler is left unseeded so
+            # that same persist() backfills it (the first-ever twin for the
+            # restored comments). See _seed_mirror_fingerprints.
+            _seed_mirror_fingerprints()
             st.session_state["mirror_ready"] = True
         st.session_state["db_loaded"] = True
 
@@ -1380,6 +1386,117 @@ def _mirror_classes_to_cloud() -> None:
             "the backup was held back to avoid overwriting them. If you did "
             "clear comments on purpose, edit any comment to confirm and it will "
             "save.")
+
+
+# --------------------------------------------------------------------------
+# Heal on load (Phase 3) — the read direction of the cloud mirror
+# --------------------------------------------------------------------------
+#
+# The write direction (above) mirrors every class's teacher input to its cloud
+# twin on autosave. The read direction fills the session back from those twins
+# when the DB lost them (the 2026-07-10 incident wiped comments_by_term and the
+# effort/remark/override maps while grades self-healed from the export CSVs).
+#
+# Two heal passes, both fill blank slots only — a value still present in the
+# session always wins over its twin, so a live edit is never clobbered:
+#   * _heal_from_class_mirrors  — comments / remarks / effort / final_override,
+#     at boot right after restore_session (before the first mirror write).
+#   * _heal_score_comments_from_mirrors — sc.comment, after a Sync purge-replace
+#     (which rebuilds scores from the CSVs and so drops any CAM-typed comment).
+#
+# All heal/seed helpers degrade silently (invariant 4): a cloud read hiccup must
+# never take boot or Sync down.
+
+
+def _heal_from_class_mirrors() -> None:
+    """Fill blank teacher-input slots from each class's cloud twin (Phase 3).
+
+    For every class in the session, load its mirror and backfill only the slots
+    the session left blank in ``comments_by_term`` / ``teacher_remarks`` /
+    ``effort_by_term`` / ``final_override``. Session content always wins where
+    both are present, so this restores a wiped DB without ever overwriting a
+    value the teacher still holds. Never raises."""
+    ss = st.session_state
+    cbt = ss["comments_by_term"]
+    remarks = ss["teacher_remarks"]
+    ebt = ss["effort_by_term"]
+    fo = ss["final_override"]
+    for cls in class_names():
+        try:
+            mirror = load_class_mirror(class_data_dir(cls), cls)
+        except Exception:
+            continue  # invariant 4: a cloud hiccup never blocks boot
+        # Overall comments: {term: {sid: text}} — fill blank/absent text only.
+        for term, by_sid in mirror.get("terms", {}).items():
+            dst = cbt.setdefault(term, {})
+            for sid, text in by_sid.items():
+                if not str(dst.get(sid, "")).strip():
+                    dst[sid] = text
+        # Teacher remarks: flat {sid: text}.
+        for sid, text in mirror.get("remarks", {}).items():
+            if not str(remarks.get(sid, "")).strip():
+                remarks[sid] = text
+        # Effort: {term: {sid: int}} — presence, not truthiness (0 is a real
+        # score), so a set effort of 0 is never re-healed away.
+        for term, by_sid in mirror.get("effort", {}).items():
+            dst = ebt.setdefault(term, {})
+            for sid, val in by_sid.items():
+                if sid not in dst:
+                    dst[sid] = val
+        # Final override: {sid: {crit: band}} — fill only the missing criteria.
+        for sid, by_crit in mirror.get("final_override", {}).items():
+            dst = fo.setdefault(sid, {})
+            for crit, band in by_crit.items():
+                if crit not in dst:
+                    dst[crit] = band
+
+
+def _heal_score_comments_from_mirrors() -> None:
+    """Refill blank ``sc.comment`` slots from each class's cloud twin (Phase 3).
+
+    Runs after a Sync purge-replace, which rebuilds a class's scores from its
+    export CSVs and so drops any comment that was typed in CAM (not carried by
+    the CSV). Fill blanks only — a comment the CSV still carries, or one typed
+    this session, always wins. Never raises."""
+    for cls in class_names():
+        try:
+            mirror = load_class_mirror(class_data_dir(cls), cls)
+        except Exception:
+            continue
+        sc_map = mirror.get("score_comments", {})
+        if not sc_map:
+            continue
+        for assignment, by_sid in sc_map.items():
+            for sid, by_crit in by_sid.items():
+                student = gb().students.get(sid)
+                if student is None:
+                    continue
+                for crit, text in by_crit.items():
+                    for sc in student.scores.get(crit, []):
+                        if (sc.assignment == assignment
+                                and not (sc.comment or "").strip()):
+                            sc.comment = text
+
+
+def _seed_mirror_fingerprints() -> None:
+    """Seed the no-churn fingerprints (invariant 3) from the post-heal state.
+
+    A class whose cloud twin already matches the healed session is fingerprinted
+    now, so the first ``persist()`` recognises it as unchanged and does not
+    rewrite an identical file. A class whose twin is missing or staler than the
+    session is deliberately left UNSEEDED, so that first ``persist()`` backfills
+    it — this is what gives the restored comments their (often first-ever) cloud
+    twin. Never raises."""
+    ss = st.session_state
+    fingerprints = ss.setdefault("mirror_fingerprints", {})
+    for cls in class_names():
+        try:
+            session_fp = _mirror_fingerprint(build_class_mirror(cls))
+            disk_fp = _mirror_fingerprint(load_class_mirror(class_data_dir(cls), cls))
+            if session_fp == disk_fp:
+                fingerprints[cls] = session_fp
+        except Exception:
+            continue
 
 
 def sync_roster_into_students() -> None:
@@ -3193,6 +3310,10 @@ def sync_assignment(class_name: str, assignment_name: str) -> dict:
         if st.session_state["active_class"] not in class_names() and class_names():
             st.session_state["active_class"] = class_names()[0]
         ensure_class_context()
+        # A purge-replace rebuilt scores from the CSV(s) and so may have dropped
+        # CAM-typed score comments — refill them from the cloud twin before we
+        # persist (and re-mirror), so they survive the sync and reach disk again.
+        _heal_score_comments_from_mirrors()
         persist()
     return summary
 
@@ -3321,6 +3442,9 @@ def sync_from_cloud() -> dict:
         if st.session_state["active_class"] not in class_names() and class_names():
             st.session_state["active_class"] = class_names()[0]
         ensure_class_context()
+        # Refill any CAM-typed score comment the purge-replace above dropped,
+        # from the cloud twin, before persisting (and re-mirroring) the rebuild.
+        _heal_score_comments_from_mirrors()
         persist()
     return summary
 
