@@ -6,6 +6,34 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-12 — compact email chip in the Evaluation Cockpit (Window 3)
+
+**Symptom it addresses:** Window 3 rendered the focused student's roster email as
+a full-width `st.code` block stacked directly under the name heading. The
+click-to-copy was useful, but it cost a whole extra row in an already very long
+window.
+
+**What this change does** (Phase 1 of
+[UI_AND_DELIVERABLES_POLISH_PLAN.md](UI_AND_DELIVERABLES_POLISH_PLAN.md)):
+
+- `render_window3` (`app.py`) now puts the name heading and the email on **one
+  line**: `st.columns([3, 2], vertical_alignment="bottom")` with the
+  `### name` heading in the left column and the existing
+  `st.code(_email, language=None)` in the right, wrapped in a keyed
+  `st.container(key="w3_email_chip")` so CSS can target it. The native copy icon
+  is preserved.
+- The static CSS block (`theme_css` neighbourhood, `app.py`) gains
+  `.st-key-w3_email_chip` rules that shrink the code block into a compact pill:
+  `font-size 0.72rem`, `padding 2px 8px`, zeroed margins, `width: fit-content`
+  pushed right with `margin-left: auto`. `max-width: 100%` lets a long email
+  truncate/scroll inside its column rather than pushing the heading.
+- **No email on the roster → the heading renders full-width exactly as before**
+  (no empty chip).
+
+Layout/CSS only; nothing about what any deliverable contains changed.
+
+---
+
 ## 2026-07-12 — explicit term backup & restore (disaster-recovery for one whole term)
 
 **Symptom it addresses:** the cloud mirror (below) gives every human-typed input
