@@ -4,7 +4,8 @@
 public checkout). All file/line anchors verified against this tree on
 2026-07-11. **Phase 1 landed 2026-07-11** (engine payload v2 + unit tests);
 **Phase 2 landed 2026-07-11** (app mirror-on-autosave + `llm_response` drop +
-app-level tests); Phases 3–4 pending.
+app-level tests); **Phase 3 landed 2026-07-11** (heal-on-load + fingerprint
+seeding + app-level tests); Phase 4 pending.
 **Companion plan:** `docs/TERM_BACKUP_RESTORE_PLAN.md` (explicit term
 backup/restore button — separate, implement after this one).
 
@@ -149,20 +150,35 @@ cloud twin.
   deletion flag lets it through; mirror failure never raises. Run:
   `python -m unittest tests.test_app_mirror`.
 
-### Phase 3 — App: heal on load (`app.py`)
+### Phase 3 — App: heal on load (`app.py`) ✅ done 2026-07-11
 
-- In the boot hydrate (`app.py:690-702`), after `restore_session`: for each
-  class, load its mirror and fill **blank slots only** in
-  `comments_by_term`, `teacher_remarks`, `effort_by_term`, `final_override`.
-  Session text always wins over file text when both are non-blank.
-- Score-comment heal runs after Sync's reconcile pass (Sync purge-replace can
-  rebuild scores without CAM-typed comments): fill `sc.comment` when blank.
-- Seed the mirror fingerprints from the healed state (so a heal alone doesn't
-  immediately trigger a rewrite of identical content).
-- One-shot backfill falls out naturally: on the first boot after this lands,
-  fingerprints are unseeded → first `persist()` writes all class mirrors,
-  giving the 120 restored Term 1 comments their cloud twins. Verify this
-  explicitly in tests.
+- ✅ `_heal_from_class_mirrors()` runs in the boot hydrate right after
+  `restore_session` (before the first mirror write): for each class it loads the
+  twin and fills **blank slots only** in `comments_by_term`, `teacher_remarks`,
+  `effort_by_term`, `final_override`. Session text always wins where both are
+  non-blank; effort heals on presence (not truthiness) so a set `0` is never
+  re-healed away; final-override heals per missing criterion. Never raises.
+- ✅ `_heal_score_comments_from_mirrors()` runs after Sync's purge-replace (in
+  both `sync_from_cloud` and `sync_assignment_scoped`, between
+  `ensure_class_context()` and `persist()`), refilling blank `sc.comment` slots
+  from the twin — a comment the CSV still carries, or one typed this session,
+  wins. Placed before `persist()` so the refill reaches disk and re-mirrors.
+- ✅ `_seed_mirror_fingerprints()` seeds the no-churn fingerprint (invariant 3)
+  for each class whose twin already matches the healed session, so a pure heal
+  doesn't rewrite an identical file — while a class whose twin is missing/staler
+  is left unseeded, so the first `persist()` backfills it.
+- ✅ One-shot backfill falls out naturally: on the first boot after this lands, a
+  class with no twin (the incident's root cause) is left unseeded → first
+  `persist()` writes its mirror, giving the restored Term 1 comments their
+  first-ever cloud twin. Verified explicitly
+  (`test_missing_twin_unseeded_backfills_on_persist`).
+- ✅ App-level tests (`tests/test_app_heal.py`, stdlib `unittest`; same
+  `app.st`/`app.gb`/`app.class_data_dir` doubles as Phase 2): wiped maps refilled
+  from the twin (comments/remarks/effort-incl-0/override); session text wins;
+  in-app deletion not resurrected; no-twin quiet no-op; blank score comment
+  refilled while a non-blank one survives; matching twin seeded → no churn;
+  missing/richer-than-twin → backfill/rewrite; every heal/seed never raises. Run:
+  `python -m unittest tests.test_app_heal`.
 
 ### Phase 4 — Window 3: student email under the name
 
