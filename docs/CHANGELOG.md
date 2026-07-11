@@ -6,6 +6,39 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-12 — stop Chrome offering student names in unrelated fields
+
+**Symptom it addresses:** the teacher saw previously-typed **student names
+suggested in the "Grade level" field** of the class dialog. This was Chrome's
+own form-autofill history, not CAM state: none of the app's `st.text_input`
+calls set an `autocomplete` attribute, so Chrome keyed its typed-value history
+across similar anonymous fields. Names typed once into the ➕ Add student dialog
+then leaked into any text box. Any teacher on Chrome could get their own history
+leaked across fields the same way.
+
+**What this change does** (Phase 2 of
+[UI_AND_DELIVERABLES_POLISH_PLAN.md](UI_AND_DELIVERABLES_POLISH_PLAN.md)):
+
+- Every `st.text_input` in `app.py` (14 call sites) now passes
+  `autocomplete="off"` (Streamlit 1.58 supports the kwarg). `st.text_area` and
+  `st.number_input` are left alone — Chrome doesn't offer history dropdowns on
+  textareas or spinner inputs.
+- Free-text `<input>` fields in the grading workspace
+  (`cam_grading_workspace/app.py`: `newKw`, `folderInput`, `examName`, and the
+  dynamically-built `qlabel`/`qrange`/`qscore` cells) also get
+  `autocomplete="off"`. `type="file"`/`checkbox`/`range`/`datetime-local` and
+  the read-only `cloudDirInput` are untouched.
+
+**Caveat:** Chrome sometimes ignores `autocomplete="off"` for fields it
+heuristically classifies as address-like; this change kills the common case.
+Existing polluted history clears itself as entries expire, or the teacher can
+delete a stray suggestion with **Shift+Delete** while it's highlighted.
+
+Attribute-only change; nothing about CAM state or what any deliverable contains
+changed.
+
+---
+
 ## 2026-07-12 — compact email chip in the Evaluation Cockpit (Window 3)
 
 **Symptom it addresses:** Window 3 rendered the focused student's roster email as
