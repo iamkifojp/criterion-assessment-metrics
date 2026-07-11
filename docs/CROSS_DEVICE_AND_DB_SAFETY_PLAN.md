@@ -344,6 +344,26 @@ dir when absent locally; token bootstrap copies then proceeds (mocked
 
 ## 9. Phase 6 — Remote-history hygiene (needs the teacher's go-ahead)
 
+**Status (verified 2026-07-11): local side clean and the footgun already
+defused; the GitHub delete/recreate is the one remaining step and is
+teacher-only.** Confirmed against both checkouts:
+
+- **Public history is clean.** All 8 commits: no `.csv`, `credentials.json`,
+  `client_secret_*.json`, `token.json`, or `local_device_prefs.json` in any
+  tree; `MY_IDENTITIES` empty in source; and no match for the teacher's Gmail
+  address anywhere in history. Earlier, the only hit for the local-part search
+  token was *this plan document* quoting its own verification command; that raw
+  token has since been removed from the command below, so the self-check is
+  meaningful again (a non-empty result now means a real leak).
+- **Local footgun already defused.** The old private checkout
+  `C:\Project\criterion-assessment-metrics` now has **no git remote and no
+  upstream configured at all** (`git -C … remote -v` empty). A stray
+  `git push` there fails with no destination — it can no longer republish its
+  43 local commits. Nothing to repoint; keep it remote-less (or archive it).
+- **Remaining exposure is GitHub-side only** and requires the teacher's GitHub
+  account — an AI assistant must not delete/recreate the remote repo. See the
+  handoff steps below.
+
 The **working tree** of this public repo is clean: identities empty in source,
 sample DB synthetic, no student CSVs, gitignore covers secrets/prefs/baks. The
 exposure is on **GitHub**:
@@ -356,17 +376,20 @@ exposure is on **GitHub**:
   delete the old commits from GitHub — they become unreachable but stay
   **fetchable by SHA** (and appear in the events API if the repo was public at
   push time) until GitHub garbage-collects.
-- **Fix:** delete the GitHub repository and recreate it, pushing only the clean
-  2-commit history (simplest and total), or ask GitHub Support to purge
-  unreachable objects. Then verify from a fresh clone:
-  `git rev-list --all | xargs -I{} git ls-tree {}` shows no CSV, and
-  `git log --all -S turningpoint` is empty.
-- **Defuse the local footgun:** the old private checkout
-  (`C:\Project\criterion-assessment-metrics`) still has `origin` pointed at the
-  **public** GitHub URL and sits 38 commits ahead — one habitual
-  `git push --force` from the wrong window republishes everything. Remove or
-  repoint that remote (`git remote set-url origin <private-or-none>`), or
-  archive the folder.
+- **Fix (teacher, GitHub account required):** delete the GitHub repository and
+  recreate it, pushing only the clean local history (the public checkout now has
+  8 commits — Phases 1–5 landed on top of the 2-commit snapshot; all are clean),
+  or ask GitHub Support to purge unreachable objects. Then verify from a fresh
+  clone: `git rev-list --all | xargs -I{} git ls-tree {}` shows no CSV, and
+  `git log --all -S <teacher-gmail-local-part>` is empty (substitute the actual
+  local-part; it is deliberately not spelled here so this file is not itself a
+  match).
+- **Defuse the local footgun — DONE (verified 2026-07-11).** The old private
+  checkout (`C:\Project\criterion-assessment-metrics`) no longer has any git
+  remote or upstream (`git -C … remote -v` is empty), so a stray
+  `git push`/`git push --force` there fails with no destination and cannot
+  republish its 43 local commits. Keep it remote-less, or archive the folder;
+  do **not** re-add the public URL as `origin`.
 - Treat the Gmail and the pushed CSV's contents as potentially exposed
   regardless (they were on the remote; visibility history is the teacher's to
   confirm). If the repo was public during those pushes, note it for the

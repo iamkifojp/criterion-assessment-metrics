@@ -6,6 +6,35 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-11 — remote-history hygiene: verified clean + footgun defused (safety plan Phase 6)
+
+**Symptom it addresses:** the old *private* history (real student export
+`Changing Views (Crit B)_Grades.csv` and the teacher's Gmail in `MY_IDENTITIES`)
+was once pushed to the same GitHub URL now used by the public repo; force-pushing
+the clean snapshot over it leaves those old objects unreachable but fetchable by
+SHA until GitHub garbage-collects. A second hazard was a local footgun: the old
+checkout pointing `origin` at the public URL, one stray `git push --force` from
+republishing everything.
+
+**What this change does (no app code — repo/history hygiene + verification):**
+
+- **Verified the public history is clean.** Across all 8 commits: no `.csv`,
+  `credentials.json`, `client_secret_*.json`, `token.json`, or
+  `local_device_prefs.json` in any tree; `MY_IDENTITIES` empty in source; and no
+  match for the teacher's Gmail address anywhere in history.
+- **Removed a self-defeating verification.** The plan doc's own check
+  (`git log -S <local-part>`) previously embedded the raw search token, so the
+  document was the sole match forever. The token is now referenced indirectly, so
+  a non-empty result again means a real leak.
+- **Confirmed the local footgun is already defused.** The old private checkout
+  `C:\Project\criterion-assessment-metrics` now has **no git remote or upstream**
+  — a stray push there fails with no destination. No repoint needed; it stays
+  remote-less.
+- **Left the one remaining step to the teacher.** Deleting/recreating the GitHub
+  repository requires the teacher's GitHub account and is a destructive,
+  outward-facing action an assistant must not perform; the plan's Phase 6 §
+  carries the exact handoff steps and post-recreate verification.
+
 ## 2026-07-11 — CGW: identities + credentials heal from the cloud (safety plan Phase 5)
 
 **Symptom it removes:** bringing the grading workspace (CGW) to a second computer
