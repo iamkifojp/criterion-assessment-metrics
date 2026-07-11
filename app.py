@@ -4593,6 +4593,73 @@ def _classroom_folder_assignment_names() -> list:
     return names
 
 
+# --------------------------------------------------------------------------
+# Shared deliverable style kit (UI polish plan Phase 4)
+# --------------------------------------------------------------------------
+# One visual system across the Excel master's four tabs and every Word report,
+# keyed to the app's own light theme (.streamlit/config.toml) rather than a
+# generic office navy. Arial keeps parity with the Classroom Entry tab and is
+# universally available in Excel/Word.
+_DELIV_FONT = "Arial"
+_DELIV_HEADER_FILL = "B3554D"   # muted brick red — header band, white bold text
+_DELIV_HEADER_TEXT = "FFFFFF"
+_DELIV_SUB_FILL = "DDDAD3"      # warm grey — sub-header band
+_DELIV_SUB_TEXT = "9C4A43"      # brick red, bold, on sub-headers
+_DELIV_LABEL_FILL = "E9E7E2"    # soft warm grey — name/label columns
+_DELIV_BODY_TEXT = "38352F"     # near-black body text
+_DELIV_BORDER = "C6C2B9"        # thin border
+
+
+def _xl_style_kit():
+    """Reusable openpyxl style objects for the deliverable style kit.
+
+    Built fresh on each call (cheap); openpyxl is imported lazily to match the
+    rest of the export code. Returns a namespace of Fonts / Fills / Borders /
+    Alignments bound to the app-theme palette above, so all four Excel tabs
+    share one look."""
+    from types import SimpleNamespace
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    thin = Side(style="thin", color=_DELIV_BORDER)
+    return SimpleNamespace(
+        header_fill=PatternFill("solid", fgColor=_DELIV_HEADER_FILL),
+        sub_fill=PatternFill("solid", fgColor=_DELIV_SUB_FILL),
+        label_fill=PatternFill("solid", fgColor=_DELIV_LABEL_FILL),
+        header_font=Font(name=_DELIV_FONT, bold=True, color=_DELIV_HEADER_TEXT),
+        sub_font=Font(name=_DELIV_FONT, bold=True, color=_DELIV_SUB_TEXT, size=10),
+        base_font=Font(name=_DELIV_FONT, size=10, color=_DELIV_BODY_TEXT),
+        bold_font=Font(name=_DELIV_FONT, bold=True, size=10, color=_DELIV_BODY_TEXT),
+        border=Border(left=thin, right=thin, top=thin, bottom=thin),
+        center=Alignment(horizontal="center", vertical="center"),
+        left=Alignment(horizontal="left", vertical="center"),
+        wrap=Alignment(horizontal="left", vertical="top", wrap_text=True),
+    )
+
+
+def _style_header_row(ws, row, ncols, kit, start_col=1):
+    """Paint a header band across ``ncols`` cells from ``start_col``: brick
+    fill, white bold text, thin borders, centred."""
+    for c in range(start_col, start_col + ncols):
+        cell = ws.cell(row=row, column=c)
+        cell.font = kit.header_font
+        cell.fill = kit.header_fill
+        cell.alignment = kit.center
+        cell.border = kit.border
+
+
+def _finish_sheet(ws, freeze=None, widths=None):
+    """Turn gridlines off, set freeze panes and per-column widths.
+
+    ``widths`` is a 1-indexed list (column A first); ``None``/``0`` entries are
+    skipped so callers can leave a column at its default."""
+    from openpyxl.utils import get_column_letter
+    ws.sheet_view.showGridLines = False
+    if freeze:
+        ws.freeze_panes = freeze
+    for i, w in enumerate(widths or [], start=1):
+        if w:
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+
 def _append_classroom_entry_sheet(wb, students) -> None:
     """Add the 'Classroom Entry' tab: one row per student with a paired
     Mark/Comment column per folder assignment, so the teacher copies each
@@ -4603,7 +4670,6 @@ def _append_classroom_entry_sheet(wb, students) -> None:
     on-screen roster uses, so a pasted column lines up row-for-row. This is the
     one place we re-sort away from roster order; it is purely cosmetic, because
     the mark/comment lookup matches on ``student_id`` (below), never position."""
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
     def _latin_key(student):
@@ -4633,18 +4699,19 @@ def _append_classroom_entry_sheet(wb, students) -> None:
             marks[key] = (sc.value, sc.comment or "", sc.is_valid)
 
     ws = wb.create_sheet("Classroom Entry")
-    FONT = "Arial"
-    hdr_fill = PatternFill("solid", fgColor="1F4E78")
-    sub_fill = PatternFill("solid", fgColor="D9E1F2")
-    name_fill = PatternFill("solid", fgColor="F2F2F2")
-    white_bold = Font(name=FONT, bold=True, color="FFFFFF")
-    blue_bold = Font(name=FONT, bold=True, color="1F4E78", size=10)
-    base = Font(name=FONT, size=10)
-    thin = Side(style="thin", color="BFBFBF")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    center = Alignment(horizontal="center", vertical="center")
-    left = Alignment(horizontal="left", vertical="center")
-    wrap = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    # Same structure as before; colours now come from the shared brick-red kit
+    # so this tab matches tabs 1-3 (was a standalone navy palette).
+    kit = _xl_style_kit()
+    hdr_fill = kit.header_fill
+    sub_fill = kit.sub_fill
+    name_fill = kit.label_fill
+    white_bold = kit.header_font
+    blue_bold = kit.sub_font
+    base = kit.base_font
+    border = kit.border
+    center = kit.center
+    left = kit.left
+    wrap = kit.wrap
 
     fixed = ["Name", "Student ID"]
     nfix = len(fixed)
@@ -4697,6 +4764,7 @@ def build_excel_bytes() -> bytes:
     from openpyxl import Workbook
 
     wb = Workbook()
+    kit = _xl_style_kit()   # shared brick-red style kit for all four tabs
 
     # Export is scoped to the currently selected Class/Level only.
     students = students_for_active_class()
@@ -4717,6 +4785,20 @@ def build_excel_bytes() -> bytes:
                 myp if myp is not None else "N/A",
                 gyo if gyo is not None else "N/A"]
         ws.append(row)
+    # Style: header band, ID/Name on the label fill, centred grade cells.
+    ncols1 = 2 + len(CRIT_ORDER) + 3
+    _style_header_row(ws, 1, ncols1, kit)
+    for r in range(2, ws.max_row + 1):
+        for c in range(1, ncols1 + 1):
+            cell = ws.cell(row=r, column=c)
+            cell.font, cell.border = kit.base_font, kit.border
+            if c <= 2:                       # Student ID, Name → label columns
+                cell.fill = kit.label_fill
+                cell.alignment = kit.center if c == 1 else kit.left
+            else:                            # criterion / grade cells
+                cell.alignment = kit.center
+    _finish_sheet(ws, freeze="C2",
+                  widths=[12, 26] + [7] * len(CRIT_ORDER) + [8, 11, 12])
 
     # Tab 2: Raw scores ledger (active class students only).
     ws2 = wb.create_sheet("Raw Scores")
@@ -4731,6 +4813,19 @@ def build_excel_bytes() -> bytes:
             is_late(student.student_id, sc.assignment, sc.criterion.value, sc),
             sc.comment,
         ])
+    # Style: header band, wide wrapped Comment column, soft zebra striping.
+    ncols2 = 9
+    _style_header_row(ws2, 1, ncols2, kit)
+    for r in range(2, ws2.max_row + 1):
+        stripe = kit.label_fill if r % 2 else None   # every other data row
+        for c in range(1, ncols2 + 1):
+            cell = ws2.cell(row=r, column=c)
+            cell.font, cell.border = kit.base_font, kit.border
+            cell.alignment = kit.wrap if c == ncols2 else kit.left
+            if stripe is not None:
+                cell.fill = stripe
+    _finish_sheet(ws2, freeze="A2",
+                  widths=[12, 26, 9, 7, 12, 7, 9, 7, 46])
 
     # Tab 3: Assignment analytics, headed by the class/subject/term metadata
     # so the exported workbook is self-describing.
@@ -4748,6 +4843,23 @@ def build_excel_bytes() -> bytes:
             r["name"], r["criteria"], r["date"].strftime("%Y-%m-%d"),
             r["submissions"], r["avg"], r["spread"], r["lates"],
         ] + [assignment_on(r["name"], t) for t in TERMS])
+    # Style: the 4-row metadata block as a small title card (bold labels on the
+    # label fill), a blank spacer row (5), then the header band + table.
+    ncols3 = 7 + len(TERMS)
+    for r in range(1, 5):
+        lab = ws3.cell(row=r, column=1)
+        lab.font, lab.fill = kit.bold_font, kit.label_fill
+        lab.alignment, lab.border = kit.left, kit.border
+        val = ws3.cell(row=r, column=2)
+        val.font, val.alignment, val.border = kit.base_font, kit.left, kit.border
+    _style_header_row(ws3, 6, ncols3, kit)          # row 5 stays a blank spacer
+    for r in range(7, ws3.max_row + 1):
+        for c in range(1, ncols3 + 1):
+            cell = ws3.cell(row=r, column=c)
+            cell.font, cell.border = kit.base_font, kit.border
+            cell.alignment = kit.left if c == 1 else kit.center
+    _finish_sheet(ws3, freeze="A7",
+                  widths=[26, 14, 12, 12, 10, 8, 7] + [8] * len(TERMS))
 
     # Tab 4: Classroom Entry — grades + comments per student for each folder
     # (Google Classroom) assignment. This tab re-sorts to Latin name order
@@ -4828,10 +4940,65 @@ def _trend_png(student):
     return buf.getvalue()
 
 
+def _apply_report_styles(document) -> None:
+    """Give a Word document the shared deliverable identity: Arial body text in
+    near-black, and brick-red bold heading styles keyed to the app theme.
+
+    Typography only — no content or layout changes. Setting the *styles* (rather
+    than each run) means every paragraph, table cell and heading the report
+    builders emit inherits the look without touching their code."""
+    from docx.shared import Pt, RGBColor
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    body = RGBColor(0x38, 0x35, 0x2F)          # _DELIV_BODY_TEXT
+    brick = RGBColor(0xB3, 0x55, 0x4D)         # _DELIV_HEADER_FILL
+    sub_brick = RGBColor(0x9C, 0x4A, 0x43)     # _DELIV_SUB_TEXT
+
+    normal = document.styles["Normal"]
+    normal.font.name = _DELIV_FONT
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = body
+
+    # Heading sizes step down; H1 is the per-page/report title, H2 the sections.
+    heading_specs = [
+        ("Title", brick, 20),
+        ("Heading 1", brick, 15),
+        ("Heading 2", sub_brick, 12.5),
+        ("Heading 3", sub_brick, 11),
+    ]
+    for name, rgb, size in heading_specs:
+        try:
+            style = document.styles[name]
+        except KeyError:
+            continue
+        style.font.name = _DELIV_FONT
+        style.font.size = Pt(size)
+        style.font.bold = True
+        style.font.color.rgb = rgb
+
+    # A thin warm-grey rule under the H1 page title, echoing the Excel borders.
+    try:
+        h1 = document.styles["Heading 1"]
+    except KeyError:
+        return
+    pPr = h1.element.get_or_add_pPr()
+    if pPr.find(qn("w:pBdr")) is None:
+        pbdr = OxmlElement("w:pBdr")
+        bottom = OxmlElement("w:bottom")
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), "6")
+        bottom.set(qn("w:space"), "4")
+        bottom.set(qn("w:color"), _DELIV_BORDER)
+        pbdr.append(bottom)
+        pPr.append(pbdr)
+
+
 def _new_report_document():
     """A blank Word document with the app-wide page setup: A4 paper (21 x
-    29.7 cm) and 2 cm margins on every side. Every export the app builds goes
-    through here so the layout stays consistent."""
+    29.7 cm) and 2 cm margins on every side, plus the shared deliverable styling
+    (:func:`_apply_report_styles`). Every export the app builds goes through
+    here so the layout and visual identity stay consistent."""
     from docx import Document
     from docx.shared import Cm
 
@@ -4843,6 +5010,7 @@ def _new_report_document():
         section.bottom_margin = Cm(2)
         section.left_margin = Cm(2)
         section.right_margin = Cm(2)
+    _apply_report_styles(document)
     return document
 
 
