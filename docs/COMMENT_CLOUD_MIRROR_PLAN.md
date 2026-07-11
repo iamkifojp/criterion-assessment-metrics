@@ -5,7 +5,8 @@ public checkout). All file/line anchors verified against this tree on
 2026-07-11. **Phase 1 landed 2026-07-11** (engine payload v2 + unit tests);
 **Phase 2 landed 2026-07-11** (app mirror-on-autosave + `llm_response` drop +
 app-level tests); **Phase 3 landed 2026-07-11** (heal-on-load + fingerprint
-seeding + app-level tests); Phase 4 pending.
+seeding + app-level tests); **Phase 4 landed 2026-07-11** (Window 3 student
+email under the name, click-to-copy). All phases complete.
 **Companion plan:** `docs/TERM_BACKUP_RESTORE_PLAN.md` (explicit term
 backup/restore button — separate, implement after this one).
 
@@ -180,13 +181,14 @@ cloud twin.
   missing/richer-than-twin → backfill/rewrite; every heal/seed never raises. Run:
   `python -m unittest tests.test_app_heal`.
 
-### Phase 4 — Window 3: student email under the name
+### Phase 4 — Window 3: student email under the name ✅ done 2026-07-11
 
-- `app.py:6040`: below `### {student_label(student)}`, render the roster email
-  (`student_email_for`, `app.py:1233`) when non-empty, click-to-copy
-  (`st.code(email, language=None)` gives a copy icon; if too tall for the
-  dense cockpit, a caption + the existing clipboard-button helper). Blank
-  email → render nothing.
+- ✅ `render_window3` (`app.py:6357`): below `### {student_label(student)}`
+  (`app.py:6370`), render the roster email (`student_email_for`,
+  `app.py:1548`) when non-empty via `st.code(email, language=None)` — a compact
+  single line with a native copy icon, no syntax highlighting. Blank email (not
+  on the roster) renders nothing. Existing suite (`test_app_mirror`,
+  `test_app_heal`, `test_class_mirror`) stays green.
 
 ## 5. Testing & guardrails (CLAUDE.md rules apply)
 

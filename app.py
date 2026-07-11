@@ -6369,6 +6369,13 @@ def render_window3() -> None:
     # Full name at the top (student_label falls back to ID when name is blank).
     st.markdown(f"### {student_label(student)}")
 
+    # Roster email under the name — click-to-copy for pasting into report tools
+    # or an email client. st.code renders a compact single line with a native
+    # copy icon. Blank email (not on the roster) renders nothing.
+    _email = student_email_for(student)
+    if _email:
+        st.code(_email, language=None)
+
     # --- Scrollable analytical TOP -------------------------------------------
     # Fixed-height scroll region keeps the cockpit compact. The AI comment deck
     # is rendered OUTSIDE this container (below) so its text areas escape the
