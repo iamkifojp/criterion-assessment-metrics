@@ -6,6 +6,51 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-12 — per-class roster name order (4 modes)
+
+**Symptom it addresses:** the roster was always sorted one way — hiragana
+gojūon order, applied once at upload. A teacher who wanted their class list in
+plain A–Z (by surname or by first name) or by email had no way to ask for it;
+the stored roster order *is* the display order, so it also fixed the ordering of
+Window 2 and every export that follows the roster.
+
+**What this change does** (Phase 3 of
+[UI_AND_DELIVERABLES_POLISH_PLAN.md](UI_AND_DELIVERABLES_POLISH_PLAN.md)):
+
+- **New per-class setting `roster_order`** stored in the shared database class
+  dict, with four values: `"gojuon"` (surname→given reading; the historical
+  default), `"last_first"` (Latin surname, then first name), `"first_last"`
+  (Latin first name, then surname), and `"email"`. The key is additive — absent
+  → `"gojuon"`, so no migration and old databases keep behaving as before. It is
+  DB-stored (not a device pref) so the choice follows the data across machines.
+- **Generalised sorter.** `sort_roster_gojuon` is replaced by
+  `sort_roster(entries, mode)`, which shares the surname-peeling logic (the
+  stored name is "Surname First"; the given name is peeled off the end, keeping
+  multi-token surnames intact) via a new `_split_surname_given` helper. Email
+  mode sorts on the roster email, falling back to the match key for legacy
+  safety. `sort_roster_gojuon` remains as a back-compat alias; a new
+  `active_roster_order()` reads the active class's mode.
+- **Settings UI.** ⚙ Settings gains a "**Roster name order**" section (its own
+  form, immediately above "Report-card grades") naming the active class and the
+  four modes. Saving writes the class key, re-sorts the stored roster in place,
+  and persists.
+- **Upload path.** Applying a Google Classroom roster now sorts by the active
+  class's mode instead of hard-coded gojūon; the uploader caption names the
+  current order.
+
+**Deliberately unchanged:** the Excel **Classroom Entry** tab still re-sorts to
+Google Classroom's own Latin first-name order regardless of this setting, so a
+pasted column still lines up row-for-row. Re-ordering the roster is display-only
+and grade-safe — every mark is keyed by student ID, never roster position, so a
+re-sort never disturbs anyone's grades. ↑/↓ fine-tuning survives until the next
+re-sort (a setting change here or a fresh roster upload).
+
+Covered by `tests/test_roster_order.py` (14 tests): all four modes on names
+whose orderings diverge, surname-peeling edge cases, and an invariant that the
+Classroom Entry tab order is independent of `roster_order`.
+
+---
+
 ## 2026-07-12 — stop Chrome offering student names in unrelated fields
 
 **Symptom it addresses:** the teacher saw previously-typed **student names

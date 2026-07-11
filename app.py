@@ -5722,6 +5722,45 @@ def settings_dialog() -> None:
         st.rerun()
     st.caption(f"Active database file: `{db_path()}`")
 
+    # ---- Roster name order (per class, saved with the database) ----------
+    # The stored roster order IS the display order — it drives Window 2 and
+    # every export that follows roster order. Per-class and DB-stored so the
+    # choice follows the data across devices; kept in its own form so it never
+    # rides along with the DB-path adopt/overwrite flow above.
+    st.markdown("---")
+    st.markdown("**Roster name order**")
+    _roster_active = st.session_state["active_class"]
+    st.caption(
+        f"How **{_roster_active}**'s student list is ordered. Affects Window 2 "
+        "and every export that follows roster order — Excel Final Suggestions, "
+        "the report-card pack, class comments and the mail-merge ZIP. Changing "
+        "it re-sorts the roster now; your ↑/↓ fine-tuning survives until the "
+        "next re-sort (a change here or a fresh roster upload). The Excel "
+        "**Classroom Entry** tab always keeps Google Classroom's own order, "
+        "whatever you pick here.")
+    _cur_order = active_roster_order()
+    with st.form("roster_order_form"):
+        _order_choice = st.radio(
+            "Order students by",
+            options=list(ROSTER_ORDER_MODES),
+            index=list(ROSTER_ORDER_MODES).index(_cur_order),
+            format_func=lambda m: ROSTER_ORDER_LABELS[m],
+            key="roster_order_radio")
+        _order_saved = st.form_submit_button("Save roster order",
+                                             width="stretch")
+    if _order_saved:
+        cls_dict = active_class_dict()
+        if cls_dict:
+            cls_dict["roster_order"] = _order_choice
+            set_active_roster(sort_roster(st.session_state["roster"],
+                                          _order_choice))
+            persist()
+            st.session_state["save_status"] = (
+                "ok", "Roster order saved — "
+                      f"{ROSTER_ORDER_LABELS[_order_choice]}.")
+        st.session_state["dlg_settings"] = False
+        st.rerun()
+
     # ---- Report-card grades (shared, saved with the database) ------------
     # School-specific figures on top of the MYP criterion grades. Off by
     # default; a school that uses them enables them here. Saved into the shared
@@ -6469,31 +6508,85 @@ def parse_roster(uploaded):
     return parse_classroom_roster(text)
 
 
-def sort_roster_gojuon(entries: list) -> list:
-    """Return roster entries ordered by gojūon (hiragana あいうえお) reading.
+# Roster display-order modes, DB-stored per class (``roster_order``). Absent
+# key → "gojuon" (the historical default). Re-ordering the roster is
+# display-only: every mark lives in the gradebook keyed by student ID,
+# independent of roster position (the same reason the ↑/↓ buttons are safe), so
+# a re-sort never disturbs anyone's grades.
+ROSTER_ORDER_MODES = ("gojuon", "last_first", "first_last", "email")
+ROSTER_ORDER_DEFAULT = "gojuon"
+ROSTER_ORDER_LABELS = {
+    "gojuon": "Hiragana gojūon — surname, given name (Japanese register order)",
+    "last_first": "Surname, First name (A–Z)",
+    "first_last": "First name, Surname (A–Z)",
+    "email": "Email address",
+}
+
+
+def _split_surname_given(entry: dict) -> tuple:
+    """Peel a roster entry's ``(surname, given)`` apart.
+
+    ``name`` is stored "Surname First"; the given name is peeled off the end to
+    isolate the surname (which may itself be several tokens). Falls back to the
+    match ``key`` when no display name is present."""
+    name = (entry.get("name") or entry.get("key") or "").strip()
+    first = (entry.get("first") or "").strip()
+    if first and name.lower().endswith(first.lower()) \
+            and len(name) > len(first):
+        last = name[:len(name) - len(first)].strip()
+    else:
+        parts = name.split()
+        last = " ".join(parts[:-1]) if len(parts) > 1 else name
+    given = first or (name.split()[-1] if name.split() else "")
+    return last, given
+
+
+def sort_roster(entries: list, mode: str = ROSTER_ORDER_DEFAULT) -> list:
+    """Return roster entries ordered by the chosen display ``mode``.
 
     A Google Classroom list arrives alphabetised by the Latin spelling, which
-    is not the order a Japanese register uses. We sort by the reading of the
-    SURNAME first, then the given name. Names are romaji, so each part is
-    converted to its kana mora sequence (see :func:`engine.gojuon_sort_key`).
+    is not the order a Japanese register uses. The four modes:
+
+    - ``"gojuon"``: reading of the SURNAME first, then the given name — romaji
+      parts are converted to their kana mora sequence
+      (see :func:`engine.gojuon_sort_key`); the historical default.
+    - ``"last_first"``: Latin surname, then given name (case-folded).
+    - ``"first_last"``: Latin given name, then surname (case-folded).
+    - ``"email"``: the roster email (case-folded), falling back to the match
+      ``key`` (manual adds always carry an email; the fallback is legacy
+      safety only).
 
     Re-ordering the roster is display-only: every mark lives in the gradebook
     keyed by student ID, independent of roster position (the same reason the
     ↑/↓ buttons are safe), so a re-sort never disturbs anyone's grades."""
+    if mode not in ROSTER_ORDER_MODES:
+        mode = ROSTER_ORDER_DEFAULT
+
+    if mode == "email":
+        def key(entry):
+            return (entry.get("email") or entry.get("key") or "").casefold()
+        return sorted(entries, key=key)
+
     def key(entry):
-        name = (entry.get("name") or entry.get("key") or "").strip()
-        first = (entry.get("first") or "").strip()
-        # ``name`` is stored "Surname First"; peel the given name off the end to
-        # isolate the surname (which may itself be several tokens).
-        if first and name.lower().endswith(first.lower()) \
-                and len(name) > len(first):
-            last = name[:len(name) - len(first)].strip()
-        else:
-            parts = name.split()
-            last = " ".join(parts[:-1]) if len(parts) > 1 else name
-        given = first or (name.split()[-1] if name.split() else "")
-        return (gojuon_sort_key(last), gojuon_sort_key(given))
+        last, given = _split_surname_given(entry)
+        if mode == "gojuon":
+            return (gojuon_sort_key(last), gojuon_sort_key(given))
+        if mode == "first_last":
+            return (given.casefold(), last.casefold())
+        # "last_first"
+        return (last.casefold(), given.casefold())
     return sorted(entries, key=key)
+
+
+def sort_roster_gojuon(entries: list) -> list:
+    """Back-compat alias: sort a roster into gojūon (hiragana) order."""
+    return sort_roster(entries, "gojuon")
+
+
+def active_roster_order() -> str:
+    """The active class's roster display-order mode (default ``"gojuon"``)."""
+    mode = str(active_class_dict().get("roster_order", "") or "").strip()
+    return mode if mode in ROSTER_ORDER_MODES else ROSTER_ORDER_DEFAULT
 
 
 @st.dialog("➕ Add student")
@@ -6832,14 +6925,16 @@ def render_window2() -> None:
                         help="Load the uploaded Google Classroom roster as "
                              "this class's student list (matched by the "
                              "numeric ID in each email address)."):
-            set_active_roster(sort_roster_gojuon(parse_roster(up)))
+            set_active_roster(sort_roster(parse_roster(up),
+                                          active_roster_order()))
             persist()
             st.rerun()
         st.caption("⚠ Must be a Google Classroom CSV export (roster or "
                    "assignment grades) — students are matched by the numeric "
                    "ID in each email address. The list is sorted automatically "
-                   "into hiragana (gojūon / あいうえお) order — by surname, then "
-                   "given name. Use ↑/↓ to fine-tune.")
+                   f"into **{ROSTER_ORDER_LABELS[active_roster_order()]}** order "
+                   "(change it under ⚙ Settings → Roster name order). "
+                   "Use ↑/↓ to fine-tune.")
         mc = st.columns(2)
         if mc[0].button("➕ Add student", key="open_add_student",
                         width="stretch"):
