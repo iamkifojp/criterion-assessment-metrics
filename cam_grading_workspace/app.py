@@ -3445,7 +3445,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
       </div>
       <div id="kwEditor">
         <span>Keywords:</span> <span id="tagList"></span>
-        <input id="newKw" type="text" placeholder="add keyword…" size="14">
+        <input id="newKw" type="text" placeholder="add keyword…" size="14" autocomplete="off">
         <select id="newKwType">
           <option value="positive">strength</option>
           <option value="growth">growth</option>
@@ -5280,7 +5280,7 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
     <!-- LEFT: first student's exam page + 10x15 coordinate grid -->
     <div id="left">
       <div id="loaderBar">
-        <input id="folderInput" type="text"
+        <input id="folderInput" type="text" autocomplete="off"
                placeholder="Folder of student exam PDFs, e.g. C:\Scans\7A_Midterm">
         <button id="loadFolderBtn">📂 Load Student Folder</button>
         <select id="pageSelect" title="Page of the first student's PDF">
@@ -5301,7 +5301,7 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
     <div id="right">
       <div class="field">
         <span>Exam name</span>
-        <input id="examName" type="text" placeholder="e.g. Term 2 Midterm">
+        <input id="examName" type="text" placeholder="e.g. Term 2 Midterm" autocomplete="off">
         <span>Load saved:</span>
         <select id="examLoadSelect"><option value="">— new exam —</option></select>
       </div>
@@ -5432,9 +5432,9 @@ function addRow(label = "", range = "", score = "") {
   const n = tb.children.length;
   tr.innerHTML = `
     <td><span class="swatch"></span></td>
-    <td><input class="qlabel" type="text" placeholder="Q${n + 1}" value=""></td>
-    <td><input class="qrange" type="text" placeholder="page1!A2:C5" value=""></td>
-    <td><input class="qscore" type="text" placeholder="0-3" value=""></td>
+    <td><input class="qlabel" type="text" placeholder="Q${n + 1}" value="" autocomplete="off"></td>
+    <td><input class="qrange" type="text" placeholder="page1!A2:C5" value="" autocomplete="off"></td>
+    <td><input class="qscore" type="text" placeholder="0-3" value="" autocomplete="off"></td>
     <td><button class="rowbtn up" title="Move up">↑</button></td>
     <td><button class="rowbtn dn" title="Move down">↓</button></td>
     <td><button class="rowbtn del" title="Remove">✕</button></td>`;

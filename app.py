@@ -5549,6 +5549,7 @@ def _render_term_restore_confirm(payload: dict, term: str, sig: str) -> None:
     st.markdown(f"To proceed, type `RESTORE {term}` below:")
     typed = st.text_input("Confirm restore", key="tb_confirm",
                           label_visibility="collapsed",
+                          autocomplete="off",
                           placeholder=f"RESTORE {term}")
     cc = st.columns(2)
     do = cc[0].button("♻ Restore this term", type="primary", key="tb_do_restore",
@@ -5587,7 +5588,7 @@ def _render_term_backup_section(prefs: dict) -> None:
     folder = st.text_input(
         "Backup folder", value=prefs.get("term_backup_folder", ""),
         placeholder=r"e.g. C:\Users\you\CAM-term-backups   or a USB drive",
-        key="tb_folder",
+        key="tb_folder", autocomplete="off",
         help="Where ⬇ Back up term writes its files. Per-device (like every "
              "path setting); point it anywhere — even a USB stick or a non-cloud "
              "folder — for an off-site copy.")
@@ -5658,6 +5659,7 @@ def settings_dialog() -> None:
         custom = st.text_input(
             "Custom Database Path (folder or .json file)",
             value=prefs.get("db_custom_path", ""),
+            autocomplete="off",
             placeholder=r"e.g. C:\Users\you\OneDrive\CAM   or   .../acm_database.json",
             help="Point this at a OneDrive/Google Drive folder for cross-device "
                  "continuity. A folder gets acm_database.json placed inside it, "
@@ -5930,7 +5932,8 @@ def add_assignment_dialog() -> None:
     st.caption(f"Class: **{st.session_state['active_class']}** · "
                f"Term: **{current_term()}**")
     with st.form("add_asg_form"):
-        name = st.text_input("Name", placeholder="e.g. Perspective Drawing Task")
+        name = st.text_input("Name", placeholder="e.g. Perspective Drawing Task",
+                             autocomplete="off")
         kind = st.radio("Type", ["Assignment", "Exam"], horizontal=True,
                         key="add_asg_kind")
         when = st.date_input("Deadline / date", value=date.today(),
@@ -6122,7 +6125,8 @@ def manage_assignment_dialog(name: str, r: dict) -> None:
     A centered modal (rather than a row popover) so it is never clipped or
     squeezed by the narrow Manage column / Window 1 width on a small screen."""
     st.markdown(f"**Manage · {name}**")
-    new = st.text_input("Rename", value=name, key=f"rn_{name}")
+    new = st.text_input("Rename", value=name, key=f"rn_{name}",
+                        autocomplete="off")
     if st.button("Apply rename", key=f"rnb_{name}"):
         if rename_assignment(name, new):
             st.rerun()
@@ -6334,6 +6338,7 @@ def show_analytics_dialog(name: str) -> None:
             "grade elsewhere and enter marks in Window 3.")
         newp = st.text_input(
             "Re-link folder (existing local path)", key=f"relink_{name}",
+            autocomplete="off",
             placeholder=r"e.g. C:\Users\you\OneDrive\Y7 Art\Artist Looking")
         if st.button("🔗 Re-link folder", key=f"relinkbtn_{name}",
                      width="stretch"):
@@ -6501,9 +6506,10 @@ def add_student_dialog() -> None:
     st.caption(f"Class: **{st.session_state['active_class']}** — one student "
                "at a time.")
     with st.form("add_student_form"):
-        first = st.text_input("First name (required)")
-        last = st.text_input("Surname (optional)")
+        first = st.text_input("First name (required)", autocomplete="off")
+        last = st.text_input("Surname (optional)", autocomplete="off")
         email = st.text_input("Email address (required)",
+                              autocomplete="off",
                               placeholder="e.g. 100001@school.ed.jp",
                               help="The part before @ must hold the student's "
                                    "numeric ID — it is the key grading CSVs "
@@ -7576,9 +7582,10 @@ def llm_params_dialog() -> None:
         default_model = ("claude-sonnet-4-6" if provider == "Claude"
                          else "gemini-2.0-flash")
         model = st.text_input("Model (API mode)",
-                              value=(lc.get("model") or default_model), key="lc_model")
+                              value=(lc.get("model") or default_model), key="lc_model",
+                              autocomplete="off")
         api_key = st.text_input(
-            "API key (API mode)", type="password",
+            "API key (API mode)", type="password", autocomplete="off",
             value=st.session_state.get("llm_api_key", ""), key="lc_key",
             help="Leave blank to use ANTHROPIC_API_KEY / GOOGLE_API_KEY "
                  "from your environment.")
@@ -7982,11 +7989,11 @@ def _class_dialog_body(edit: bool) -> None:
     k = "edit" if edit else "add"
     with st.form(f"{k}class_form"):
         name = st.text_input("Class name", value=ac.get("name", ""),
-                             key=f"clsdlg_name_{k}",
+                             key=f"clsdlg_name_{k}", autocomplete="off",
                              placeholder="e.g. 1-4, 2-Z, Year 7 Art")
         grade = st.text_input("Grade level (optional)",
                               value=ac.get("grade", ""),
-                              key=f"clsdlg_grade_{k}",
+                              key=f"clsdlg_grade_{k}", autocomplete="off",
                               placeholder="e.g. Year 7")
         myp = st.selectbox("MYP Year", myp_opts,
                            index=myp_opts.index(cur_myp) if cur_myp in myp_opts else 0,
@@ -7995,14 +8002,14 @@ def _class_dialog_body(edit: bool) -> None:
                            help="Year 6→MYP1, 7→2, 8→3, 9→4, 10→5 (adjust to your school).")
         subject = st.text_input(
             "Subject", value=ac.get("subject", ""),
-            key=f"clsdlg_subject_{k}",
+            key=f"clsdlg_subject_{k}", autocomplete="off",
             placeholder="e.g. Visual Arts, Design, Mathematics",
             help="The subject this class is assessed in. It frames the AI "
                  "comment prompts and appears on every exported report.")
         master = st.text_input(
             "Master directory (optional — local path or Drive Folder ID)",
             value=ac.get("master_dir", ""),
-            key=f"clsdlg_master_{k}",
+            key=f"clsdlg_master_{k}", autocomplete="off",
             placeholder=r"e.g. C:\Users\you\OneDrive\Y7 Art   or   1AbCdEfGhIjK...",
             help="The class's assignment home — its subfolders are scanned "
                  "into Window 1's assignment list automatically when you "
@@ -8215,7 +8222,7 @@ def _render_first_boot_setup() -> None:
                "on first save.")
     manual = st.text_input(
         "Database folder or .json path",
-        key="boot_manual_path",
+        key="boot_manual_path", autocomplete="off",
         placeholder=r"e.g. D:\CAM   or   \\server\share\CAM\acm_database.json")
     if st.button("Use this folder", key="boot_manual_use",
                  disabled=not manual.strip()):
