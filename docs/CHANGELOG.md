@@ -6,6 +6,50 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-12 — Window 3: generated comment now shows on the same repaint
+
+**Symptom it addresses:** in Window 3's AI comment deck, clicking **Generate
+for &lt;student&gt;** (with any API provider) reported success but the
+Overall-comment box stayed **blank** — the text only appeared after focusing a
+different student and coming back. Worse, on that stale-blank repaint the box's
+change-detector saw a mismatch (widget blank vs a just-generated
+`llm_response`), treated the blank as a deliberate edit, tripped
+`_mark_teacher_input_deleted()`, and wrote the blank back over the generated
+comment — a silent wipe, exactly the class of loss the 2026-07-10 comment-wipe
+history warns about.
+
+**Root cause:** the box is a keyed `st.text_area`
+(`key=resp_box_<sid>_<term>`). Its displayed content comes from the cached
+**widget state**, but the generate handler wrote only into
+`st.session_state["llm_response"][sid]` and called `st.rerun()` — it never
+updated the widget's own key. Streamlit's cached (blank) widget state then won
+over the `value=` argument, so the box rendered empty until the key was
+re-instantiated by a student switch.
+
+**What this change does** (Phase 2 of
+[EXAM_SLICER_V2_AND_SYNC_PLAN.md](EXAM_SLICER_V2_AND_SYNC_PLAN.md)): make the
+widget key the single source of truth (the standard Streamlit pattern).
+
+- The `resp_box_<sid>_<term>` key is **seeded once** from `llm_response[sid]`
+  only when absent, and the `text_area` renders with **no `value=`** — key
+  only. Thereafter the key is authoritative.
+- Both generators write the key directly and atomically alongside
+  `llm_response[sid]`: the single-student handler on API success (and now
+  `persist()`s, since the sync-back no longer fires for a generated comment),
+  and the whole-class handler pushes the **focused** student's fresh comment
+  into the live widget (other students seed-in when next focused).
+- The box's sync-back reads the key; because generation keeps both sides in
+  step, a mismatch can now originate **only** from the teacher typing — so the
+  deletion tripwire fires only on a genuine manual clear, never on a
+  stale-blank rerun.
+
+**Deliberately unchanged:** the Teacher-remarks popover box (`rem_box_<sid>`)
+has no generator writing behind it — its `value=`/key pair only ever reflects
+the teacher's own typing — so it was left as-is rather than refactored
+gratuitously.
+
+---
+
 ## 2026-07-12 — sync on export: CGW beacon + CAM poller
 
 **Symptom it addresses:** after grading in CGW and clicking **Export CSV**, the
