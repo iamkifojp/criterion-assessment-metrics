@@ -28,6 +28,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -63,6 +64,11 @@ from engine import (
     parse_iso_date,
     parse_date_from_filename,
     exam_question_columns,
+    section_state,
+    resolved_total,
+    resolved_max,
+    resolved_suggested_band,
+    exam_is_pending,
     parse_unit_plan,
     parse_classroom_roster,
     gojuon_sort_key,
@@ -121,6 +127,35 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # spawns it on its own port so it never blocks the Streamlit server.
 GRADING_WORKSPACE_DIR = os.path.join(BASE_DIR, "cam_grading_workspace")
 GRADING_PORT = 5001
+
+# CGW slices exam pages into exam_crops/<class>/<exam>/<Q or __name__>/<student>.png
+# beside its own app.py. CAM reads those crops read-only (e.g. Window 1's exam
+# analytics name-crop preview, Phase 5E). The reserved __name__ dir holds the
+# optional handwritten-name box crop.
+EXAM_CROPS_DIR = os.path.join(GRADING_WORKSPACE_DIR, "exam_crops")
+EXAM_NAME_BOX_DIR = "__name__"
+
+
+def _cgw_safe_name(name: str) -> str:
+    """Mirror of ``cam_grading_workspace/exam_engine._safe_name`` — the on-disk
+    slug CGW uses for class / exam / label / student path segments. Kept in sync
+    so CAM can resolve a crop's path from the same class/exam/student strings."""
+    return re.sub(r'[\*?:"<>|]', "_", str(name or "").strip()).strip() or "Unnamed"
+
+
+def exam_name_crop_path(class_name: str, exam_name: str, student_key: str) -> str:
+    """Absolute path to a student's name-box crop, or "" when none exists."""
+    p = os.path.join(EXAM_CROPS_DIR, _cgw_safe_name(class_name or "Unsorted"),
+                     _cgw_safe_name(exam_name), EXAM_NAME_BOX_DIR,
+                     _cgw_safe_name(student_key) + ".png")
+    return p if os.path.isfile(p) else ""
+
+
+def exam_has_name_crops(class_name: str, exam_name: str) -> bool:
+    """True when CGW sliced a name box for this exam (a __name__ crop dir)."""
+    d = os.path.join(EXAM_CROPS_DIR, _cgw_safe_name(class_name or "Unsorted"),
+                     _cgw_safe_name(exam_name), EXAM_NAME_BOX_DIR)
+    return os.path.isdir(d)
 
 # Window-2 unmatched-work thumbnails (Phase 4). Rendered first-page/image PNGs
 # are disk-cached here, keyed by source path + mtime + width, so re-opening the
@@ -3179,10 +3214,17 @@ def assignment_table():
         is_exam = bool(getattr(asg, "is_exam", False))
         raw_totals = []
         if is_exam:
-            raw_totals = [
-                s.exam_results[asg.name].total for s in gb()
-                if asg.name in getattr(s, "exam_results", {})
-            ]
+            # Section-aware (Phase 5D): use each student's *resolved* total and
+            # drop students whose choice section is still pending (`?`) from the
+            # class average — an unresolved total isn't a number yet.
+            secs = getattr(asg, "sections", None)
+            for s in gb():
+                if asg.name not in getattr(s, "exam_results", {}):
+                    continue
+                r = s.exam_results[asg.name]
+                if exam_is_pending(r, secs):
+                    continue
+                raw_totals.append(resolved_total(r, secs))
         rows.append({
             "name": asg.name,
             "criteria": ",".join(asg.criteria) if asg.criteria else "—",
@@ -6565,10 +6607,21 @@ def _render_exam_banding() -> None:
         if not results:
             st.caption("This exam's CSV carried no student rows.")
             return
-        avg = mean(r.total for _, r in results)
-        st.caption(f"Raw marks out of **{asg.max_total or '?'}** · class raw "
-                   f"average **{avg:.1f}** · {len(results)} student(s) · "
-                   f"questions: {', '.join(asg.question_labels) or '—'}")
+        # Section-aware raw marks (Phase 5D): every raw number shown here is the
+        # *resolved* total; a student whose choice section is still pending (`?`)
+        # is excluded from the class average and can't be banded until resolved
+        # in Window 3.
+        secs = getattr(asg, "sections", None)
+        counted = [resolved_total(r, secs) for _, r in results
+                   if not exam_is_pending(r, secs)]
+        avg = mean(counted) if counted else 0.0
+        n_pending = sum(1 for _, r in results if exam_is_pending(r, secs))
+        pending_note = (f" · ⚠ {n_pending} pending (`?`) — resolve in Window 3"
+                        if n_pending else "")
+        st.caption(f"Raw marks out of **{resolved_max(results[0][1], secs) or '?'}** "
+                   f"· class raw average **{avg:.1f}** · {len(results)} student(s)"
+                   f"{pending_note} · questions: "
+                   f"{', '.join(asg.question_labels) or '—'}")
 
         crit_default = asg.criteria[0] if asg.criteria else "A"
         crit = st.selectbox(
@@ -6588,9 +6641,21 @@ def _render_exam_banding() -> None:
         for s, r in results:
             row = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
             row[0].write(student_label(s))
-            row[1].write(f"{r.total} / {r.max_total or asg.max_total or '?'}")
-            row[2].write(f"{r.percent:.0f}%")
-            default = existing.get(s.student_id, r.suggested_band())
+            pending = exam_is_pending(r, secs)
+            rmax = resolved_max(r, secs) or asg.max_total or 0
+            if pending:
+                row[1].write(f"? / {rmax or '?'}")
+                row[2].write("?")
+                row[3].button("resolve first", key=f"band_pend_{sel}_{s.student_id}",
+                              disabled=True, width="stretch",
+                              help="This student over-answered a choice section. "
+                                   "Resolve it in Window 3 to enable banding.")
+                continue
+            rtot = resolved_total(r, secs)
+            pct = (rtot / rmax * 100.0) if rmax else 0.0
+            row[1].write(f"{rtot} / {rmax or '?'}")
+            row[2].write(f"{pct:.0f}%")
+            default = existing.get(s.student_id, resolved_suggested_band(r, secs))
             row[3].selectbox(
                 " ", list(range(0, 9)),
                 index=default if 0 <= default <= 8 else 0,
@@ -6600,14 +6665,18 @@ def _render_exam_banding() -> None:
         if st.button("Apply grades to gradebook", key=f"apply_bands_{sel}",
                      type="primary"):
             n = _apply_exam_bands(asg, crit, results)
-            st.session_state["save_status"] = (
-                "ok", f"Graded {n} student(s) for '{sel}' → Criterion {crit}.")
+            msg = f"Graded {n} student(s) for '{sel}' → Criterion {crit}."
+            if n_pending:
+                msg += (f" {n_pending} pending student(s) skipped — resolve "
+                        "their `?` sections in Window 3.")
+            st.session_state["save_status"] = ("ok", msg)
             st.rerun()
 
 
 def _apply_exam_bands(asg, crit_letter: str, results) -> int:
     """Write the chosen 0-8 bands as CriterionScores (replacing prior bands)."""
     crit = Criterion(crit_letter)
+    secs = getattr(asg, "sections", None)
     when = asg.ingested_at or datetime.now()
     if asg.name in st.session_state["date_override"]:
         when = datetime.combine(
@@ -6615,16 +6684,18 @@ def _apply_exam_bands(asg, crit_letter: str, results) -> int:
     applied = 0
     for s, r in results:
         band = st.session_state.get(f"band_{asg.name}_{s.student_id}")
-        if band is None:
+        # Pending (`?`) students never rendered a band widget — skip them.
+        if band is None or exam_is_pending(r, secs):
             continue
         # One band per student per exam: drop any earlier banding first.
         for c, bucket in list(s.scores.items()):
             s.scores[c] = [sc for sc in bucket if sc.assignment != asg.name]
+        rtot, rmax = resolved_total(r, secs), resolved_max(r, secs)
         s.add_score(CriterionScore(
             criterion=crit, value=int(band), timestamp=when,
             source=f"exam:{asg.name}", assignment=asg.name,
             comment=r.comment,
-            note=f"banded from raw {r.total}/{r.max_total or asg.max_total}",
+            note=f"banded from raw {rtot}/{rmax or asg.max_total}",
         ))
         applied += 1
     asg.criteria = [crit_letter]
@@ -6728,6 +6799,7 @@ def show_analytics_dialog(name: str) -> None:
     if match.get("is_exam"):
         # Item-level exam analytics: raw totals + per-question averages.
         results = _exam_results_for(name)
+        secs = getattr(asg_rec, "sections", None)
         st.caption(f"📝 Exam  ·  {match['date']:%b %d, %Y}  ·  "
                    f"marked out of {match['max_total'] or '?'}")
         a, b, cc, d = st.columns(4)
@@ -6735,10 +6807,17 @@ def show_analytics_dialog(name: str) -> None:
         a2 = (f"{match['raw_avg']}/{match['max_total']}"
               if match["raw_avg"] is not None else "—")
         b.metric("Avg raw score", a2)
-        totals = [r.total for _, r in results]
+        # Spread over *resolved* totals, pending (`?`) students excluded.
+        totals = [resolved_total(r, secs) for _, r in results
+                  if not exam_is_pending(r, secs)]
         cc.metric("Spread (sd)", round(pstdev(totals), 2) if len(totals) > 1 else 0.0)
         d.metric("Graded", "Crit " + match["criteria"]
                  if match["criteria"] != "—" else "not yet")
+        n_pending = sum(1 for _, r in results if exam_is_pending(r, secs))
+        if n_pending:
+            st.caption(f"⚠ {n_pending} student(s) have an unresolved choice "
+                       "section (`?`) — excluded from these averages until "
+                       "resolved in Window 3.")
 
         labels = next((a_.question_labels for a_ in gb().assignments
                        if a_.name == name and getattr(a_, "is_exam", False)), [])
@@ -6753,6 +6832,28 @@ def show_analytics_dialog(name: str) -> None:
             )
             style_chart(fig)
             st.plotly_chart(fig, width="stretch")
+
+        # Name-crop preview (Phase 5E): exam rows are keyed by PDF filename stem,
+        # so a mis-named script mints the wrong student. When CGW sliced a name
+        # box, show each ingested row's handwritten-name crop beside its student
+        # id so a mismatch is spottable at a glance. Re-keying stays the existing
+        # manual flow (rename the source file, re-slice, re-sync).
+        if results and exam_has_name_crops(cls, name):
+            with st.expander("✍ Name-box crops — check for mis-named scripts",
+                             expanded=False):
+                st.caption("Each row's handwritten name, cropped from the scan. "
+                           "If a crop doesn't match its student id, the source "
+                           "file was mis-named — fix it in the grading workspace "
+                           "and re-sync.")
+                for s, _r in results:
+                    crop = exam_name_crop_path(cls, name, s.student_id)
+                    ic = st.columns([1.4, 2.6], vertical_alignment="center")
+                    ic[0].write(f"**{student_label(s)}**")
+                    if crop:
+                        ic[1].image(crop, width="stretch")
+                    else:
+                        ic[1].caption("— no name crop on disk —")
+
         if match["criteria"] == "—":
             st.caption("Assign 0–8 grades in Window 1's 📝 Exam grading panel "
                        "to bring this exam into the criterion math.")
@@ -7471,6 +7572,8 @@ def render_window3() -> None:
         if not any_cell:
             st.caption("No marks yet for the active tasks.")
 
+        _render_exam_sections(student)   # per-section marks + `?` choice resolver
+
         _render_trend(student)
         _render_grade_panel(student)   # method dropdown + 4-criteria grades + overrides
         _render_comments(student)
@@ -7544,6 +7647,138 @@ def edit_grade_dialog(sid: str, asg: str, crit: str) -> None:
         persist()
         st.rerun()
     if b[1].button("Cancel", key=f"ed_cancel_{k}", width="stretch"):
+        st.rerun()
+
+
+def _student_exam_records(student):
+    """[(Assignment, ExamResult)] for the focused student's exams in the active
+    class, roster/date order. Exams the teacher archived are skipped."""
+    out = []
+    for asg in gb().assignments:
+        if not getattr(asg, "is_exam", False):
+            continue
+        if getattr(asg, "class_name", "") != st.session_state.get("active_class", ""):
+            continue
+        if asg.name in st.session_state["archived"]:
+            continue
+        r = getattr(student, "exam_results", {}).get(asg.name)
+        if r is not None:
+            out.append((asg, r))
+    return out
+
+
+def _render_exam_sections(student) -> None:
+    """Window 3 exam block (Phase 5C): per-exam, per-section resolved marks with
+    a `?` resolver for over-answered choice sections.
+
+    For every exam the focused student has a result for, show one compact block:
+    ``📝 <exam>`` then a row per section (``Section A · 12/20``). An unresolved
+    over-answered choice section shows ``?`` and a resolve button; while any
+    section is pending the exam-total row also reads ``?``. Legacy exams (no
+    sections metadata) show a single resolved total row — no per-section noise."""
+    records = _student_exam_records(student)
+    if not records:
+        return
+    for asg, r in records:
+        secs = getattr(asg, "sections", None)
+        st.markdown(f"**📝 {asg.name}**")
+        if secs:
+            for section in secs:
+                stt = section_state(r, section)
+                label = f"{section.get('name', '')}"
+                cc = st.columns([3, 1.2], vertical_alignment="center")
+                if stt.pending:
+                    cc[0].caption(f"{label}  ·  choose {stt.required} of "
+                                  f"{len(stt.answered)} answered")
+                    if cc[1].button("? resolve", key=f"exsec_{asg.name}_{label}",
+                                    width="stretch",
+                                    help="This student answered more questions "
+                                         "than the section requires — pick which "
+                                         "count toward the total."):
+                        exam_section_resolver_dialog(student.student_id,
+                                                     asg.name, section.get("name", ""))
+                else:
+                    extra = ""
+                    if stt.over_answered:
+                        extra = f"  ·  chose {', '.join(stt.chosen)}"
+                    cc[0].caption(f"{label}{extra}")
+                    cc[1].caption(f"{stt.subtotal}/{stt.section_max}")
+        # Exam total row: `?` while pending, else the resolved total/max.
+        tc = st.columns([3, 1.2], vertical_alignment="center")
+        tc[0].caption(f"{asg.name} — total")
+        if exam_is_pending(r, secs):
+            tc[1].caption("**?**")
+        else:
+            tc[1].caption(f"**{resolved_total(r, secs)}/"
+                          f"{resolved_max(r, secs) or asg.max_total or '?'}**")
+
+
+@st.dialog("Resolve choice section")
+def exam_section_resolver_dialog(sid: str, exam_name: str, section_name: str) -> None:
+    """Pick which answers count for an over-answered choice section (Phase 5C).
+
+    Shows the student's answered questions (with marks) as checkboxes, capping
+    ticks at the section's ``required`` count. Save writes the picked labels to
+    ``ExamResult.chosen[section]`` and persists; the teacher can reopen and
+    change the selection at any time."""
+    student = find_student(sid)
+    if student is None:
+        st.caption("Student not found.")
+        return
+    result = getattr(student, "exam_results", {}).get(exam_name)
+    asg = next((a for a in gb().assignments
+                if a.name == exam_name and getattr(a, "is_exam", False)), None)
+    section = None
+    for sec in (getattr(asg, "sections", None) or []):
+        if sec.get("name") == section_name:
+            section = sec
+            break
+    if result is None or section is None:
+        st.caption("This section is no longer available.")
+        return
+
+    stt = section_state(result, section)
+    required = stt.required or len(stt.answered)
+    q_max = {q.get("label"): int(q.get("max", 0) or 0)
+             for q in section.get("questions", [])}
+    st.markdown(f"**{exam_name}**  ·  {section_name}  ·  {student_label(student)}")
+    st.caption(f"Tick the **{required}** answer(s) that should count toward the "
+               f"section total. The rest are recorded but don't score.")
+
+    # Pre-read current tick state so we can cap ticks at `required` (disable the
+    # unticked rows once the cap is reached). Seed from the saved selection.
+    current = set(stt.chosen)
+    keys = {lbl: f"chsel_{sid}_{exam_name}_{section_name}_{lbl}"
+            for lbl in stt.answered}
+    checked_now = {lbl: st.session_state.get(keys[lbl], lbl in current)
+                   for lbl in stt.answered}
+    n_checked = sum(1 for v in checked_now.values() if v)
+
+    for lbl in stt.answered:
+        at_cap = n_checked >= required and not checked_now[lbl]
+        st.checkbox(f"{lbl} — {result.questions.get(lbl, 0)} / {q_max.get(lbl, '?')}",
+                    value=(lbl in current), key=keys[lbl], disabled=at_cap)
+
+    picked = [lbl for lbl in stt.answered if st.session_state.get(keys[lbl])]
+    subtotal = sum(result.questions.get(lbl, 0) for lbl in picked)
+    if len(picked) == required:
+        st.success(f"Subtotal: **{subtotal}/{stt.section_max}** "
+                   f"({len(picked)}/{required} chosen)")
+    else:
+        st.info(f"Subtotal so far: {subtotal}  ·  {len(picked)}/{required} chosen "
+                f"— pick {required} to resolve this section.")
+
+    b = st.columns(2)
+    if b[0].button("Save", key=f"chsel_save_{sid}_{exam_name}_{section_name}",
+                   type="primary", width="stretch"):
+        if picked:
+            result.chosen[section_name] = picked
+        else:
+            result.chosen.pop(section_name, None)
+        persist()
+        st.rerun()
+    if b[1].button("Cancel", key=f"chsel_cancel_{sid}_{exam_name}_{section_name}",
+                   width="stretch"):
         st.rerun()
 
 

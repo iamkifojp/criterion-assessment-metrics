@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 # Valid MYP band range. Scores must fall within [MIN_BAND, MAX_BAND].
@@ -121,6 +121,11 @@ class ExamResult:
     # question label -> raw mark, in the teacher's grading order
     questions: Dict[str, int] = field(default_factory=dict)
     comment: str = ""
+    # section name -> the labels the teacher picked to count for an *over-answered*
+    # choice section (Phase 5 strict-`?` resolution). Empty for legacy /
+    # all-required exams; a section stays "pending" until its entry here names
+    # exactly ``required`` of the answered labels. Preserved across re-ingest.
+    chosen: Dict[str, List[str]] = field(default_factory=dict)
 
     @property
     def percent(self) -> float:
@@ -131,6 +136,140 @@ class ExamResult:
         if not self.max_total:
             return 0
         return max(MIN_BAND, min(MAX_BAND, round(self.total / self.max_total * MAX_BAND)))
+
+
+# --------------------------------------------------------------------------
+# Section-aware exam scoring (Phase 5)
+# --------------------------------------------------------------------------
+#
+# An exam may be split into sections (carried by ``Assignment.sections`` and the
+# ``*.meta.json`` export sidecar). A section is a plain dict:
+#
+#     {"name": "Section B", "required": 2 | None,
+#      "questions": [{"label": "Q5", "max": 8}, ...]}
+#
+# ``required`` None means "every question counts" (a normal section). An integer
+# means the student need only answer that many — a *choice* section. When a
+# student answers MORE than ``required`` the section is **over-answered**: per the
+# teacher's strict-`?` decision the app never auto-picks which answers count, so
+# the section (and the exam total) reads ``?`` until the teacher resolves it in
+# Window 3, recording the picked labels in ``ExamResult.chosen``.
+#
+# These helpers are deliberately pure (no Streamlit, no persistence) so they are
+# unit-testable and shared by every surface that shows a raw exam number.
+
+
+@dataclass
+class SectionState:
+    """Computed scoring view of one exam section for one student's result."""
+
+    name: str
+    required: Optional[int]     # None = every question counts
+    labels: List[str]           # every question label defined in the section
+    answered: List[str]         # labels the student has a recorded mark for
+    chosen: List[str]           # teacher-picked labels (over-answered sections)
+    counting: List[str]         # labels whose marks actually count right now
+    subtotal: int               # sum of the counting marks
+    section_max: int            # max attainable (the ``required`` largest maxes)
+    over_answered: bool         # answered more questions than ``required``
+    resolved: bool              # no outstanding teacher choice needed
+    pending: bool               # over-answered and not yet resolved
+
+
+def _coerce_required(section: Dict[str, Any]) -> Optional[int]:
+    """A section's ``required`` as an int, or None for 'all questions count'."""
+    req = section.get("required")
+    if req is None:
+        return None
+    try:
+        return int(req)
+    except (TypeError, ValueError):
+        return None
+
+
+def section_max(section: Dict[str, Any]) -> int:
+    """Max attainable for one section.
+
+    All-required section (``required`` None) → sum of every question max. Choice
+    section → sum of the ``required`` largest question maxes (the best case the
+    student can reach by answering ``required`` of them)."""
+    maxes = sorted(
+        (int(q.get("max", 0) or 0) for q in section.get("questions", [])),
+        reverse=True,
+    )
+    req = _coerce_required(section)
+    if req is None:
+        return sum(maxes)
+    return sum(maxes[:max(0, req)])
+
+
+def section_state(result: "ExamResult", section: Dict[str, Any]) -> SectionState:
+    """Resolve one section against a student's raw marks (see module notes)."""
+    name = str(section.get("name", ""))
+    required = _coerce_required(section)
+    labels = [str(q.get("label")) for q in section.get("questions", [])
+              if q.get("label") is not None]
+    answered = [lbl for lbl in labels if lbl in result.questions]
+    over_answered = required is not None and len(answered) > required
+    picked = result.chosen.get(name, []) if isinstance(result.chosen, dict) else []
+    # Only picks that are still answered labels count (defends re-ingest churn).
+    chosen = [lbl for lbl in picked if lbl in answered]
+    if over_answered:
+        resolved = len(chosen) == required
+        counting = list(chosen) if resolved else []
+    else:
+        resolved = True
+        counting = list(answered)
+    subtotal = sum(int(result.questions.get(lbl, 0)) for lbl in counting)
+    return SectionState(
+        name=name, required=required, labels=labels, answered=answered,
+        chosen=chosen, counting=counting, subtotal=subtotal,
+        section_max=section_max(section), over_answered=over_answered,
+        resolved=resolved, pending=over_answered and not resolved,
+    )
+
+
+def resolved_total(result: "ExamResult",
+                   sections: Optional[List[Dict[str, Any]]]) -> int:
+    """Exam raw total honouring choice-section resolutions.
+
+    No sections metadata → exactly the stored ``result.total`` (legacy path). A
+    pending (unresolved over-answered) section contributes nothing — the total is
+    then reported as pending via :func:`exam_is_pending`."""
+    if not sections:
+        return int(result.total)
+    return sum(st.subtotal for st in
+               (section_state(result, s) for s in sections) if not st.pending)
+
+
+def resolved_max(result: "ExamResult",
+                 sections: Optional[List[Dict[str, Any]]]) -> int:
+    """Exam raw max honouring choice sections (every section always counted).
+
+    No sections metadata → the stored ``result.max_total`` (legacy path). Takes
+    ``result`` too (unlike the plan's ``resolved_max(sections)`` sketch) so the
+    no-sections fallback can read the stored max."""
+    if not sections:
+        return int(result.max_total)
+    return sum(section_max(s) for s in sections)
+
+
+def exam_is_pending(result: "ExamResult",
+                    sections: Optional[List[Dict[str, Any]]]) -> bool:
+    """True when any choice section is over-answered and not yet resolved."""
+    if not sections:
+        return False
+    return any(section_state(result, s).pending for s in sections)
+
+
+def resolved_suggested_band(result: "ExamResult",
+                            sections: Optional[List[Dict[str, Any]]]) -> int:
+    """Proportional 0-8 band from the *resolved* total/max (see helpers above)."""
+    mx = resolved_max(result, sections)
+    if not mx:
+        return 0
+    tot = resolved_total(result, sections)
+    return max(MIN_BAND, min(MAX_BAND, round(tot / mx * MAX_BAND)))
 
 
 @dataclass
@@ -224,6 +363,11 @@ class Assignment:
     is_exam: bool = False
     max_total: int = 0
     question_labels: List[str] = field(default_factory=list)
+    # Section structure carried by the export sidecar (*.meta.json). Each entry:
+    # {"name", "required" (int|None), "questions": [{"label", "max"}]}. None ==
+    # legacy single-section exam (every question counts); the scoring helpers
+    # above collapse to today's total/max in that case.
+    sections: Optional[List[dict]] = None
 
     @property
     def is_formative(self) -> bool:

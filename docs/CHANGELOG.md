@@ -6,6 +6,49 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-13 — CAM: section-aware exams, Window 3 `?` resolver, name-crop check
+
+**What this adds** (Phase 5 of
+[EXAM_SLICER_V2_AND_SYNC_PLAN.md](EXAM_SLICER_V2_AND_SYNC_PLAN.md)) — the CAM
+side that consumes the Phase 4 sidecar. An exam can now be split into sections,
+including *choice* sections ("answer 2 of 3"), and the raw totals everywhere in
+CAM honour the teacher's choice resolutions.
+
+- **Model + persistence.** `Assignment.sections` carries the sidecar structure
+  (`[{name, required, questions:[{label, max}]}]`; `None` = legacy
+  single-section). `ExamResult.chosen` (`{section: [labels]}`) records which
+  answers the teacher picked for an over-answered choice section. Both persist;
+  absent → exactly today's behaviour. New pure, unit-tested helpers on the model
+  — `section_state`, `resolved_total`, `resolved_max`, `resolved_suggested_band`,
+  `exam_is_pending` — compute every section-aware number.
+- **Ingest.** `ingest_exam_csv` reads `<csv>.meta.json` (via
+  `load_exam_sidecar`), attaches the sections and recomputes each result's
+  `max_total` via the resolved rule (a choice section's max = the `required`
+  largest question maxes). Re-ingest **preserves** existing `chosen`
+  resolutions for labels the student still answered (same spirit as the Late
+  reconcile). Missing/corrupt sidecar → unchanged all-questions behaviour.
+- **Strict `?` resolution.** An **over-answered** choice section (student
+  answered more than `required`) reads `?` and contributes **nothing** to the
+  exam total until the teacher resolves it — the app never auto-picks. Window 3
+  shows a per-section marks block (`📝 <exam>` → `Section A · 12/20`) with a
+  **`?` resolve** button that opens a dialog: tick which answers count (capped
+  at `required`), live subtotal, Save writes `ExamResult.chosen`. Re-openable
+  any time.
+- **Resolved totals everywhere.** Window 1's exam-banding panel, the assignment
+  table's `raw ø` chip, and the analytics dialog all use the *resolved* total /
+  max and *exclude* pending (`?`) students from class averages; a pending
+  student's Apply-band control is disabled until they're resolved in Window 3.
+- **Name-crop check (5E).** When CGW sliced a name box, the exam analytics
+  dialog shows each ingested row's `__name__` crop beside its student id (read
+  read-only from `cam_grading_workspace/exam_crops/<class>/<exam>/__name__/`) so
+  a mis-named script is spottable at a glance. Re-keying stays the manual flow.
+
+**Backward-compat:** a legacy exam with no sidecar renders exactly as before —
+`resolved_total`/`resolved_max` fall back to the stored `total`/`max_total`.
+Covered by `tests/test_exam_resolved.py` and `tests/test_exam_sections_app.py`.
+
+---
+
 ## 2026-07-12 — Exam Setup: name box + sections + export definition sidecar
 
 **What this adds** (Phase 4 of

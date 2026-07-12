@@ -130,6 +130,20 @@ as unresolved (`?`) and you pick which answers count from the cockpit (Window 3)
 it never guesses. Older exams with no sections load as a single default section
 and grade exactly as before.
 
+**Resolving a choice (`?`) in the cockpit.** Once a section exam is synced back
+into CAM, focus a student in Window 2 and look in Window 3's marks list: each
+exam shows a **📝** block with a row per section (`Section A · 12/20`) and a
+running exam total. A section a student *over-answered* shows a **? resolve**
+button and the exam total reads **?** until you deal with it. Click it, tick the
+answers that should count (you can pick up to the section's *choose N* — the rest
+grey out), and Save. The total flips from `?` to a number, and you can reopen and
+change your picks any time. Until you resolve it, that student is **left out of
+the exam's class average** and can't be given a 0–8 grade in Window 1's **📝 Exam
+grading** panel (their row there is disabled with a nudge to resolve first). The
+name crops you framed at setup show up in the exam's analytics dialog (click the
+exam in Window 1) next to each student id, so a script filed under the wrong name
+is easy to catch.
+
 ---
 
 ## Where your data lives

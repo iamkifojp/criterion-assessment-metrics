@@ -98,6 +98,7 @@ def _assignment_to_dict(a: Assignment) -> Dict[str, Any]:
         "is_exam": bool(getattr(a, "is_exam", False)),
         "max_total": int(getattr(a, "max_total", 0)),
         "question_labels": list(getattr(a, "question_labels", [])),
+        "sections": getattr(a, "sections", None),
     }
 
 
@@ -117,6 +118,7 @@ def _assignment_from_dict(d: Dict[str, Any]) -> Assignment:
         is_exam=bool(d.get("is_exam", False)),
         max_total=int(d.get("max_total", 0)),
         question_labels=list(d.get("question_labels", [])),
+        sections=d.get("sections") if isinstance(d.get("sections"), list) else None,
     )
 
 
@@ -127,16 +129,22 @@ def _exam_result_to_dict(r: ExamResult) -> Dict[str, Any]:
         "max_total": r.max_total,
         "questions": dict(r.questions),
         "comment": r.comment,
+        "chosen": {str(k): list(v) for k, v in (r.chosen or {}).items()},
     }
 
 
 def _exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
+    raw_chosen = d.get("chosen") or {}
+    chosen = {str(k): [str(x) for x in v]
+              for k, v in raw_chosen.items() if isinstance(v, list)} \
+        if isinstance(raw_chosen, dict) else {}
     return ExamResult(
         assignment=d["assignment"],
         total=int(d.get("total", 0)),
         max_total=int(d.get("max_total", 0)),
         questions={str(k): int(v) for k, v in (d.get("questions") or {}).items()},
         comment=d.get("comment", ""),
+        chosen=chosen,
     )
 
 

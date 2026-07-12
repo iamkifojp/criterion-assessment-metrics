@@ -46,11 +46,20 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import os
 import re
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from .models import Assignment, Criterion, CriterionScore, ExamResult, Gradebook
+from .models import (
+    Assignment,
+    Criterion,
+    CriterionScore,
+    ExamResult,
+    Gradebook,
+    section_max,
+)
 
 
 # --- header -> criterion detection -----------------------------------------
@@ -432,6 +441,50 @@ _EXAM_RESERVED = {
 }
 
 
+def load_exam_sidecar(csv_path: str) -> Optional[List[Dict[str, Any]]]:
+    """Read the ``<csv>.meta.json`` definition sidecar's ``sections`` list.
+
+    Written by CGW beside every routed exam CSV (Phase 4C), the sidecar carries
+    the section structure the flat CSV cannot express. Returns the ``sections``
+    list (``[{"name", "required", "questions": [{"label", "max"}]}]``) or None
+    when the sidecar is absent, unreadable, or shaped wrong — the caller then
+    keeps today's sidecar-less behaviour, never erroring.
+    """
+    meta_path = csv_path + ".meta.json"
+    if not os.path.exists(meta_path):
+        return None
+    try:
+        with open(meta_path, "r", encoding="utf-8") as fh:
+            meta = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(meta, dict):
+        return None
+    sections = meta.get("sections")
+    if not isinstance(sections, list) or not sections:
+        return None
+    clean: List[Dict[str, Any]] = []
+    for sec in sections:
+        if not isinstance(sec, dict) or not sec.get("name"):
+            continue
+        req = sec.get("required")
+        try:
+            req = int(req) if req is not None else None
+        except (TypeError, ValueError):
+            req = None
+        questions = []
+        for q in (sec.get("questions") or []):
+            if isinstance(q, dict) and q.get("label") is not None:
+                try:
+                    qmax = int(q.get("max", 0) or 0)
+                except (TypeError, ValueError):
+                    qmax = 0
+                questions.append({"label": str(q["label"]), "max": qmax})
+        clean.append({"name": str(sec["name"]), "required": req,
+                      "questions": questions})
+    return clean or None
+
+
 def is_exam_csv(fieldnames: List[str]) -> bool:
     """True when a header row is a CAM item-level exam export."""
     lower = {(h or "").strip().lower() for h in (fieldnames or [])}
@@ -721,6 +774,18 @@ class IngestionPipeline:
                     questions=questions,
                     comment=(row.get("Comment") or "").strip(),
                 )
+                # Preserve teacher choice-section resolutions across re-ingest
+                # (purge-replace must not wipe them — same spirit as the Late
+                # reconcile). Carry forward only picks whose labels the student
+                # still has a mark for in the fresh CSV.
+                prev = self.gradebook.students.get(sid)
+                prev_result = (prev.exam_results.get(assignment)
+                               if prev is not None else None)
+                if prev_result is not None and prev_result.chosen:
+                    for sec_name, picks in prev_result.chosen.items():
+                        kept = [lbl for lbl in picks if lbl in result.questions]
+                        if kept:
+                            result.chosen[str(sec_name)] = kept
                 self.gradebook.get_or_create(sid).exam_results[assignment] = result
                 created.append(result)
 
@@ -728,6 +793,17 @@ class IngestionPipeline:
         for r in created:
             if not r.max_total:
                 r.max_total = max_total
+
+        # Definition sidecar (Phase 5B): when CGW dropped a <csv>.meta.json,
+        # attach its section structure and recompute every result's max via the
+        # resolved (choice-aware) rule. Absent/corrupt sidecar → sidecar-less
+        # behaviour, byte-identical to before this phase.
+        sections = load_exam_sidecar(path)
+        if sections:
+            section_total_max = sum(section_max(s) for s in sections)
+            for r in created:
+                r.max_total = section_total_max
+            max_total = section_total_max
 
         self.gradebook.register_assignment(
             Assignment(
@@ -740,6 +816,7 @@ class IngestionPipeline:
                 is_exam=True,
                 max_total=max_total,
                 question_labels=labels,
+                sections=sections,
             )
         )
         return created
