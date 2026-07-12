@@ -2798,15 +2798,21 @@ def api_exam_save():
     return jsonify({"ok": True, "class_name": class_name, "config": clean})
 
 
-def _run_exam_job(job_id, config, out_dir):
-    """Worker body: slice every student PDF, streaming progress into the job."""
+def _run_exam_job(job_id, config, out_dir, labels=None):
+    """Worker body: slice student PDFs, streaming progress into the job.
+
+    ``labels`` (Phase 6) restricts the slice to those question labels — the
+    "re-slice one question" path — so only the touched question's crops are
+    rewritten; ``None`` slices the whole exam.
+    """
     def report(done, total):
         with EXAM_JOBS_LOCK:
             job = EXAM_JOBS.get(job_id)
             if job:
                 job["done"], job["total"] = done, total
     try:
-        summary = exam_engine.process_exam(config, out_dir, progress=report)
+        summary = exam_engine.process_exam(config, out_dir, progress=report,
+                                           labels=labels)
     except Exception as e:                  # noqa: BLE001 — surface to the poller
         with EXAM_JOBS_LOCK:
             job = EXAM_JOBS.get(job_id)
@@ -2858,6 +2864,51 @@ def api_exam_process():
     return jsonify({"ok": True, "job_id": job_id, "exam_name": config["name"],
                     "students": len(students),
                     "questions": len(config["questions"])})
+
+
+@app.route("/api/exam/process_one", methods=["POST"])
+def api_exam_process_one():
+    """Re-slice ONE question for every student, during grading (Phase 6).
+
+    The teacher tweaks a single question's coordinate range in Exam Setup's
+    focus mode and re-slices just that question — far faster than re-processing
+    the whole stack, and every other question's crops stay byte-identical. Saves
+    the (possibly widened) config first, then kicks off a background job that
+    crops only ``label``. Entered marks are keyed by label and never touched.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    class_name = (data.get("class_name") or "").strip()
+    label = (data.get("label") or "").strip()
+    if not class_name:
+        return jsonify({"error": "Pick a class before re-slicing."}), 400
+    if not label:
+        return jsonify({"error": "No question label to re-slice."}), 400
+    try:
+        # Saving first keeps the crops matched to a stored config (as /process).
+        config = EXAM_STORE.save_exam(class_name, data.get("config") or {})
+        if not config.get("pdf_folder"):
+            return jsonify({"error": "Load a student PDF folder first."}), 400
+        if label not in {q["label"] for q in config["questions"]}:
+            return jsonify({"error": f"Question '{label}' is not in this exam."}), 400
+        students = exam_engine.list_student_files(config["pdf_folder"])
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not students:
+        return jsonify({"error": f"No PDF/image files found in "
+                                 f"{config['pdf_folder']!r}."}), 400
+
+    job_id = uuid.uuid4().hex
+    with EXAM_JOBS_LOCK:
+        EXAM_JOBS[job_id] = {
+            "state": "running", "done": 0, "total": len(students),
+            "class_name": class_name, "exam_name": config["name"], "label": label,
+            "result": None, "error": None,
+        }
+    threading.Thread(target=_run_exam_job,
+                     args=(job_id, config, exam_crop_dir(class_name)),
+                     kwargs={"labels": [label]}, daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id, "exam_name": config["name"],
+                    "label": label, "students": len(students)})
 
 
 @app.route("/api/exam/status/<job_id>")
@@ -3121,6 +3172,12 @@ HTML_PAGE = r"""<!DOCTYPE html>
   select.qscore { width:60px; padding:5px; background:var(--panel2); color:var(--text);
                   border:1px solid var(--line); border-radius:5px; font-size:14px; }
   td.qtotal { font-weight:700; white-space:nowrap; }
+  /* ✎ region-adjust button on each exam question column header (Phase 6). */
+  button.qadjust { background:transparent; color:var(--muted); border:1px solid transparent;
+                   padding:0 4px; font-size:12px; line-height:1.4; border-radius:4px; }
+  button.qadjust:hover { background:var(--panel2); color:var(--accent);
+                         border-color:var(--line); filter:none; }
+  #examAdjustBtn { font-size:14px; line-height:1; padding:8px 11px; }
   .scard .exam-img { width:100%; display:block; background:var(--imgbg); }
   .qchip { position:absolute; top:8px; right:8px; background:var(--accent); color:#fff;
            border-radius:8px; padding:2px 10px; font-size:13px; font-weight:700; }
@@ -3375,6 +3432,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </select>
     <button id="gradeBtn" class="hidden">Grade This</button>
     <select id="questionSelect" class="hidden" title="Exam question being graded"></select>
+    <button id="examAdjustBtn" class="hidden secondary"
+            title="Adjust the current question's region during grading">✎ Adjust</button>
     <span id="folderName"></span>
     <span id="status"></span>
     <span style="flex:1"></span>
@@ -4766,12 +4825,39 @@ let EXAM_BY_KEY = {};
 let CURRENT_Q = null;       // label of the question currently on the left screen
 let examSelectedKey = null;
 
+/* Cache-buster bumped when a question is re-sliced in the Exam Setup tab
+   (Phase 6). Appended to crop URLs so the browser refetches the new framing
+   instead of the cached image; empty until the first re-slice arrives. */
+let EXAM_CROP_BUST = "";
 function cropUrl(q, student) {
   return "/api/exam/crop?class=" + encodeURIComponent(ACTIVE_CLASS_NAME)
        + "&exam=" + encodeURIComponent(EXAM.exam_name)
        + "&q=" + encodeURIComponent(q)
-       + "&student=" + encodeURIComponent(student);
+       + "&student=" + encodeURIComponent(student)
+       + (EXAM_CROP_BUST ? "&t=" + encodeURIComponent(EXAM_CROP_BUST) : "");
 }
+
+/* Open Exam Setup focused on one question, to adjust its region mid-grading. */
+function openExamAdjust(label) {
+  if (!EXAM || !ACTIVE_CLASS_NAME) return;
+  window.open("/exam_setup?class=" + encodeURIComponent(ACTIVE_CLASS_NAME)
+    + "&exam=" + encodeURIComponent(EXAM.exam_name)
+    + "&focus=" + encodeURIComponent(label), "_blank");
+}
+
+/* The Exam Setup tab writes this localStorage key when a re-slice finishes;
+   the write fires a 'storage' event in THIS tab (same origin). Refresh the
+   affected exam's crops in place — marks are untouched, only pixels changed. */
+window.addEventListener("storage", (e) => {
+  if (e.key !== "cam_exam_resliced" || !e.newValue || !EXAM) return;
+  let sig;
+  try { sig = JSON.parse(e.newValue); } catch (_) { return; }
+  if (sig.class === ACTIVE_CLASS_NAME && sig.exam === EXAM.exam_name) {
+    EXAM_CROP_BUST = String(sig.ts || Date.now());
+    renderExamRoster();
+    setStatus("Re-sliced " + (sig.label || "a question") + " — crops refreshed.");
+  }
+});
 function examMaxTotal() {
   return EXAM.questions.reduce((a, q) => a + (Number(q.max) || 0), 0);
 }
@@ -4810,6 +4896,7 @@ async function loadExam(examName) {
       qs.appendChild(o);
     });
     qs.classList.remove("hidden");
+    $("#examAdjustBtn").classList.remove("hidden");
     $("#examCsvBtn").classList.remove("hidden");
     $("#setupbar").classList.add("hidden");     // MYP criteria don't apply here
     $("#kwEditor").classList.add("hidden");
@@ -4826,6 +4913,7 @@ function exitExamMode() {
   if (!EXAM) return;
   EXAM = null; EXAM_BY_KEY = {}; CURRENT_Q = null; examSelectedKey = null;
   $("#questionSelect").classList.add("hidden");
+  $("#examAdjustBtn").classList.add("hidden");
   $("#examCsvBtn").classList.add("hidden");
   $("#kwEditor").classList.remove("hidden");
 }
@@ -4901,12 +4989,17 @@ function renderExamTable() {
   const t = document.createElement("table");
   const qcols = EXAM.questions.map(q =>
     `<th class="${q.label === CURRENT_Q ? "qcur" : ""}" title="Range ${escapeHtml(q.range)}">`
-    + `${escapeHtml(q.label)}<br>(0–${q.max})</th>`).join("");
+    + `${escapeHtml(q.label)}<br>(0–${q.max}) `
+    + `<button class="qadjust" type="button" data-q="${escapeHtml(q.label)}"`
+    + ` title="Adjust this question's region during grading">✎</button></th>`).join("");
   t.innerHTML = `<thead><tr><th class="idcol">Student</th>${qcols}`
               + `<th>Total</th><th>Comment</th></tr></thead>`;
   const tb = document.createElement("tbody");
   EXAM.students.forEach(st => tb.appendChild(makeExamRow(st)));
   t.appendChild(tb);
+  // The ✎ per column opens Exam Setup focused on that question (Phase 6).
+  t.querySelectorAll("button.qadjust").forEach(b =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); openExamAdjust(b.dataset.q); }));
   tableWrap.innerHTML = "";
   tableWrap.appendChild(t);
 }
@@ -5090,6 +5183,7 @@ $("#questionSelect").addEventListener("change", () => {
   renderExamRoster();
   renderExamTable();
 });
+$("#examAdjustBtn").addEventListener("click", () => { if (CURRENT_Q) openExamAdjust(CURRENT_Q); });
 $("#examCsvBtn").addEventListener("click", downloadExamCsv);
 $("#deadlineInput").addEventListener("change", () => {
   DEADLINE = $("#deadlineInput").value || "";
@@ -5289,6 +5383,10 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
   #folderInput { flex:1; min-width:220px; }
   #pageWrap { position:relative; background:var(--imgbg); border:1px solid var(--line);
               border-radius:8px; overflow:hidden; }
+  /* Zoom-to-selection (Phase 6): the img + grid overlay live in this container
+     so a single CSS transform frames one question's cells ±2 without touching
+     layout (page height stays put, so #pageWrap keeps clipping to the page). */
+  #pageZoom { position:relative; transform-origin:0 0; transition:transform .15s ease; }
   #pageImg { width:100%; display:block; }
   #gridOverlay { position:absolute; inset:0; display:grid;
                  grid-template-columns:repeat(15,1fr); grid-template-rows:repeat(21,1fr); }
@@ -5320,6 +5418,14 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
   td input.bad { border-color:#d0556a; box-shadow:0 0 0 1px #d0556a inset; }
   .swatch { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:4px;
             vertical-align:-1px; }
+  /* Question swatches are clickable to zoom the preview to that question. */
+  tr[data-rowtype="question"] .swatch { cursor:zoom-in; }
+  tr.focusrow td { background:var(--row-hl, rgba(179,85,77,.14)); }
+  tr.focusrow td:first-child { box-shadow:inset 3px 0 0 var(--accent); }
+  #focusBar { display:flex; align-items:center; gap:10px; margin-top:12px; padding:10px 12px;
+              background:var(--surface); border:1px solid var(--accent); border-radius:8px;
+              flex-wrap:wrap; }
+  #focusNote { flex:1; font-size:13px; color:var(--text); min-width:180px; }
   .rowbtn { background:var(--panel2); color:var(--muted); border:1px solid var(--line);
             border-radius:5px; width:26px; height:26px; padding:0; font-size:13px; }
   .rowbtn:hover { background:var(--btn-hover); color:var(--text); filter:none; }
@@ -5374,14 +5480,19 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
         <select id="pageSelect" title="Page of the first student's PDF">
           <option value="1">Page 1</option>
         </select>
+        <button id="zoomToggleBtn" class="secondary hidden"
+                title="Restore the full-page view">⤢ Full page</button>
       </div>
       <div id="pageWrap">
         <div id="noPage">Load a student folder to preview the first exam paper.<br>
           A coordinate grid sized for the selected paper and grid density
           (Compact ≈1.4cm or Fine ≈1cm) is laid over the page; type coordinate
-          ranges on the right and the matching cells light up here.</div>
-        <img id="pageImg" alt="" style="display:none">
-        <div id="gridOverlay" style="display:none"></div>
+          ranges on the right and the matching cells light up here.
+          Click a question's colour swatch to zoom the preview to its cells.</div>
+        <div id="pageZoom">
+          <img id="pageImg" alt="" style="display:none">
+          <div id="gridOverlay" style="display:none"></div>
+        </div>
       </div>
     </div>
 
@@ -5425,6 +5536,10 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
         <button id="addQBtn" class="secondary">+ Add question</button>
         <button id="addSectionBtn" class="secondary">+ Add section</button>
         <button id="addNameBtn" class="secondary">+ Add name box</button>
+      </div>
+      <div id="focusBar" class="hidden">
+        <span id="focusNote"></span>
+        <button id="resliceBtn">⚙ Re-slice this question</button>
       </div>
       <div id="actions">
         <button id="saveBtn" class="secondary">💾 Save Setup</button>
@@ -5518,6 +5633,7 @@ function applyPaperGrid() {
     + g.cols + "×" + g.rows + " (A1–" + colName(g.cols - 1) + g.rows
     + "), " + (GRID_CM[density] || "") + " cells.";
   refreshHighlights();
+  applyZoom();             // grid dims changed — re-frame any active zoom
 }
 
 /* The load-only "Standard (legacy 2 cm)" density is offered only when an exam
@@ -5592,6 +5708,53 @@ function refreshHighlights() {
   });
 }
 
+/* ---------- Zoom-to-selection (Phase 6) ---------- */
+/* Frame the preview on one range's cells ±2, so the teacher tweaks a single
+   question's coordinates up close. Pure CSS transform on #pageZoom; the page's
+   laid-out height is unchanged, so #pageWrap keeps clipping to the page box. */
+const ZOOM_PAD = 2;          // cells of margin kept around the framed range
+let ZOOM_RANGE = null;       // the range currently framed, or null (full page)
+// Focus-adjust state (Phase 6): the question opened from grading's ✎, its row,
+// and the preview page to land on once the folder loads.
+let FOCUS_LABEL = "", FOCUS_ROW = null, FOCUS_PAGE = 1;
+
+function clamp01(v){ return Math.max(0, Math.min(1, v)); }
+
+function applyZoom() {
+  const zoom = $("#pageZoom");
+  if (!ZOOM_RANGE) { zoom.style.transform = ""; $("#zoomToggleBtn").classList.add("hidden"); return; }
+  const img = $("#pageImg");
+  const W = img.clientWidth, H = img.clientHeight;   // laid-out (unscaled) page box
+  if (!W || !H) return;                              // image not ready yet
+  const rng = ZOOM_RANGE;
+  // parseRange carries 0-based columns but 1-based rows (the highlight
+  // convention: cell labels run 1..NROWS), so shift rows to 0-based here.
+  const r1 = rng.r1 - 1, r2 = rng.r2 - 1;
+  const fx0 = clamp01((rng.c1 - ZOOM_PAD) / NCOLS);
+  const fx1 = clamp01((rng.c2 + 1 + ZOOM_PAD) / NCOLS);
+  const fy0 = clamp01((r1 - ZOOM_PAD) / NROWS);
+  const fy1 = clamp01((r2 + 1 + ZOOM_PAD) / NROWS);
+  const regW = Math.max(1, (fx1 - fx0) * W), regH = Math.max(1, (fy1 - fy0) * H);
+  let s = Math.min(W / regW, H / regH);
+  s = Math.max(1, Math.min(s, 8));                   // never zoom out, cap zoom-in
+  const offX = (W - s * regW) / 2, offY = (H - s * regH) / 2;
+  const tx = -s * fx0 * W + offX, ty = -s * fy0 * H + offY;
+  zoom.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+  $("#zoomToggleBtn").classList.remove("hidden");
+}
+
+/* Zoom the preview to a typed range string; switches to its page first. */
+function zoomToRangeStr(raw) {
+  const rng = parseRange(raw);
+  if (!rng) return;
+  ZOOM_RANGE = rng;
+  if ((parseInt($("#pageSelect").value, 10) || 1) !== rng.page && rng.page <= PAGE_COUNT)
+    showPage(rng.page);       // showPage's onload re-runs applyZoom via refreshHighlights
+  applyZoom();
+}
+
+function clearZoom() { ZOOM_RANGE = null; applyZoom(); }
+
 /* ---------- Row table (name box · sections · questions, reorderable) ------- */
 /* Reorder respects the pin: the name box stays first, so nothing moves above it
    and the name row carries no ↑/↓. */
@@ -5625,6 +5788,9 @@ function addRow(label = "", range = "", score = "") {
   tr.querySelector(".up").addEventListener("click", () => moveUp(tr));
   tr.querySelector(".dn").addEventListener("click", () => moveDown(tr));
   tr.querySelector(".del").addEventListener("click", () => { tr.remove(); renumber(); });
+  // Clicking the colour swatch zooms the preview to this question's cells.
+  tr.querySelector(".swatch").addEventListener("click", () =>
+    zoomToRangeStr(tr.querySelector(".qrange").value.trim()));
   tb.appendChild(tr);
   renumber();
 }
@@ -5765,7 +5931,8 @@ async function loadFolder() {
       o.value = p; o.textContent = "Page " + p; sel.appendChild(o);
     }
     setStatus(d.file_count + " student file(s) — previewing " + d.first_student);
-    showPage(1);
+    // Focus-adjust (Phase 6) may want a later page; default to page 1 otherwise.
+    showPage(FOCUS_PAGE <= PAGE_COUNT ? FOCUS_PAGE : 1);
   } catch (e) { setStatus(""); alert("Error: " + e); }
 }
 
@@ -5779,6 +5946,7 @@ function showPage(p) {
     img.style.display = "block";
     $("#gridOverlay").style.display = "grid";
     refreshHighlights();
+    applyZoom();           // re-frame once the new page's pixels are laid out
   };
 }
 
@@ -5803,6 +5971,7 @@ function loadExamConfig() {
   if (!name) return;
   const cfg = (JSON.parse($("#examLoadSelect").dataset.exams || "{}"))[name];
   if (!cfg) return;
+  resetFocus();               // dropping any prior focus/zoom before rebuilding
   $("#examName").value = cfg.name;
   $("#paperSelect").value = cfg.paper_size || "A4";
   // Density follows the saved config; a missing/legacy "grid" reveals the
@@ -5831,6 +6000,93 @@ function loadExamConfig() {
   });
   updateNameBtn();
   if (cfg.pdf_folder) { $("#folderInput").value = cfg.pdf_folder; loadFolder(); }
+}
+
+/* ---------- Focus-adjust one question mid-grading (Phase 6) ---------- */
+/* Clear any active focus + zoom (called before loading a different exam). */
+function resetFocus() {
+  FOCUS_LABEL = ""; FOCUS_ROW = null; FOCUS_PAGE = 1;
+  $("#focusBar").classList.add("hidden");
+  allRows().forEach(tr => tr.classList.remove("focusrow"));
+  clearZoom();
+}
+
+function findQuestionRow(label) {
+  return allRows().find(tr => rowType(tr) === "question"
+    && tr.querySelector(".qlabel").value.trim() === label) || null;
+}
+
+/* Land on one question: highlight + scroll to its row, zoom the preview to its
+   cells, and reveal the "re-slice this question" action. Called after the exam
+   is loaded (from grading's ✎ deep-link, ?exam=..&focus=<label>). */
+function enterFocusMode(label) {
+  const row = findQuestionRow(label);
+  if (!row) { setStatus("Question '" + label + "' not found in this exam."); return; }
+  FOCUS_LABEL = label; FOCUS_ROW = row;
+  allRows().forEach(tr => tr.classList.remove("focusrow"));
+  row.classList.add("focusrow");
+  row.scrollIntoView({block: "center", behavior: "smooth"});
+  $("#focusBar").classList.remove("hidden");
+  $("#focusNote").textContent = "Adjusting " + label + " — tweak its coordinate "
+    + "range on the right (zoomed in on the left), then re-slice just this "
+    + "question. Entered marks are kept.";
+  const rng = parseRange(row.querySelector(".qrange").value.trim());
+  if (rng) { ZOOM_RANGE = rng; FOCUS_PAGE = rng.page; applyZoom(); }
+}
+
+/* Re-slice ONLY the focused question for every student, then signal the grading
+   tab to refresh its crops. Saves the (possibly widened) config first. */
+async function resliceOne() {
+  const label = FOCUS_ROW ? FOCUS_ROW.querySelector(".qlabel").value.trim() : FOCUS_LABEL;
+  if (!label) { alert("Open a question to adjust first."); return; }
+  const cfg = configPayload();
+  if (!cfg.pdf_folder) { alert("Load the student PDF folder first."); return; }
+  const saved = await saveSetup(true);
+  if (!saved) return;
+  $("#resliceBtn").disabled = true;
+  setStatus("Re-slicing " + label + "…");
+  try {
+    const res = await fetch("/api/exam/process_one", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({class_name: CLASS_NAME, config: cfg, label})
+    });
+    const d = await res.json();
+    if (!res.ok) { setStatus(""); alert(d.error || "Re-slice failed."); return; }
+    await pollResliceJob(d.job_id, label);
+  } catch (e) { setStatus(""); alert("Re-slice error: " + e); }
+  finally { $("#resliceBtn").disabled = false; }
+}
+
+async function pollResliceJob(jobId, label) {
+  while (true) {
+    let d;
+    try {
+      const res = await fetch("/api/exam/status/" + encodeURIComponent(jobId));
+      d = await res.json();
+      if (!res.ok) { setStatus(""); alert(d.error || "Lost track of the re-slice job."); return; }
+    } catch (e) { setStatus(""); alert("Status check failed: " + e); return; }
+    if (d.state === "running") {
+      setStatus("Re-slicing " + label + " — " + d.done + " / " + (d.total || "?") + "…");
+      await new Promise(r => setTimeout(r, 800));
+      continue;
+    }
+    if (d.state === "error") { setStatus(""); alert(d.error || "Re-slice failed."); return; }
+    const r = d.result || {};                       // state === "done"
+    setStatus("Re-sliced " + label + " for " + r.students + " student(s).");
+    let note = "✅ Re-sliced '" + label + "' — " + r.crops + " crop(s) across "
+             + r.students + " student(s). Back in the grading tab, " + label
+             + "'s answers now show the new framing.";
+    if ((r.errors || []).length)
+      note += "\n⚠ " + r.errors.length + " problem(s):\n  " + r.errors.slice(0, 12).join("\n  ");
+    $("#procNote").textContent = note;
+    // Same-origin ping to the grading tab: bump its crop cache-buster (Phase 6).
+    try {
+      localStorage.setItem("cam_exam_resliced", JSON.stringify({
+        class: CLASS_NAME, exam: $("#examName").value.trim(), label, ts: Date.now()
+      }));
+    } catch (_) {}
+    return;
+  }
 }
 
 /* ---------- Save + Process ---------- */
@@ -5908,6 +6164,8 @@ $("#addSectionBtn").addEventListener("click", () => addSectionRow());
 $("#addNameBtn").addEventListener("click", () => addNameBoxRow());
 $("#saveBtn").addEventListener("click", () => saveSetup(false));
 $("#processBtn").addEventListener("click", processAll);
+$("#zoomToggleBtn").addEventListener("click", clearZoom);
+$("#resliceBtn").addEventListener("click", resliceOne);
 $("#examLoadSelect").addEventListener("change", loadExamConfig);
 $("#paperSelect").addEventListener("change", applyPaperGrid);
 $("#gridSelect").addEventListener("change", () => {
@@ -5921,16 +6179,27 @@ applyPaperGrid();           // build the initial (A4 compact 15×21) overlay + l
 addSectionRow(DEFAULT_SECTION_NAME);  // new exams start with one section header
 addRow("Q1", "", "0-3");    // start with one empty question row ready to fill
 updateNameBtn();
-refreshExamList();
 
-/* CAM bridge: /exam_setup?class=..&exam=<name> pre-fills the exam name so
-   the dashboard's "🛠 Exam setup" button lands straight on the right exam. */
-const EXAM_PREFILL = new URLSearchParams(location.search).get("exam") || "";
-if (EXAM_PREFILL && !$("#examName").value.trim()) {
-  $("#examName").value = EXAM_PREFILL;
-  setStatus('Exam "' + EXAM_PREFILL + '" (from CAM) — load the PDF folder, ' +
-            'program the questions, then Save & Process.');
-}
+/* Deep-links into this page:
+   ?exam=<name>              — CAM bridge: pre-fill a new exam's name, OR load
+                               an existing one for editing.
+   ?exam=<name>&focus=<label> — grading's ✎: load the exam and land focused on
+                               one question to adjust + re-slice it (Phase 6). */
+const _params = new URLSearchParams(location.search);
+const EXAM_PREFILL = _params.get("exam") || "";
+const FOCUS_PARAM = _params.get("focus") || "";
+refreshExamList().then(() => {
+  const exams = JSON.parse($("#examLoadSelect").dataset.exams || "{}");
+  if (EXAM_PREFILL && exams[EXAM_PREFILL]) {
+    $("#examLoadSelect").value = EXAM_PREFILL;
+    loadExamConfig();                       // load the saved definition
+    if (FOCUS_PARAM) enterFocusMode(FOCUS_PARAM);
+  } else if (EXAM_PREFILL && !$("#examName").value.trim()) {
+    $("#examName").value = EXAM_PREFILL;     // brand-new exam handed over from CAM
+    setStatus('Exam "' + EXAM_PREFILL + '" (from CAM) — load the PDF folder, ' +
+              'program the questions, then Save & Process.');
+  }
+});
 </script>
 </body>
 </html>

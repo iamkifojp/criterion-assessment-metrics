@@ -144,6 +144,18 @@ name crops you framed at setup show up in the exam's analytics dialog (click the
 exam in Window 1) next to each student id, so a script filed under the wrong name
 is easy to catch.
 
+**Adjusting a question's box while grading.** If a question's crop is cutting off
+an answer, you don't have to re-process the whole exam. In the grading screen's
+exam mode, click the **✎** on that question's column (or **✎ Adjust** next to the
+question selector) — Exam Setup opens focused on that question, scrolled to its
+row with the page preview **zoomed in** on its cells so you can see exactly what's
+being framed. Widen or shift its coordinate range, then click **⚙ Re-slice this
+question**: only that question is re-cropped for every student (it takes seconds),
+and every mark you've already entered stays put. Back in the grading tab the
+question's answer images refresh to the new framing on their own. Use **⤢ Full
+page** to zoom back out; you can also click any question's colour swatch in setup
+to zoom straight to it.
+
 ---
 
 ## Where your data lives

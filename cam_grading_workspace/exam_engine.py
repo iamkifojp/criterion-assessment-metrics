@@ -312,7 +312,7 @@ def _safe_name(name):
     return re.sub(r'[\\/*?:"<>|]', "_", str(name or "").strip()).strip() or "Unnamed"
 
 
-def process_exam(config, output_root, progress=None):
+def process_exam(config, output_root, progress=None, labels=None):
     """Crop every question region out of every student file.
 
     ``config`` is one saved exam definition:
@@ -324,6 +324,13 @@ def process_exam(config, output_root, progress=None):
     returns a summary {students, questions, crops, errors:[...]}. When a
     ``name_box`` range is present its crop lands under the reserved
     ``__name__`` label; sections carry no pixels and don't affect slicing.
+
+    ``labels``, if given, restricts slicing to just those question labels (the
+    Phase 6 "re-slice one question during grading" path — reuse this same
+    pipeline so a re-slice lands byte-identical crops to a full run, only for
+    the touched question). ``None`` slices everything. The optional name box is
+    included only when its reserved label is in ``labels``; every other
+    question's crops on disk are left untouched.
 
     ``progress``, if given, is called ``progress(done, total)`` after each
     student is sliced so a background caller can report incremental progress.
@@ -338,12 +345,20 @@ def process_exam(config, output_root, progress=None):
     name_box = config.get("name_box")
     if name_box:
         regions.append((NAME_BOX_DIR, parse_range(name_box, paper, grid)))
+    if labels is not None:
+        wanted = set(labels)
+        regions = [(lbl, rng) for (lbl, rng) in regions if lbl in wanted]
+        if not regions:
+            raise ValueError(
+                f"None of the requested labels {sorted(wanted)!r} are in this exam.")
     students = list_student_files(config["pdf_folder"])
     if not students:
         raise ValueError(f"No PDF/image files found in {config['pdf_folder']!r}.")
 
     exam_dir = os.path.join(output_root, _safe_name(config["name"]))
-    summary = {"students": len(students), "questions": len(config["questions"]),
+    # Count only gradable questions being sliced (the name box never counts).
+    n_questions = sum(1 for lbl, _ in regions if lbl != NAME_BOX_DIR)
+    summary = {"students": len(students), "questions": n_questions,
                "crops": 0, "errors": []}
     total = len(students)
 

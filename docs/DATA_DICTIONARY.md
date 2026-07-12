@@ -491,6 +491,29 @@ a gradebook file.
   `assignment` and `is_exam`. A torn/half-written read is skipped and retried on
   the next tick.
 
+### B.7.1 `cam_exam_resliced` — mid-grading re-slice refresh signal (browser)
+
+Not a file — a transient **`localStorage`** key CGW uses to refresh exam crops
+across its own browser tabs after a single-question re-slice (Phase 6 of the exam
+slicer plan). When the teacher adjusts a question's region in Exam Setup's focus
+mode and runs **⚙ Re-slice this question**, `POST /api/exam/process_one`
+re-crops only that label (via `exam_engine.process_exam(labels=[label])`); on
+completion the setup tab writes:
+
+```jsonc
+{
+  "class": "Year 7 1-4 (2026-27)", // CGW class name
+  "exam":  "Term 2 Midterm",        // exam display name
+  "label": "Q1",                    // the question just re-sliced
+  "ts":    1720000000000            // Date.now() — also the crop cache-buster
+}
+```
+
+The grading tab (same origin) hears the `storage` event, and — if it has that
+exam open — sets `EXAM_CROP_BUST = ts` so every `/api/exam/crop` URL gains a
+`&t=<ts>` and re-renders the roster with the new framing. It carries no gradebook
+data, is never read from disk, and is ignored when the open exam doesn't match.
+
 ### B.8 Schema versioning & migration
 
 `grading_cache.json` carries a top-level **`"version"`** int (§B.1) equal to

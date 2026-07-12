@@ -6,6 +6,42 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-13 — Exam: adjust a question's region during grading + re-slice one
+
+**What this adds** (Phase 6 of
+[EXAM_SLICER_V2_AND_SYNC_PLAN.md](EXAM_SLICER_V2_AND_SYNC_PLAN.md)) — mid-grading,
+the teacher can nudge one question's coordinate box and re-crop just that
+question, without re-processing the whole stack or losing any entered marks.
+Reuses Exam Setup (the spreadsheet method) rather than a new editor.
+
+- **✎ entry points (CGW grading screen).** Each exam question column header
+  carries a small ✎, and an **✎ Adjust** button sits next to the question
+  selector. Both open `/exam_setup?class=..&exam=..&focus=<label>` in a new tab.
+- **Focus mode (Exam Setup).** With `?focus=<label>` the page auto-loads the
+  exam, scrolls to + highlights that question's row, and **zooms the page
+  preview to its cells ±2** (a CSS transform on the new `#pageZoom` wrapper — the
+  page's laid-out height is untouched, so `#pageWrap` keeps clipping cleanly). A
+  **⤢ Full page** button restores the normal view. Zoom is also available
+  outside focus mode by clicking any question's colour swatch.
+- **Re-slice one question.** New `POST /api/exam/process_one`
+  `{class_name, config, label}` saves the (possibly widened) config, then runs a
+  background job — reusing the `EXAM_JOBS` machinery — that crops **only** that
+  label for every student. `exam_engine.process_exam` gained a `labels=[...]`
+  subset argument; every other question's crops on disk stay byte-identical, and
+  scores (keyed by label) are never touched. A **⚙ Re-slice this question**
+  button drives it in focus mode.
+- **Live crop refresh across tabs.** On completion the setup tab writes a
+  `cam_exam_resliced` `localStorage` signal `{class, exam, label, ts}`; the
+  grading tab (same origin) hears the `storage` event, bumps a crop-URL
+  cache-buster (`&t=<ts>`), and re-renders the roster so the new framing shows
+  without a manual reload.
+
+**Backward-compat:** `process_exam(labels=None)` slices everything exactly as
+before; renaming a label during adjust stays out of scope. Covered by
+`tests/test_exam_reslice.py` (subset slicing, others byte-identical, error paths).
+
+---
+
 ## 2026-07-13 — CAM: section-aware exams, Window 3 `?` resolver, name-crop check
 
 **What this adds** (Phase 5 of
