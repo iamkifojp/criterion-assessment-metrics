@@ -6,6 +6,58 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-12 — sync on export: CGW beacon + CAM poller
+
+**Symptom it addresses:** after grading in CGW and clicking **Export CSV**, the
+grades did not appear in CAM Windows 1/2 until the teacher clicked around — and
+for exams, often not even then. CAM (Streamlit) only reruns on interaction and
+cannot be pushed by CGW (a separate process). The old "sync on export" was only
+approximated by `_run_active_launch_probe`: once per rerun, throttled to 30 s,
+and watching only the one assignment launched via 🖌 Grade This *this session*.
+Exam exports never round-trip, so they got no probe marker at all — an exported
+exam CSV sat unseen until the next session-start global scan.
+
+**What this change does** (Phase 1 of
+[EXAM_SLICER_V2_AND_SYNC_PLAN.md](EXAM_SLICER_V2_AND_SYNC_PLAN.md)): make a
+routed export announce itself, and have CAM listen.
+
+- **CGW writes a beacon on every routed export.** `api_export` and
+  `api_exam_export`, in the branch that writes the CSV into the class subfolder,
+  now atomically rewrite one `cam_export_beacon.json` in the **root of the cloud
+  dir** (`.tmp` + `os.replace`, the `ExamStore._write` pattern) carrying
+  `{class_name, assignment, is_exam, csv_path, ts}`. Best-effort: any failure is
+  logged and swallowed so a beacon problem never fails the export.
+  Download-only exports (`?download=1`, or no cloud dir) route nothing and write
+  no beacon.
+- **CAM polls the beacon with a `run_every` fragment.** New
+  `_export_beacon_poller()` (`@st.fragment(run_every=3)`, called from `main()`
+  right after `_run_active_launch_probe()`) does ONE `os.stat` of the beacon
+  each tick; an unchanged mtime returns immediately — that stat is the entire
+  steady-state cost, and no app rerun ever fires on a no-op. On a change it reads
+  the JSON (tolerating torn reads) and runs a **scoped** sync keyed to the
+  beacon: `sync_assignment` for grading exports, the new `sync_exam` for exam
+  exports — never a full `sync_all` tree walk. Only a real ingest/update (or a
+  duplicate refusal) surfaces the banner and `st.rerun(scope="app")`.
+- **Scoped exam sync.** New `_exam_csv_paths(class, exam)` mirrors
+  `_assignment_csv_paths` but inverts the filter to keep *only* item-level exam
+  CSVs; `sync_exam` feeds them through the shared `_sync_one_csv`, so no ingest
+  semantics are duplicated (the Late reconcile and purge-replace safety all come
+  along unchanged — a new trigger, not new behaviour).
+
+**Deliberately unchanged:** `_run_active_launch_probe` stays as belt-and-braces
+for multi-machine OneDrive arrivals (the beacon file syncs through OneDrive too,
+but with cross-device clock skew). The beacon lives in the data folder (outside
+git); registry/scans only look at `*.csv`, so it can never be mistaken for a
+gradebook file.
+
+Covered by `tests/test_export_beacon_sync.py` (7 tests): `_exam_csv_paths`
+keeps only the matching exam and hides grading exports; `sync_exam` ingests one
+exam's results and is idempotent on re-run; the quiet no-op with no DB path; and
+the CGW beacon writer's exact JSON shape, atomicity, exam flag, and no-cloud-dir
+guard.
+
+---
+
 ## 2026-07-12 — one design language across the deliverables tray
 
 **Symptom it addresses:** the five tray deliverables looked like they came from
