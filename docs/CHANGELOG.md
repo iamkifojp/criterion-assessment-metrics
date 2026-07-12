@@ -6,6 +6,43 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-12 — Exam Setup: name box + sections + export definition sidecar
+
+**What this adds** (Phase 4 of
+[EXAM_SLICER_V2_AND_SYNC_PLAN.md](EXAM_SLICER_V2_AND_SYNC_PLAN.md)) — the CGW
+side of section-aware exams; CAM consumes it in Phase 5:
+
+- **Name box.** An optional per-exam region (`"name_box": "<range>" | null`)
+  capturing the handwritten student name. A **+ Add name box** button pins a
+  special "Name" row above the questions (its own swatch, a range, no score,
+  deletable). `process_exam` slices it to the reserved
+  `<exam>/__name__/<Student>.png`; it is **never** a gradable column (it stays
+  out of the question list, the grading sheet and the CSV). `save_exam` rejects
+  a real question literally labelled `__name__`. These crops are the raw
+  material for CAM's mis-named-script check (Phase 5E).
+- **Sections.** The config grows `"sections": [{"name", "required"}]` and each
+  question gains a `"section"`. A **+ Add section** button inserts a section
+  header row (name · numeric "choose N of them" · an "all required" checkbox,
+  checked by default, that greys the number); questions belong to the header
+  above them and reorder freely. `save_exam` (via `normalize_sections`)
+  **guarantees ≥1 section** — a legacy exam with no sections synthesizes one
+  default `All Questions` section holding every question — and validates unique
+  non-empty names and `required` (null = all, else `1 ≤ required ≤` the section's
+  question count).
+- **Definition sidecar.** Because the flat CSV can't express sections, every
+  routed exam export writes `<csv filename>.meta.json` **before** the CSV, atomic
+  and best-effort (a sidecar failure never fails the export). It carries
+  `{exam, sections:[{name, required, questions:[{label, max}]}], has_name_box,
+  grid, paper_size}`. The **CSV shape is unchanged** — old CAM builds and the
+  teacher's own tooling keep working; CAM recomputes choice-section totals from
+  the sidecar in Phase 5.
+
+**Backward-compat:** a legacy `gcg_exams.json` entry loads into the setup UI
+with the synthesized default section and slices **identically** (sections carry
+no pixels; the name box is opt-in). Covered by `tests/test_exam_sections.py`.
+
+---
+
 ## 2026-07-12 — Exam Setup: legible grid + per-exam grid density
 
 **Symptom it addresses:** the coordinate grid in **📝 Exam Setup** was hard to

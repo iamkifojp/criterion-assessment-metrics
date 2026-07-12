@@ -3024,6 +3024,18 @@ def api_exam_export():
         if os.path.exists(dest) and not force:
             return jsonify({"needs_confirm": True, "path": dest,
                             "filename": filename})
+        # Definition sidecar (Phase 4C): write <csv>.meta.json BEFORE the CSV so
+        # a sync that sees the CSV also sees the structure. Atomic + best-effort;
+        # a sidecar failure must never fail the export (CAM tolerates absence).
+        try:
+            meta = exam_engine.build_sidecar(config)
+            meta_path = dest + ".meta.json"
+            meta_tmp = meta_path + ".tmp"
+            with open(meta_tmp, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+            os.replace(meta_tmp, meta_path)
+        except Exception as e:
+            print("Warning: could not write exam sidecar:", e)
         try:
             with open(dest, "wb") as f:
                 f.write(data_bytes)
@@ -5313,8 +5325,26 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
   .rowbtn:hover { background:var(--btn-hover); color:var(--text); filter:none; }
   .rowbtn.del:hover { background:#d0556a; color:#fff; border-color:#d0556a; }
   #actions { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+  #addRowBtns { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
   #procNote { margin-top:10px; font-size:12px; color:var(--muted); white-space:pre-wrap; }
   .hint { font-size:12px; color:var(--muted); margin:4px 0 12px; line-height:1.5; }
+
+  /* Section header rows: a tinted band spanning the label/range/score columns,
+     with the section name + how-many-count control. Question rows below one
+     belong to it. */
+  tr.secrow td { background:var(--surface); border-top:1px solid var(--accent); }
+  tr.secrow .secname { width:150px; font-weight:600; color:var(--text); }
+  .secreqwrap { font-size:12px; color:var(--muted); margin-left:8px; }
+  .secreqwrap input[type=number] { width:52px; padding:5px 6px; border-radius:6px;
+            border:1px solid var(--line); background:var(--panel2); color:var(--text); }
+  .secreqwrap input:disabled { opacity:.4; }
+  .secreqwrap label { cursor:pointer; }
+  .swatch.secmark { background:var(--accent); color:#fff; width:14px; height:14px;
+            font-size:10px; line-height:14px; text-align:center; border-radius:3px; }
+  /* Name-box row: a fixed "Name" label, its own swatch colour, a range only. */
+  tr.namerow td { background:var(--accent-tint, rgba(179,85,77,.06)); }
+  tr.namerow .namelabel { font-weight:600; color:var(--text); }
+  .swatch.namemark { background:#2bb8b0; }
 </style>
 <script>
 (function(){
@@ -5380,7 +5410,9 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
         One row per question, in the order they should be graded. Coordinate
         ranges use the grid on the left: <b>A2:C5</b> (page 1) or
         <b>page2!A2:C5</b>. Score is the mark range, e.g. <b>0-3</b>.
-        Use ↑/↓ to reorder. <span id="gridHint"></span>
+        Use ↑/↓ to reorder. Questions belong to the <b>section header</b> above
+        them; an optional <b>name box</b> captures the handwritten name.
+        <span id="gridHint"></span>
       </div>
       <table>
         <thead><tr>
@@ -5389,7 +5421,11 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
         </tr></thead>
         <tbody id="qRows"></tbody>
       </table>
-      <button id="addQBtn" class="secondary" style="margin-top:8px;">+ Add question</button>
+      <div id="addRowBtns">
+        <button id="addQBtn" class="secondary">+ Add question</button>
+        <button id="addSectionBtn" class="secondary">+ Add section</button>
+        <button id="addNameBtn" class="secondary">+ Add name box</button>
+      </div>
       <div id="actions">
         <button id="saveBtn" class="secondary">💾 Save Setup</button>
         <button id="processBtn">⚙ Process All PDFs</button>
@@ -5432,9 +5468,17 @@ function colIndex(letters){
 }
 const Q_COLORS = ["#e0843a","#3aa0e0","#37c97a","#b56ad0","#d0556a","#caa23a",
                   "#2bb8b0","#7d8cf0","#c46fa0","#7fae3d"];
+const NAME_COLOR = "#2bb8b0";              // name-box highlight (matches its swatch)
+const DEFAULT_SECTION_NAME = "All Questions";  // mirrors exam_engine.DEFAULT_SECTION_NAME
 let FOLDER = "", PAGE_COUNT = 1;
 
 function setStatus(t){ $("#status").textContent = t; }
+
+/* The #qRows tbody holds a mix of rows, distinguished by data-rowtype:
+   "name" (optional, pinned first), "section" (a header) and "question". */
+function allRows(){ return [...$("#qRows").children]; }
+function rowType(tr){ return tr.dataset.rowtype; }
+function nameRow(){ return $("#qRows tr.namerow"); }
 
 /* The live grid density — mirrors the #gridSelect value, which may be a
    load-only "legacy" state when an old exam is open. */
@@ -5508,17 +5552,34 @@ function parseRange(raw) {
   return {page, c1, r1, c2, r2};
 }
 
-/* Re-paint the overlay from every question row's range (instant on typing).
+/* Every coordinate-bearing row (the name box + each question), with the colour
+   it highlights in. Question colours track question index (stable by position);
+   the name box uses its own colour. */
+function highlightRegions() {
+  const out = [];
+  let qi = 0;
+  allRows().forEach(tr => {
+    const t = rowType(tr);
+    if (t === "name") {
+      out.push({inp: tr.querySelector(".qrange"), color: NAME_COLOR});
+    } else if (t === "question") {
+      out.push({inp: tr.querySelector(".qrange"), color: Q_COLORS[qi % Q_COLORS.length]});
+      qi++;
+    }
+  });
+  return out;
+}
+
+/* Re-paint the overlay from every region row's range (instant on typing).
    Only ranges targeting the page currently shown are highlighted. */
 function refreshHighlights() {
   const page = parseInt($("#pageSelect").value, 10) || 1;
   const hl = {};                       // "A2" -> color
-  readRows().forEach((q, i) => {
-    const rng = parseRange(q.range);
-    const inp = q.tr.querySelector(".qrange");
-    inp.classList.toggle("bad", !!q.range.trim() && !rng);
+  highlightRegions().forEach(({inp, color}) => {
+    const raw = inp.value.trim();
+    const rng = parseRange(raw);
+    inp.classList.toggle("bad", !!raw && !rng);
     if (!rng || rng.page !== page) return;
-    const color = Q_COLORS[i % Q_COLORS.length];
     for (let c = rng.c1; c <= rng.c2; c++)
       for (let r = rng.r1; r <= rng.r2; r++)
         hl[colName(c) + r] = color;
@@ -5531,14 +5592,27 @@ function refreshHighlights() {
   });
 }
 
-/* ---------- Question table (label / range / score, reorderable) ---------- */
+/* ---------- Row table (name box · sections · questions, reorderable) ------- */
+/* Reorder respects the pin: the name box stays first, so nothing moves above it
+   and the name row carries no ↑/↓. */
+function moveUp(tr) {
+  const prev = tr.previousElementSibling;
+  if (prev && rowType(prev) !== "name") tr.parentNode.insertBefore(tr, prev);
+  renumber();
+}
+function moveDown(tr) {
+  const next = tr.nextElementSibling;
+  if (next) tr.parentNode.insertBefore(next, tr);
+  renumber();
+}
+
 function addRow(label = "", range = "", score = "") {
   const tb = $("#qRows");
   const tr = document.createElement("tr");
-  const n = tb.children.length;
+  tr.dataset.rowtype = "question";
   tr.innerHTML = `
     <td><span class="swatch"></span></td>
-    <td><input class="qlabel" type="text" placeholder="Q${n + 1}" value="" autocomplete="off"></td>
+    <td><input class="qlabel" type="text" placeholder="Q?" value="" autocomplete="off"></td>
     <td><input class="qrange" type="text" placeholder="page1!A2:C5" value="" autocomplete="off"></td>
     <td><input class="qscore" type="text" placeholder="0-3" value="" autocomplete="off"></td>
     <td><button class="rowbtn up" title="Move up">↑</button></td>
@@ -5548,44 +5622,127 @@ function addRow(label = "", range = "", score = "") {
   tr.querySelector(".qrange").value = range;
   tr.querySelector(".qscore").value = score;
   tr.querySelectorAll("input").forEach(i => i.addEventListener("input", refreshHighlights));
-  tr.querySelector(".up").addEventListener("click", () => {
-    if (tr.previousElementSibling) tb.insertBefore(tr, tr.previousElementSibling);
-    renumber();
-  });
-  tr.querySelector(".dn").addEventListener("click", () => {
-    if (tr.nextElementSibling) tb.insertBefore(tr.nextElementSibling, tr);
-    renumber();
-  });
+  tr.querySelector(".up").addEventListener("click", () => moveUp(tr));
+  tr.querySelector(".dn").addEventListener("click", () => moveDown(tr));
   tr.querySelector(".del").addEventListener("click", () => { tr.remove(); renumber(); });
   tb.appendChild(tr);
   renumber();
 }
 
-function renumber() {                      // keep row colors stable by position
-  [...$("#qRows").children].forEach((tr, i) => {
-    tr.querySelector(".swatch").style.background = Q_COLORS[i % Q_COLORS.length];
+/* A section header. Questions below it (until the next header) belong to it.
+   "All required" (checked) means every question counts; unchecking reveals a
+   numeric "choose N of them" for an over-answered choice section. */
+function addSectionRow(name = "", required = null) {
+  const tb = $("#qRows");
+  const tr = document.createElement("tr");
+  tr.dataset.rowtype = "section";
+  tr.className = "secrow";
+  tr.innerHTML = `
+    <td><span class="swatch secmark">§</span></td>
+    <td colspan="3">
+      <input class="secname" type="text" placeholder="Section name" autocomplete="off">
+      <span class="secreqwrap">· choose
+        <input class="secrequired" type="number" min="1" step="1">
+        <label><input type="checkbox" class="secall" checked> all required</label>
+      </span>
+    </td>
+    <td><button class="rowbtn up" title="Move up">↑</button></td>
+    <td><button class="rowbtn dn" title="Move down">↓</button></td>
+    <td><button class="rowbtn del" title="Remove">✕</button></td>`;
+  tr.querySelector(".secname").value = name;
+  const reqInp = tr.querySelector(".secrequired");
+  const allChk = tr.querySelector(".secall");
+  const hasReq = (required !== null && required !== undefined && required !== "");
+  allChk.checked = !hasReq;
+  reqInp.value = hasReq ? required : "";
+  reqInp.disabled = allChk.checked;
+  allChk.addEventListener("change", () => {
+    reqInp.disabled = allChk.checked;
+    if (allChk.checked) reqInp.value = "";
+    refreshHighlights();
+  });
+  tr.querySelector(".up").addEventListener("click", () => moveUp(tr));
+  tr.querySelector(".dn").addEventListener("click", () => moveDown(tr));
+  tr.querySelector(".del").addEventListener("click", () => { tr.remove(); renumber(); });
+  tb.appendChild(tr);
+  renumber();
+}
+
+/* The optional handwritten-name region — one per exam, pinned above everything.
+   No score, no reorder; deletable. */
+function addNameBoxRow(range = "") {
+  if (nameRow()) return;                    // only one name box
+  const tb = $("#qRows");
+  const tr = document.createElement("tr");
+  tr.dataset.rowtype = "name";
+  tr.className = "namerow";
+  tr.innerHTML = `
+    <td><span class="swatch namemark"></span></td>
+    <td class="namelabel">Name</td>
+    <td><input class="qrange" type="text" placeholder="page1!A1:E2" value="" autocomplete="off"></td>
+    <td></td><td></td><td></td>
+    <td><button class="rowbtn del" title="Remove name box">✕</button></td>`;
+  tr.querySelector(".qrange").value = range;
+  tr.querySelector(".qrange").addEventListener("input", refreshHighlights);
+  tr.querySelector(".del").addEventListener("click", () => {
+    tr.remove(); updateNameBtn(); renumber();
+  });
+  tb.insertBefore(tr, tb.firstChild);       // pinned first
+  updateNameBtn();
+  renumber();
+}
+
+function updateNameBtn() {
+  const btn = $("#addNameBtn");
+  if (btn) btn.disabled = !!nameRow();
+}
+
+function renumber() {                       // colour question swatches by q-index
+  let qi = 0;
+  allRows().forEach(tr => {
+    if (rowType(tr) !== "question") return;
+    tr.querySelector(".swatch").style.background = Q_COLORS[qi % Q_COLORS.length];
+    tr.querySelector(".qlabel").placeholder = "Q" + (qi + 1);
+    qi++;
   });
   refreshHighlights();
 }
 
-function readRows() {
-  return [...$("#qRows").children].map(tr => ({
-    tr,
-    label: tr.querySelector(".qlabel").value.trim(),
-    range: tr.querySelector(".qrange").value.trim(),
-    max:   tr.querySelector(".qscore").value.trim(),
-  }));
-}
-
+/* Walk the mixed row list into the saved config shape: name_box (or null),
+   sections [{name,required}], and questions [{label,range,max,section}] with
+   each question pinned to the most recent section header above it. */
 function configPayload() {
+  const sections = [];
+  const questions = [];
+  let nameBox = null, curSection = "";
+  allRows().forEach(tr => {
+    const t = rowType(tr);
+    if (t === "name") {
+      const r = tr.querySelector(".qrange").value.trim();
+      if (r) nameBox = r;
+    } else if (t === "section") {
+      const nm = tr.querySelector(".secname").value.trim();
+      const all = tr.querySelector(".secall").checked;
+      const reqv = tr.querySelector(".secrequired").value.trim();
+      const required = (all || !reqv) ? null : parseInt(reqv, 10);
+      sections.push({name: nm, required});
+      curSection = nm;
+    } else if (t === "question") {
+      const label = tr.querySelector(".qlabel").value.trim();
+      const range = tr.querySelector(".qrange").value.trim();
+      const max = tr.querySelector(".qscore").value.trim();
+      if (label && range)
+        questions.push({label, range, max: max || "0-1", section: curSection});
+    }
+  });
   return {
     name: $("#examName").value.trim(),
     paper_size: $("#paperSelect").value,
     grid: currentDensity(),
     pdf_folder: FOLDER,
-    questions: readRows()
-      .filter(q => q.label && q.range)
-      .map(q => ({label: q.label, range: q.range, max: q.max || "0-1"})),
+    name_box: nameBox,
+    sections,
+    questions,
   };
 }
 
@@ -5656,7 +5813,23 @@ function loadExamConfig() {
   else { dropLegacyOption(); $("#gridSelect").value = density; }
   applyPaperGrid();                       // grid matrix follows the saved paper + density
   $("#qRows").innerHTML = "";
-  (cfg.questions || []).forEach(q => addRow(q.label, q.range, "0-" + q.max));
+  // Name box (optional, pinned first).
+  if (cfg.name_box) addNameBoxRow(cfg.name_box);
+  // Sections then their questions, in stored order. A legacy config with no
+  // sections synthesizes one default section holding every question.
+  const sections = (cfg.sections && cfg.sections.length)
+      ? cfg.sections : [{name: DEFAULT_SECTION_NAME, required: null}];
+  const validNames = new Set(sections.map(s => s.name));
+  const byS = {};
+  (cfg.questions || []).forEach(q => {
+    const s = validNames.has(q.section) ? q.section : sections[0].name;
+    (byS[s] = byS[s] || []).push(q);
+  });
+  sections.forEach(s => {
+    addSectionRow(s.name, s.required);
+    (byS[s.name] || []).forEach(q => addRow(q.label, q.range, "0-" + q.max));
+  });
+  updateNameBtn();
   if (cfg.pdf_folder) { $("#folderInput").value = cfg.pdf_folder; loadFolder(); }
 }
 
@@ -5731,6 +5904,8 @@ $("#loadFolderBtn").addEventListener("click", loadFolder);
 $("#folderInput").addEventListener("keydown", e => { if (e.key === "Enter") loadFolder(); });
 $("#pageSelect").addEventListener("change", () => showPage(parseInt($("#pageSelect").value, 10)));
 $("#addQBtn").addEventListener("click", () => addRow());
+$("#addSectionBtn").addEventListener("click", () => addSectionRow());
+$("#addNameBtn").addEventListener("click", () => addNameBoxRow());
 $("#saveBtn").addEventListener("click", () => saveSetup(false));
 $("#processBtn").addEventListener("click", processAll);
 $("#examLoadSelect").addEventListener("change", loadExamConfig);
@@ -5743,7 +5918,9 @@ $("#gridSelect").addEventListener("change", () => {
 });
 
 applyPaperGrid();           // build the initial (A4 compact 15×21) overlay + labels
-addRow("Q1", "", "0-3");    // start with one empty row ready to fill
+addSectionRow(DEFAULT_SECTION_NAME);  // new exams start with one section header
+addRow("Q1", "", "0-3");    // start with one empty question row ready to fill
+updateNameBtn();
 refreshExamList();
 
 /* CAM bridge: /exam_setup?class=..&exam=<name> pre-fills the exam name so
