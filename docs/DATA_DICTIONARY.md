@@ -198,7 +198,7 @@ Written by `write_cache()` (`cam_grading_workspace/app.py:467`), read by
 
 ```jsonc
 {
-  "version":         1,                // schema version (CACHE_VERSION); see B.7
+  "version":         1,                // schema version (CACHE_VERSION); see B.8
   "<driveFolderId>": { …entry… },      // Drive-backed assignment folder
   "local-<hash>":    { …entry… }       // local-folder assignment (Phase 3)
 }
@@ -208,7 +208,7 @@ A top-level **`"version"`** key (int, = `CACHE_VERSION`) records the schema
 version; every other key is an assignment entry. A file with **no** `version`
 key is a pre-versioning **v0** legacy file and still loads — `load_cache()`
 migrates it entry-by-entry through `upgrade_entry()` on read and re-stamps it v1
-(§B.7). All other consumers read entries by `.get(<key>)`, so the reserved
+(§B.8). All other consumers read entries by `.get(<key>)`, so the reserved
 `version` key never collides with a Drive ID / `local-<hash>` slug.
 
 The remaining keys are keyed by the assignment's **durable persistence key**
@@ -297,7 +297,7 @@ has hand-set it — see A.1). It is **not** written to the export CSV and does
 **not** reach CAM; the tri-state `Late` export column carries only
 `late_marked`. Absent on legacy/older entries → treated as auto-derived (i.e.
 today's behaviour) until the teacher next toggles a Late checkbox. The schema
-migration (`upgrade_entry`, §B.7) **defaults `late_manual` to `false` only when
+migration (`upgrade_entry`, §B.8) **defaults `late_manual` to `false` only when
 the key is absent** and otherwise carries a hand-set value through verbatim — it
 must never strip or force it (that would silently un-stick every teacher-set
 Late tick, the 2026-07-09 late-flag incident).
@@ -395,7 +395,42 @@ CAM and CGW must agree on this slug or the handoff file is never found.
   and are appended to every CSV export — their CAM student id doubles as the
   `Student Name` cell.
 
-### B.7 Schema versioning & migration
+### B.7 `cam_export_beacon.json` — sync-on-export beacon
+
+Written by CGW's `_write_export_beacon()` (`cam_grading_workspace/app.py`) into
+the **root of the cloud dir** (`SETTINGS["cloud_dir"]` — the same folder CAM's
+sync scans) on **every routed export**: both grading exports (`api_export`) and
+exam exports (`api_exam_export`), in the branch that writes the CSV into the
+class subfolder. Download-only exports (`?download=1`, or no cloud dir) route
+nothing and write no beacon. Write is atomic (`.tmp` + `os.replace`) and
+strictly best-effort — a write failure is logged to stdout and never fails the
+teacher's export.
+
+CAM's `_export_beacon_poller()` (`app.py`, an `@st.fragment(run_every=3)`)
+`os.stat`s this file every few seconds; on an mtime change it reads the JSON and
+runs a **scoped** sync of just the named class/assignment (`sync_assignment` for
+grading, `sync_exam` for exams) so a fresh export surfaces in Windows 1/2 within
+seconds without the teacher clicking anything. The file lives in the data folder
+(outside git); registry/scans only look at `*.csv`, so it is never mistaken for
+a gradebook file.
+
+```jsonc
+{
+  "class_name": "Year 7 1-4 (2026-27)", // CAM/CGW class name
+  "assignment": "Final Exam",           // assignment OR exam display name
+  "is_exam":    true,                   // routes CAM to sync_exam vs sync_assignment
+  "csv_path":   "…/Final Exam_Grades_2026-06-01.csv",  // the CSV just written
+  "ts":         1720000000.0            // POSIX write time (float, advisory)
+}
+```
+
+- A single beacon file is **rewritten** each export (not appended); the poller
+  keys off its mtime, not its contents, for the cheap steady-state check.
+- `ts` and `csv_path` are advisory (diagnostics); CAM acts on `class_name`,
+  `assignment` and `is_exam`. A torn/half-written read is skipped and retried on
+  the next tick.
+
+### B.8 Schema versioning & migration
 
 `grading_cache.json` carries a top-level **`"version"`** int (§B.1) equal to
 `CACHE_VERSION` (currently **1**). `load_cache()` reads the raw file and, for

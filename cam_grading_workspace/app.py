@@ -41,6 +41,7 @@ import shutil
 import hashlib
 import datetime
 import threading
+import time
 import uuid
 
 from flask import (
@@ -385,6 +386,47 @@ def class_output_dir(create=False):
                 return BASE_DIR
         return d
     return BASE_DIR
+
+
+def _write_export_beacon(class_name, assignment, is_exam, csv_path):
+    """Drop a one-line beacon in the cloud-dir root so CAM syncs on export.
+
+    CAM (Streamlit) and CGW (Flask) are separate processes; CAM only reruns on
+    user interaction, so CGW cannot push a fresh export to it. Instead, on every
+    *routed* export (one written into the class subfolder CAM watches) we
+    atomically rewrite a single ``cam_export_beacon.json`` in the cloud-dir root
+    — the same folder CAM's sync scans. CAM's run_every fragment ``os.stat``s
+    that file every few seconds and, on an mtime change, runs a *scoped* sync of
+    just this class/assignment so the grades surface within seconds.
+
+    Atomic (write ``.tmp`` then ``os.replace``, like ``ExamStore._write``) so a
+    concurrent CAM read never sees a torn file. Strictly best-effort: any failure
+    is logged to stdout and swallowed — a beacon problem must never fail or
+    block the teacher's export. Download-only exports (no cloud dir) route
+    nothing, so they write no beacon; the guard below makes that a quiet no-op."""
+    cloud = SETTINGS.get("cloud_dir", "").strip()
+    if not cloud or not os.path.isdir(cloud):
+        return
+    dest = os.path.join(cloud, "cam_export_beacon.json")
+    tmp = dest + ".tmp"
+    payload = {
+        "class_name": class_name or "",
+        "assignment": assignment or "",
+        "is_exam": bool(is_exam),
+        "csv_path": csv_path or "",
+        "ts": time.time(),
+    }
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, dest)
+    except Exception as e:
+        print("Warning: could not write export beacon:", e)
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 def cache_file_path(create=False):
@@ -2605,6 +2647,11 @@ def api_export():
             for stu in STATE["students"].values():
                 stu["cam_modified"] = []
             save_state()
+        # Sync-on-export beacon: tell CAM's poller a fresh grading export for
+        # this class/assignment just landed, so it scoped-syncs within seconds
+        # instead of waiting for the teacher to click around. Best-effort.
+        _write_export_beacon(class_name, folder_name, is_exam=False,
+                             csv_path=dest)
         # Warn about differently-dated sibling exports for THIS assignment. CAM
         # maps every "<name>_Grades_<date>.csv" back to one assignment and
         # refuses to sync when it finds more than one, so leaving an older
@@ -2982,6 +3029,10 @@ def api_exam_export():
                 f.write(data_bytes)
         except Exception as e:
             return jsonify({"error": f"Could not write CSV to {out_dir}: {e}"}), 500
+        # Sync-on-export beacon (exam variant): CAM's poller routes is_exam=True
+        # through its scoped exam sync. Best-effort — never fails the export.
+        _write_export_beacon(class_name, exam_name, is_exam=True,
+                             csv_path=dest)
         return jsonify({"saved": True, "path": dest, "filename": filename,
                         "class_name": class_name,
                         "student_count": len(students)})

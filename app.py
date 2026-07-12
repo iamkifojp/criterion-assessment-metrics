@@ -3635,6 +3635,37 @@ def _assignment_csv_paths(class_name: str, assignment_name: str) -> list:
     return out
 
 
+def _exam_csv_paths(class_name: str, exam_name: str) -> list:
+    """Every *exam* CSV abspath in ``class_name``'s folder that ingest keys to
+    ``exam_name`` — the exam-side sibling of :func:`_assignment_csv_paths`.
+
+    Same walk and same cleaned-name + rebind round-trip, but the exam/grading
+    filter is inverted: this keeps *only* files whose header ``is_exam_csv`` says
+    is an item-level exam export (a ``Total Score`` column), so the beacon
+    poller can scoped-sync one exam without a full tree walk. Returns ``[]`` when
+    the class folder or its CSVs are absent/unreadable."""
+    class_path = class_data_dir(class_name)
+    if not os.path.isdir(class_path):
+        return []
+    out = []
+    for dirpath, _dirs, files in os.walk(class_path):
+        for fname in sorted(files):
+            if not fname.lower().endswith(".csv"):
+                continue
+            path = os.path.abspath(os.path.join(dirpath, fname))
+            try:
+                fieldnames, _first = _peek_csv(path)
+            except OSError:
+                continue
+            if not is_exam_csv([(h or "").strip() for h in fieldnames]):
+                continue
+            name = _rebind_import_name(
+                clean_assignment_name(os.path.splitext(fname)[0]), class_name)
+            if name == exam_name:
+                out.append(path)
+    return out
+
+
 def _sync_one_csv(path: str, fname: str, class_name: str,
                   registry: dict, summary: dict) -> tuple:
     """Fingerprint one grading CSV against the registry and act on it.
@@ -3799,6 +3830,45 @@ def sync_assignment(class_name: str, assignment_name: str) -> dict:
         # A purge-replace rebuilt scores from the CSV(s) and so may have dropped
         # CAM-typed score comments — refill them from the cloud twin before we
         # persist (and re-mirror), so they survive the sync and reach disk again.
+        _heal_score_comments_from_mirrors()
+        persist()
+    return summary
+
+
+def sync_exam(class_name: str, exam_name: str) -> dict:
+    """Scoped Sync of one exam's export CSV(s) — the exam sibling of
+    :func:`sync_assignment`.
+
+    Feeds only the exam CSV(s) that ingest keys to ``exam_name`` (via
+    :func:`_exam_csv_paths`) through the identical shared per-file core
+    (:func:`_sync_one_csv`), so an exam export surfaces without a full-tree
+    ``sync_all``. ``_sync_one_csv`` -> ``_ingest_cloud_file`` already routes an
+    exam header to the item-level exam pipeline, so no exam-specific ingest logic
+    is duplicated here. Returns the same summary shape as ``sync_from_cloud`` for
+    :func:`_report_sync`. A quiet no-op when no Custom Database Path is set."""
+    summary = {"found": 0, "ingested": 0, "updated": 0, "skipped": 0,
+               "errors": 0, "scores": 0, "duplicates": 0, "reconciled": 0,
+               "classes": set(), "messages": [], "duplicate_messages": []}
+    custom = (st.session_state.get("prefs", {}).get("db_custom_path") or "").strip()
+    if not custom:
+        return summary
+    class_path = class_data_dir(class_name)
+    if not os.path.isdir(class_path):
+        return summary
+
+    registry = st.session_state["ingested_files"]
+    any_ingested = False
+    any_change = False
+    for path in _exam_csv_paths(class_name, exam_name):
+        ingested, changed = _sync_one_csv(
+            path, os.path.basename(path), class_name, registry, summary)
+        any_ingested = any_ingested or ingested
+        any_change = any_change or changed
+
+    if any_ingested or any_change:
+        if st.session_state["active_class"] not in class_names() and class_names():
+            st.session_state["active_class"] = class_names()[0]
+        ensure_class_context()
         _heal_score_comments_from_mirrors()
         persist()
     return summary
@@ -4092,6 +4162,69 @@ def _run_active_launch_probe() -> None:
     _report_sync(summary)
     if (summary["ingested"] or summary["updated"]) and not summary["duplicates"]:
         st.session_state["active_launch"] = None   # global scan reclaims it
+
+
+@st.fragment(run_every=3)
+def _export_beacon_poller() -> None:
+    """Sync-on-export: watch CGW's beacon and scoped-sync the moment it changes.
+
+    CGW cannot push to CAM (separate processes) and Streamlit only reruns on
+    interaction, so the scoped ``_run_active_launch_probe`` above only catches
+    an export for the one assignment launched via 🖌 this session — and exams
+    never round-trip, so they got no probe at all. This ``run_every`` fragment
+    closes both gaps: every ~3 s it does ONE ``os.stat`` of
+    ``<db folder>/cam_export_beacon.json`` (which CGW atomically rewrites on
+    every routed export). An unchanged mtime returns immediately — that single
+    stat is the entire steady-state cost, and no app rerun ever fires on a no-op
+    (so a teacher mid-typing is never yanked).
+
+    On a change it reads the beacon (tolerating torn reads — a bad read just
+    retries next tick), then runs the SAME scoped sync path as today keyed on
+    the beacon's class/assignment: :func:`sync_assignment` for grading exports,
+    :func:`sync_exam` for exam exports — never a full ``sync_all`` tree walk.
+    Only when that sync actually ingested/updated (or refused a duplicate) does
+    it surface the banner and ``st.rerun(scope="app")`` so Windows 1–3 repaint.
+
+    Guarded to a no-op when no Custom Database Path is configured (mirrors
+    :func:`sync_from_cloud`). ``_run_active_launch_probe`` stays as belt-and-
+    braces for multi-machine OneDrive arrivals (the beacon file syncs through
+    OneDrive too, but with cross-device clock skew)."""
+    custom = (st.session_state.get("prefs", {}).get("db_custom_path") or "").strip()
+    if not custom:
+        return
+    beacon_path = os.path.join(db_folder(), "cam_export_beacon.json")
+    try:
+        mtime = os.stat(beacon_path).st_mtime
+    except OSError:
+        return   # no beacon yet (nothing exported) — steady-state no-op
+    if mtime == st.session_state.get("export_beacon_mtime"):
+        return   # unchanged since last tick — the whole steady-state cost
+    # Changed (or first observation). Read the JSON; a torn/half-written file
+    # (OSError/ValueError) is skipped WITHOUT recording the mtime, so the next
+    # tick retries once OneDrive/the atomic replace settles.
+    try:
+        with open(beacon_path, "r", encoding="utf-8") as fh:
+            beacon = json.load(fh)
+    except (OSError, ValueError):
+        return
+    # Clean read — remember this mtime so we don't re-sync the same beacon until
+    # the next export rewrites it (survives the app rerun below via session_state).
+    st.session_state["export_beacon_mtime"] = mtime
+    class_name = str(beacon.get("class_name") or "").strip()
+    assignment = str(beacon.get("assignment") or "").strip()
+    is_exam = bool(beacon.get("is_exam"))
+    if not class_name or not assignment:
+        return
+    if is_exam:
+        summary = sync_exam(class_name, assignment)
+    else:
+        summary = sync_assignment(class_name, assignment)
+    # Repaint only on a real change: fresh/updated grades, or a duplicate refusal
+    # the teacher must see. A pure no-op (unchanged CSV already in the DB) leaves
+    # the UI untouched — the guard against yanking a mid-typed edit for nothing.
+    if summary["ingested"] or summary["updated"] or summary["duplicates"]:
+        _report_sync(summary)
+        st.rerun(scope="app")
 
 
 def _assignment_richness(a) -> tuple:
@@ -8631,6 +8764,10 @@ def main() -> None:
     # the moment the teacher returns from CGW.
     _run_session_start_sync()
     _run_active_launch_probe()
+    # Event-driven "sync on export": a lightweight run_every fragment that polls
+    # CGW's export beacon and scoped-syncs a fresh grading/exam export within
+    # seconds, with no teacher interaction (Exam Slicer v2 plan, Phase 1).
+    _export_beacon_poller()
 
     prefs = st.session_state["prefs"]
 
