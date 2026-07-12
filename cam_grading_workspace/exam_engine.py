@@ -7,10 +7,15 @@ the main grading UI can grade one question across every student at a time.
 The teacher programs an exam once in the /exam_setup screen: each question is
 a label ("Q1"), a grid coordinate range ("page2!A2:C5") and a max score. The
 coordinate system is a paper-size-dependent grid laid over the physical page,
-tuned so every cell is roughly 2cm x 2cm of real paper: A4 is 10x15, B5 is
-9x12 and A3 is 15x21 (columns lettered left to right, rows numbered top to
-bottom) — so a range describes a rectangle of the paper independent of scan
-resolution.
+so a range describes a rectangle of the paper independent of scan resolution.
+
+The grid comes at three densities, stored per exam under the config's "grid"
+key: "legacy" (~2cm cells — A4 10x15, B5 9x12, A3 15x21; what every exam saved
+before the density feature means, and the fallback for any config with no
+"grid" key), "compact" (~1.4cm, the default for new exams) and "fine" (~1cm).
+Columns are lettered left to right Excel-style (A..Z, AA, AB, …), rows numbered
+top to bottom. A config without a "grid" key resolves to "legacy" and behaves
+byte-identically to before the feature existed.
 
 Auto-DPI: scans arrive at unknown resolutions, so the pixel size of one grid
 cell is derived per file. Knowing the paper's physical size (A4/A3/B5) and the
@@ -62,23 +67,72 @@ PAPER_SIZES_MM = {
     "B5": (176.0, 250.0),
 }
 
-# Grid dimensions per paper size, chosen so one cell is ~2cm x 2cm of paper:
-#   A4: 210/10 = 21.0mm x 297/15 = 19.8mm
-#   B5: 176/9 ≈ 19.6mm x 250/12 ≈ 20.8mm
-#   A3: 297/15 = 19.8mm x 420/21 = 20.0mm
+# Grid dimensions per paper size AND density. Each density's (cols, rows) is
+# chosen so one cell is roughly the named physical size:
+#   legacy  ~2cm   (A4: 210/10=21.0 × 297/15=19.8 mm — the original grid)
+#   compact ~1.4cm (A4: 210/15=14.0 × 297/21=14.1 mm — default for new exams)
+#   fine    ~1cm   (A4: 210/21=10.0 × 297/30= 9.9 mm)
+# Mirrored verbatim in the JS PAPER_GRIDS of EXAM_SETUP_PAGE (app.py) — this
+# table is the source of truth; keep the two in sync.
 PAPER_GRIDS = {
-    "A4": (10, 15),
-    "B5": (9, 12),
-    "A3": (15, 21),
+    "A4": {"legacy": (10, 15), "compact": (15, 21), "fine": (21, 30)},
+    "B5": {"legacy": (9, 12),  "compact": (13, 18), "fine": (18, 25)},
+    "A3": {"legacy": (15, 21), "compact": (21, 30), "fine": (30, 42)},
 }
 
-# Column letters sized for the widest grid (A3's 15 columns = A..O).
-COL_LETTERS = "ABCDEFGHIJKLMNO"
+# Valid density keys. "legacy" is the backward-compatible default (an exam
+# config with no "grid" key means "legacy"); "compact" is the UI default for
+# new exams.
+GRID_DENSITIES = ("legacy", "compact", "fine")
 
 
-def grid_for(paper_size):
-    """(cols, rows) of the coordinate grid for one paper size (A4 fallback)."""
-    return PAPER_GRIDS.get(paper_size, PAPER_GRIDS["A4"])
+def grid_of(config):
+    """The density key stored on an exam config; absent/unknown -> 'legacy'.
+
+    "legacy" is the backward-compat default: a config with no (or a garbage)
+    "grid" key describes the original ~2cm grid, so it parses and slices exactly
+    as it did before per-exam density existed.
+    """
+    g = str((config or {}).get("grid") or "").strip().lower()
+    return g if g in GRID_DENSITIES else "legacy"
+
+
+def grid_for(paper_size, grid="legacy"):
+    """(cols, rows) of the coordinate grid for one paper size + density.
+
+    ``grid`` is one of GRID_DENSITIES; unknown paper size falls back to A4 and
+    an unknown density falls back to that paper's legacy grid, so a malformed
+    config still yields a usable (and backward-compatible) grid.
+    """
+    per_paper = PAPER_GRIDS.get(paper_size, PAPER_GRIDS["A4"])
+    return per_paper.get(grid, per_paper["legacy"])
+
+
+def col_name(index):
+    """0-based column index -> Excel-style letters (0->A, 25->Z, 26->AA)."""
+    i = int(index)
+    if i < 0:
+        raise ValueError(f"Column index {index!r} must be >= 0.")
+    name = ""
+    while True:
+        name = chr(ord("A") + i % 26) + name
+        i = i // 26 - 1
+        if i < 0:
+            return name
+
+
+def col_index(letters):
+    """Excel-style column letters -> 0-based index (A->0, Z->25, AA->26).
+
+    Raises ValueError on anything that isn't one or more ASCII letters.
+    """
+    s = str(letters or "").strip().upper()
+    if not s or not all("A" <= ch <= "Z" for ch in s):
+        raise ValueError(f"Bad column letters {letters!r}.")
+    idx = 0
+    for ch in s:
+        idx = idx * 26 + (ord(ch) - ord("A") + 1)
+    return idx - 1
 
 
 # DPI used when rasterising a PDF page. Crop geometry is derived from the
@@ -86,43 +140,44 @@ def grid_for(paper_size):
 RENDER_DPI = 200
 
 # Accepts "page2!A2:C5", "A2:C5" (page 1 implied) and a single cell "B7".
-# The letter class spans the widest grid (A..O); parse_range then validates
-# the cell against the actual grid of the exam's paper size.
+# One or two letters are accepted syntactically (fine A3 reaches column AD);
+# parse_range then validates the cell against the actual grid of the exam's
+# paper size + density.
 _RANGE_RE = re.compile(
     r"^\s*(?:page\s*(\d+)\s*!\s*)?"
-    r"([A-Oa-o])\s*(\d{1,2})"
-    r"(?:\s*:\s*([A-Oa-o])\s*(\d{1,2}))?\s*$"
+    r"([A-Za-z]{1,2})\s*(\d{1,2})"
+    r"(?:\s*:\s*([A-Za-z]{1,2})\s*(\d{1,2}))?\s*$"
 )
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 
 
-def parse_range(raw, paper_size="A4"):
+def parse_range(raw, paper_size="A4", grid="legacy"):
     """Parse a grid range string into its page + cell rectangle.
 
     Returns {"page": 1-based page, "c1", "r1", "c2", "r2"} with 0-based
     inclusive column/row indices, normalised so c1<=c2 and r1<=r2.
-    Raises ValueError on anything malformed or outside the paper size's grid
-    (e.g. A1..J15 for A4, A1..O21 for A3, A1..I12 for B5).
+    Raises ValueError on anything malformed or outside the paper size + density
+    grid (e.g. A1..J15 for legacy A4, A1..U30 for fine A4, A1..AD42 for fine A3).
     """
-    cols, rows = grid_for(paper_size)
+    cols, rows = grid_for(paper_size, grid)
     m = _RANGE_RE.match(str(raw or ""))
     if not m:
         raise ValueError(
             f"Bad coordinate range {raw!r} — expected e.g. 'A2:C5' or 'page2!A2:C5'."
         )
     page = int(m.group(1)) if m.group(1) else 1
-    c1 = COL_LETTERS.index(m.group(2).upper())
+    c1 = col_index(m.group(2))
     r1 = int(m.group(3)) - 1
     if m.group(4):
-        c2 = COL_LETTERS.index(m.group(4).upper())
+        c2 = col_index(m.group(4))
         r2 = int(m.group(5)) - 1
     else:
         c2, r2 = c1, r1
     if not (0 <= c1 < cols and 0 <= c2 < cols):
         raise ValueError(
             f"Column out of range in {raw!r} (columns are A-"
-            f"{COL_LETTERS[cols - 1]} on {paper_size}).")
+            f"{col_name(cols - 1)} on {paper_size}).")
     if not (0 <= r1 < rows and 0 <= r2 < rows):
         raise ValueError(
             f"Row out of range in {raw!r} (rows are 1-{rows} on {paper_size}).")
@@ -150,16 +205,17 @@ def auto_dpi(pixels, paper_mm):
     return pixels / (paper_mm / 25.4)
 
 
-def range_to_bbox(img_w, img_h, paper_size, rng):
+def range_to_bbox(img_w, img_h, paper_size, rng, grid="legacy"):
     """Translate a parsed grid range into a pixel bounding box on one image.
 
     The physical cell size (paper_mm / grid count) is converted to pixels via
     the per-axis auto-calculated DPI, then the inclusive cell rectangle
     [c1..c2] x [r1..r2] becomes (left, top, right, bottom), clamped to the
-    image bounds.
+    image bounds. ``grid`` selects the density (default "legacy" so existing
+    callers keep the original geometry).
     """
     paper_w_mm, paper_h_mm = PAPER_SIZES_MM.get(paper_size, PAPER_SIZES_MM["A4"])
-    grid_cols, grid_rows = grid_for(paper_size)
+    grid_cols, grid_rows = grid_for(paper_size, grid)
     dpi_x = auto_dpi(img_w, paper_w_mm)
     dpi_y = auto_dpi(img_h, paper_h_mm)
     cell_w_px = (paper_w_mm / grid_cols) / 25.4 * dpi_x
@@ -259,7 +315,8 @@ def process_exam(config, output_root, progress=None):
     student is sliced so a background caller can report incremental progress.
     """
     paper = config.get("paper_size", "A4")
-    questions = [(q["label"], parse_range(q["range"], paper))
+    grid = grid_of(config)
+    questions = [(q["label"], parse_range(q["range"], paper, grid))
                  for q in config["questions"]]
     students = list_student_files(config["pdf_folder"])
     if not students:
@@ -277,7 +334,7 @@ def process_exam(config, output_root, progress=None):
                 if rng["page"] not in pages:
                     pages[rng["page"]] = load_page_image(path, rng["page"])
                 img = pages[rng["page"]]
-                box = range_to_bbox(img.width, img.height, paper, rng)
+                box = range_to_bbox(img.width, img.height, paper, rng, grid)
                 q_dir = os.path.join(exam_dir, _safe_name(label))
                 os.makedirs(q_dir, exist_ok=True)
                 img.crop(box).save(
@@ -337,14 +394,17 @@ class ExamStore:
             raise ValueError("The exam needs a name.")
         if config.get("paper_size") not in PAPER_SIZES_MM:
             raise ValueError("Paper size must be one of A4, A3, B5.")
+        # Normalise the density (absent/garbage -> "legacy"); ranges are
+        # validated against this paper size + density.
+        grid = grid_of(config)
         questions = []
         for q in config.get("questions") or []:
             label = str(q.get("label", "")).strip()
             if not label:
                 continue
-            # Validate against the paper size's own grid (A4 10x15, B5 9x12,
-            # A3 15x21); raises with a clear message.
-            parse_range(q.get("range"), config["paper_size"])
+            # Validate against the paper size + density grid (e.g. legacy A4
+            # 10x15, compact A4 15x21, fine A3 30x42); raises a clear message.
+            parse_range(q.get("range"), config["paper_size"], grid)
             questions.append({
                 "label": label,
                 "range": str(q.get("range", "")).strip(),
@@ -355,6 +415,7 @@ class ExamStore:
         clean = {
             "name": name,
             "paper_size": config["paper_size"],
+            "grid": grid,
             "pdf_folder": str(config.get("pdf_folder", "")).strip(),
             "questions": questions,
         }

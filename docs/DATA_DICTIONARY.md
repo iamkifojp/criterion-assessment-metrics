@@ -115,6 +115,30 @@ headers are: `student name, total score, max total, due date, comment,
 checked keywords, files (newest first), assessed date, file count`. Everything
 else is treated as a question-label column by `exam_question_columns`.
 
+### A.4.1 Exam definition config (`gcg_exams.json`) — grid density
+
+The item-level CSV above is produced from an **exam definition** that the CGW
+stores in `cam_grading_workspace/gcg_exams.json`, keyed by class then exam name
+(`{"classes": {"7A": {"Midterm": {<config>}}}}`, `ExamStore`,
+`exam_engine.py`). One config:
+
+```json
+{"name": "Midterm", "paper_size": "A4", "grid": "compact",
+ "pdf_folder": "C:\\Scans\\7A", "questions": [{"label": "Q1",
+   "range": "A1:C3", "max": 3}]}
+```
+
+| Key | Values | Notes |
+|-----|--------|-------|
+| `paper_size` | `A4` \| `A3` \| `B5` | Physical page; picks the `PAPER_SIZES_MM` geometry. |
+| `grid` | `legacy` \| `compact` \| `fine` | **Coordinate-grid density.** `legacy` ≈2 cm (A4 10×15, B5 9×12, A3 15×21) is the original grid; `compact` ≈1.4 cm (15×21 / 13×18 / 21×30) is the default for new exams; `fine` ≈1 cm (21×30 / 18×25 / 30×42). **Absent or unrecognised ⇒ `legacy`** — this is the backward-compat contract: every exam saved before densities existed parses and slices byte-identically. Full table in `PAPER_GRIDS` (`exam_engine.py`), mirrored in the `EXAM_SETUP_PAGE` JS. |
+| `range` | e.g. `A1:C3`, `page2!AA5:AD9` | Inclusive cell rectangle, validated against `paper_size` **and** `grid` by `parse_range`. Columns are Excel-style (`A…Z, AA…AD`); fine A3 reaches column AD. |
+| `max` | int | Per-question max score (`parse_max_score` coerces `"0-3"` → `3`). |
+
+The `grid` key affects only *where* the crops are cut; it is **not** carried in
+the exported CSV (whose shape is unchanged, §A.4). CAM re-slices nothing — it
+consumes the CSV — so grid density is a CGW-only concern.
+
 ### A.5 File Count / Files — read-only completeness pass (the "Awaiting Grade" gate)
 
 Separate from ingestion, CAM's `sync_from_cloud()` reads each grading CSV a

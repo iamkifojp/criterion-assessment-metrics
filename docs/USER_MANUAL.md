@@ -100,6 +100,18 @@ bias), and PDF exam slicing for marking scanned papers. It hands finished grades
 back to the dashboard automatically. Setup is in
 [Setup · the grading workspace](SETUP.md#7-optional-the-grading-workspace--google-drive).
 
+**Exam setup — grid density.** In **📝 Exam Setup** you frame each question by
+typing a coordinate range (like `A1:C3`) against a grid drawn over the scanned
+page. Next to **Paper size** is a **Grid** control that sets how fine that grid
+is: **Compact (≈1.4 cm cells)** is the default and suits most papers; **Fine
+(≈1 cm cells)** lets you frame small answers tightly (its columns run past Z into
+AA, AB, … for the densest pages). Pick the density *before* you type the ranges
+— switching it afterwards re-checks every range against the new grid and
+red-flags any that no longer fit, so you'd re-type them. Older exams you saved
+before this option keep their original grid: loading one shows a **Standard
+(legacy 2 cm)** state so its coordinates still line up, and you only move to
+Compact/Fine when you choose to.
+
 ---
 
 ## Where your data lives

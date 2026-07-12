@@ -494,18 +494,29 @@ a separate mechanism, as is the **background autosave cache** (`write_cache()` �
 
 A teacher programs an exam once (`/exam_setup`): each question is a label
 (`"Q1"`), a grid range (`"page2!A2:C5"`) and a max score. The grid is a
-paper-size-dependent lattice laid over the physical page, tuned so each cell is
-~2 cm × 2 cm of real paper:
+paper-size-dependent lattice laid over the physical page. Since the exam-slicer
+v2 plan it comes at **three densities**, stored per exam under the config's
+`"grid"` key (`grid_of()` normalises it; an absent/garbage key means `legacy`):
 
-| Paper | Physical (mm, portrait) | Grid (cols × rows) | Columns |
-|-------|------------------------|--------------------|---------|
-| A4    | 210 × 297              | 10 × 15            | A–J     |
-| B5    | 176 × 250              | 9 × 12             | A–I     |
-| A3    | 297 × 420              | 15 × 21            | A–O     |
+| Paper | Physical (mm) | legacy ~2 cm | compact ~1.4 cm | fine ~1 cm |
+|-------|---------------|--------------|-----------------|------------|
+| A4    | 210 × 297     | 10 × 15      | 15 × 21         | 21 × 30    |
+| B5    | 176 × 250     | 9 × 12       | 13 × 18         | 18 × 25    |
+| A3    | 297 × 420     | 15 × 21      | 21 × 30         | 30 × 42    |
+
+`legacy` is the original grid and the **backward-compat default**: every exam
+saved before densities existed has no `"grid"` key, resolves to `legacy`, and
+slices to pixel-identical crops (`grid_for(paper, grid)` returns the legacy
+tuple for it). New exams default to `compact`; the Setup UI offers only
+`compact`/`fine`, revealing a load-only `legacy` state when an old exam is
+opened. Columns are Excel-style (`col_name`/`col_index`: A…Z, AA, AB, …) so the
+30-column fine A3 grid reaches column AD.
 
 Because a range describes a rectangle of *paper*, it is independent of scan
-resolution. `parse_range()` validates the cell against the chosen paper's grid
-and raises a clear `ValueError` on anything out of bounds.
+resolution. `parse_range(raw, paper, grid)` validates the cell against the
+chosen paper size **and density** and raises a clear `ValueError` on anything
+out of bounds. The geometry table lives in `PAPER_GRIDS` (`exam_engine.py`, the
+source of truth) and is mirrored verbatim in the `EXAM_SETUP_PAGE` JS.
 
 ### Auto-DPI
 
