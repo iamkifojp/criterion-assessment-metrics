@@ -124,20 +124,48 @@ stores in `cam_grading_workspace/gcg_exams.json`, keyed by class then exam name
 
 ```json
 {"name": "Midterm", "paper_size": "A4", "grid": "compact",
- "pdf_folder": "C:\\Scans\\7A", "questions": [{"label": "Q1",
-   "range": "A1:C3", "max": 3}]}
+ "pdf_folder": "C:\\Scans\\7A", "name_box": "A1:E2",
+ "sections": [{"name": "Section A", "required": null},
+              {"name": "Section B", "required": 2}],
+ "questions": [{"label": "Q1", "range": "A1:C3", "max": 3,
+   "section": "Section A"}]}
 ```
 
 | Key | Values | Notes |
 |-----|--------|-------|
 | `paper_size` | `A4` \| `A3` \| `B5` | Physical page; picks the `PAPER_SIZES_MM` geometry. |
 | `grid` | `legacy` \| `compact` \| `fine` | **Coordinate-grid density.** `legacy` ≈2 cm (A4 10×15, B5 9×12, A3 15×21) is the original grid; `compact` ≈1.4 cm (15×21 / 13×18 / 21×30) is the default for new exams; `fine` ≈1 cm (21×30 / 18×25 / 30×42). **Absent or unrecognised ⇒ `legacy`** — this is the backward-compat contract: every exam saved before densities existed parses and slices byte-identically. Full table in `PAPER_GRIDS` (`exam_engine.py`), mirrored in the `EXAM_SETUP_PAGE` JS. |
+| `name_box` | range string \| `null` | Optional handwritten-name region (Phase 4A). Validated like a `range`; `null`/absent ⇒ no name box. Sliced to the reserved `<exam>/__name__/<Student>.png` crop dir — never a gradable question (excluded from the grading sheet **and** the CSV). `save_exam` rejects a real question labelled `__name__` so nothing collides with the dir. |
+| `sections` | `[{"name", "required"}]` | Section grouping (Phase 4B). `save_exam` **guarantees ≥1** — a legacy config with no sections synthesizes one default `All Questions` section holding every question. Names must be unique and non-empty. `required` is `null` (all questions count) or an int with `1 ≤ required ≤` the section's question count (a *choice* section: the student answers N of them). Validated by `normalize_sections` (`exam_engine.py`). |
 | `range` | e.g. `A1:C3`, `page2!AA5:AD9` | Inclusive cell rectangle, validated against `paper_size` **and** `grid` by `parse_range`. Columns are Excel-style (`A…Z, AA…AD`); fine A3 reaches column AD. |
 | `max` | int | Per-question max score (`parse_max_score` coerces `"0-3"` → `3`). |
+| `section` | string | The `sections[].name` this question belongs to. Blank/unknown ⇒ the first section (e.g. a question dragged above the first header). |
 
-The `grid` key affects only *where* the crops are cut; it is **not** carried in
-the exported CSV (whose shape is unchanged, §A.4). CAM re-slices nothing — it
-consumes the CSV — so grid density is a CGW-only concern.
+The `grid` and `name_box` keys affect only *where* the crops are cut; they are
+**not** carried in the exported CSV (whose shape is unchanged, §A.4). Section
+structure **is** carried, out-of-band, in the definition sidecar (§A.4.2).
+
+### A.4.2 Exam definition sidecar (`<csv filename>.meta.json`)
+
+The flat item-level CSV (§A.4) cannot express sections, so every **routed** exam
+export (`api_exam_export`) writes a JSON sidecar beside the CSV, named
+`<csv filename>.meta.json`, **before** the CSV itself (so a sync that sees the
+CSV also sees the structure). Writing it is atomic (`.tmp` + `os.replace`) and
+strictly best-effort — a sidecar failure never fails or blocks the export, and
+CAM tolerates its absence (falls back to today's all-questions-sum behaviour).
+
+```json
+{"exam": "Midterm", "has_name_box": true, "grid": "compact", "paper_size": "A4",
+ "sections": [{"name": "Section A", "required": null,
+   "questions": [{"label": "Q1", "max": 3}]},
+  {"name": "Section B", "required": 2,
+   "questions": [{"label": "Q5", "max": 8}, {"label": "Q6", "max": 8}]}]}
+```
+
+Built by `exam_engine.build_sidecar`; a legacy config with no `sections` synthesizes the
+single default section so CAM always sees ≥1. Download-only exports (`?download=1`,
+or no cloud dir) route nothing, so they write no sidecar. CAM ingests it in
+Phase 5 to recompute choice-section totals.
 
 ### A.5 File Count / Files — read-only completeness pass (the "Awaiting Grade" gate)
 

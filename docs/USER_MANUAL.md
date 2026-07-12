@@ -112,6 +112,24 @@ before this option keep their original grid: loading one shows a **Standard
 (legacy 2 cm)** state so its coordinates still line up, and you only move to
 Compact/Fine when you choose to.
 
+**Exam setup — name box.** Click **+ Add name box** to frame the region where
+students write their name. It appears as a pinned **Name** row above your
+questions — give it a coordinate range like any question, but it has no score
+and never becomes a graded column. CAM uses these name crops later to help you
+spot a script saved under the wrong student's name. The name box is optional;
+delete the row to remove it.
+
+**Exam setup — sections.** Questions are grouped into **sections**. A new exam
+starts with one section holding everything; click **+ Add section** to add more
+(each section header has a name and sits above the questions that belong to it —
+drag questions with ↑/↓ to move them between sections). By default every
+question in a section counts. If a section is a **choice** — students answer,
+say, 2 of 4 questions — untick **all required** on its header and type how many
+**choose N** count. When a student answers more than that, CAM shows the section
+as unresolved (`?`) and you pick which answers count from the cockpit (Window 3);
+it never guesses. Older exams with no sections load as a single default section
+and grade exactly as before.
+
 ---
 
 ## Where your data lives

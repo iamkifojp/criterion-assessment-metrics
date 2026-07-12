@@ -85,6 +85,17 @@ PAPER_GRIDS = {
 # new exams.
 GRID_DENSITIES = ("legacy", "compact", "fine")
 
+# Reserved crop-dir (and question-label) name for the optional handwritten-name
+# region. process_exam slices the name box to <exam>/__name__/<Student>.png so
+# CAM Window 2 can eyeball a mis-named script; save_exam rejects a real question
+# labelled this so nothing collides with the reserved dir.
+NAME_BOX_DIR = "__name__"
+
+# Synthesized when an exam config carries no explicit sections (every legacy
+# exam, and any new exam the teacher never split). Guarantees ≥1 section so the
+# rest of the pipeline — and CAM — can always assume at least one.
+DEFAULT_SECTION_NAME = "All Questions"
+
 
 def grid_of(config):
     """The density key stored on an exam config; absent/unknown -> 'legacy'.
@@ -305,31 +316,40 @@ def process_exam(config, output_root, progress=None):
     """Crop every question region out of every student file.
 
     ``config`` is one saved exam definition:
-        {"name", "paper_size", "pdf_folder",
-         "questions": [{"label", "range", "max"}, ...]}
+        {"name", "paper_size", "pdf_folder", "name_box": "<range>"|None,
+         "sections": [{"name", "required"}, ...],
+         "questions": [{"label", "range", "max", "section"}, ...]}
 
     Saves crops to  <output_root>/<Exam Name>/<Q label>/<Student>.png  and
-    returns a summary {students, questions, crops, errors:[...]}.
+    returns a summary {students, questions, crops, errors:[...]}. When a
+    ``name_box`` range is present its crop lands under the reserved
+    ``__name__`` label; sections carry no pixels and don't affect slicing.
 
     ``progress``, if given, is called ``progress(done, total)`` after each
     student is sliced so a background caller can report incremental progress.
     """
     paper = config.get("paper_size", "A4")
     grid = grid_of(config)
-    questions = [(q["label"], parse_range(q["range"], paper, grid))
-                 for q in config["questions"]]
+    # Regions to crop per student: every question, plus the optional name box
+    # under the reserved __name__ label (never a gradable question, so it stays
+    # out of the question count but is sliced the same way).
+    regions = [(q["label"], parse_range(q["range"], paper, grid))
+               for q in config["questions"]]
+    name_box = config.get("name_box")
+    if name_box:
+        regions.append((NAME_BOX_DIR, parse_range(name_box, paper, grid)))
     students = list_student_files(config["pdf_folder"])
     if not students:
         raise ValueError(f"No PDF/image files found in {config['pdf_folder']!r}.")
 
     exam_dir = os.path.join(output_root, _safe_name(config["name"]))
-    summary = {"students": len(students), "questions": len(questions),
+    summary = {"students": len(students), "questions": len(config["questions"]),
                "crops": 0, "errors": []}
     total = len(students)
 
     for done, (student, path) in enumerate(students, 1):
         pages = {}   # page number -> rendered PIL image, per student file
-        for label, rng in questions:
+        for label, rng in regions:
             try:
                 if rng["page"] not in pages:
                     pages[rng["page"]] = load_page_image(path, rng["page"])
@@ -357,6 +377,101 @@ def process_exam(config, output_root, progress=None):
 #     {"students": {"Tanaka": {"scores": {"Q1": 2}, "comment": ""}}, ...}
 
 _LOCK = threading.Lock()
+
+
+def normalize_sections(raw_sections, questions):
+    """Validate an exam's sections and pin every question to exactly one.
+
+    ``questions`` is the already-cleaned question list; each may carry a
+    ``"section"`` (a section name). Returns the cleaned ``[{"name", "required"}]``
+    list and mutates each question's ``"section"`` in place to a valid name.
+
+    Rules (Phase 4B):
+      * Missing/empty sections -> one synthesized DEFAULT_SECTION_NAME section
+        holding every question (``required`` None = all count). So **every exam
+        always has ≥1 section.**
+      * Section names must be unique and non-empty.
+      * A question whose ``section`` is blank or names no known section falls
+        into the first section (e.g. a question dragged above the first header).
+      * ``required`` is None ("All") or an int with 1 ≤ required ≤ (number of
+        questions actually in that section). An empty section forces None.
+    """
+    cleaned = []
+    seen = set()
+    for s in (raw_sections or []):
+        name = str((s or {}).get("name", "")).strip()
+        if not name:
+            continue
+        if name in seen:
+            raise ValueError(f"Duplicate section name {name!r} — names must be unique.")
+        seen.add(name)
+        cleaned.append({"name": name, "required": (s or {}).get("required")})
+    if not cleaned:
+        cleaned = [{"name": DEFAULT_SECTION_NAME, "required": None}]
+
+    valid_names = {s["name"] for s in cleaned}
+    first = cleaned[0]["name"]
+    for q in questions:
+        if q.get("section") not in valid_names:
+            q["section"] = first
+
+    for s in cleaned:
+        count = sum(1 for q in questions if q.get("section") == s["name"])
+        req = s["required"]
+        if req is None or (isinstance(req, str) and not req.strip()):
+            s["required"] = None
+            continue
+        try:
+            req = int(req)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"Section {s['name']!r}: 'required' must be a whole number or blank.")
+        if count == 0:
+            s["required"] = None            # nothing to choose from -> all (none)
+        elif not (1 <= req <= count):
+            raise ValueError(
+                f"Section {s['name']!r}: 'choose' must be between 1 and {count} "
+                f"(it has {count} question(s)).")
+        else:
+            s["required"] = req
+    return cleaned
+
+
+def build_sidecar(config):
+    """Build the definition sidecar (Phase 4C) written beside a routed exam CSV.
+
+    The flat CSV can't express sections, so each routed exam export drops a
+    ``<csv filename>.meta.json`` carrying the section structure, name-box flag,
+    grid density and paper size. CAM reads it to recompute choice-section totals
+    (Phase 5); its absence is tolerated (old all-questions-sum behaviour).
+
+    Legacy configs saved before Phase 4 have no ``sections`` — synthesize a
+    single DEFAULT_SECTION_NAME section holding every question so CAM always sees
+    ≥1 section, mirroring ``normalize_sections``.
+    """
+    questions = config.get("questions") or []
+    sections_cfg = config.get("sections") or []
+    if not sections_cfg:
+        sections_cfg = [{"name": DEFAULT_SECTION_NAME, "required": None}]
+    valid = {s["name"] for s in sections_cfg}
+    first = sections_cfg[0]["name"]
+    by_section = {}
+    for q in questions:
+        sec = q.get("section")
+        if sec not in valid:
+            sec = first
+        by_section.setdefault(sec, []).append(
+            {"label": q["label"], "max": q["max"]})
+    sections = [{"name": s["name"], "required": s.get("required"),
+                 "questions": by_section.get(s["name"], [])}
+                for s in sections_cfg]
+    return {
+        "exam": config.get("name", ""),
+        "sections": sections,
+        "has_name_box": bool(config.get("name_box")),
+        "grid": grid_of(config),
+        "paper_size": config.get("paper_size", "A4"),
+    }
 
 
 class ExamStore:
@@ -397,11 +512,21 @@ class ExamStore:
         # Normalise the density (absent/garbage -> "legacy"); ranges are
         # validated against this paper size + density.
         grid = grid_of(config)
+        # Optional handwritten-name capture region (Phase 4A). null/absent -> no
+        # name box; a non-empty value is validated like any range.
+        name_box_raw = config.get("name_box")
+        name_box = None
+        if name_box_raw not in (None, ""):
+            name_box = str(name_box_raw).strip()
+            parse_range(name_box, config["paper_size"], grid)
         questions = []
         for q in config.get("questions") or []:
             label = str(q.get("label", "")).strip()
             if not label:
                 continue
+            if label == NAME_BOX_DIR:
+                raise ValueError(
+                    f"{NAME_BOX_DIR!r} is a reserved name — pick another question label.")
             # Validate against the paper size + density grid (e.g. legacy A4
             # 10x15, compact A4 15x21, fine A3 30x42); raises a clear message.
             parse_range(q.get("range"), config["paper_size"], grid)
@@ -409,14 +534,19 @@ class ExamStore:
                 "label": label,
                 "range": str(q.get("range", "")).strip(),
                 "max": parse_max_score(q.get("max")),
+                "section": str(q.get("section", "")).strip(),
             })
         if not questions:
             raise ValueError("Program at least one question before saving.")
+        # Every exam ends up with ≥1 section; questions get pinned to one (Phase 4B).
+        sections = normalize_sections(config.get("sections"), questions)
         clean = {
             "name": name,
             "paper_size": config["paper_size"],
             "grid": grid,
             "pdf_folder": str(config.get("pdf_folder", "")).strip(),
+            "name_box": name_box,
+            "sections": sections,
             "questions": questions,
         }
         with _LOCK:
