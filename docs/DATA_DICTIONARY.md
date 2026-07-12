@@ -164,8 +164,17 @@ CAM tolerates its absence (falls back to today's all-questions-sum behaviour).
 
 Built by `exam_engine.build_sidecar`; a legacy config with no `sections` synthesizes the
 single default section so CAM always sees ≥1. Download-only exports (`?download=1`,
-or no cloud dir) route nothing, so they write no sidecar. CAM ingests it in
-Phase 5 to recompute choice-section totals.
+or no cloud dir) route nothing, so they write no sidecar.
+
+On ingest, CAM's `load_exam_sidecar` (`ingestion.py`) reads this file, attaches
+`sections` to the registered `Assignment` (persisted on the model as
+`Assignment.sections`) and recomputes each result's `max_total` via the resolved
+rule — a **choice** section's max is the sum of its
+`required` largest question maxes. An over-answered choice section (student
+answered more than `required`) stays `?` (excluded from the exam total) until the
+teacher resolves it in Window 3, which records the picked labels in
+`ExamResult.chosen`. Missing/corrupt sidecar ⇒ the pre-Phase-5 all-questions-sum
+behaviour, no error.
 
 ### A.5 File Count / Files — read-only completeness pass (the "Awaiting Grade" gate)
 
