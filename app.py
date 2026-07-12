@@ -8059,6 +8059,12 @@ def _render_ai_deck(student) -> None:
     st.markdown(f"**AI comment deck — {current_term()}**")
     lc = st.session_state["llm_cfg"]
     api_mode = lc["mode"] == "API call"
+    # The overall-comment box is a keyed text_area whose key is the single
+    # source of truth. Generators write this key directly (see below) so a
+    # freshly generated comment shows on the same repaint instead of staying
+    # blank until the box is refocused. Computed once here and reused by both
+    # generate handlers and the box itself.
+    resp_key = f"resp_box_{student.student_id}_{current_term().replace(' ', '_')}"
 
     # Multi-term context status: show what earlier-term material will feed the
     # prompt, and soft-alert (never block) when some of it is missing.
@@ -8113,8 +8119,18 @@ def _render_ai_deck(student) -> None:
         if api_mode:
             ok, text = call_llm_api(prompt, lc, st.session_state.get("llm_api_key", ""))
             if ok:
+                # Write both sides atomically: the stored map and the widget's
+                # own state. A later mismatch between them can then only come
+                # from the teacher typing, never from a stale-blank widget.
                 st.session_state["llm_response"][student.student_id] = text
+                st.session_state[resp_key] = text
                 st.session_state["llm_status"] = ("ok", f"{lc['provider']} responded.")
+                # Persist here: with both sides now in sync the box's
+                # sync-back no longer fires for a generated comment (it only
+                # persisted before via the buggy stale-blank write-back), so
+                # save the generated text to disk explicitly, as the
+                # whole-class path already does.
+                persist()
             else:
                 st.session_state["llm_status"] = ("error", text)
         st.rerun()
@@ -8124,6 +8140,11 @@ def _render_ai_deck(student) -> None:
                          "class via the API. Switch Output to 'API call' in the "
                          "LLM parameters to enable.")):
         n_ok, n_fail, n_skipped, err = _generate_class_comments(lc)
+        # Push the focused student's freshly generated comment into the live
+        # widget so it shows on this repaint. Other students have no live box;
+        # seed-if-absent picks up their comment when they are next focused.
+        st.session_state[resp_key] = st.session_state["llm_response"].get(
+            student.student_id, "")
         note = ""
         if lc.get("focus_scope") == "include_past" and term_index(current_term()):
             n_gap = sum(1 for s in students_for_active_class()
@@ -8173,10 +8194,16 @@ def _render_ai_deck(student) -> None:
         if prev_rem.strip() and not rem.strip():
             _mark_teacher_input_deleted()
         st.session_state["teacher_remarks"][student.student_id] = rem
+    # Seed the widget's own state from the stored comment only on first render
+    # for this student+term; thereafter the key is authoritative. Rendering
+    # without `value=` means a generated comment (which sets the key directly)
+    # is never masked by a stale-blank cached widget value.
+    if resp_key not in st.session_state:
+        st.session_state[resp_key] = st.session_state["llm_response"].get(
+            student.student_id, "")
     overall = st.text_area(
         "Overall comment", label_visibility="collapsed",
-        value=st.session_state["llm_response"].get(student.student_id, ""),
-        key=f"resp_box_{student.student_id}_{current_term().replace(' ', '_')}",
+        key=resp_key,
         help="Write, edit, or paste the final report-card comment here. It is "
              f"saved under {current_term()} — switch the term in the top bar "
              "to view or edit another term's comment for this student. The "
