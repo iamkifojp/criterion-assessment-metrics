@@ -5271,19 +5271,26 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
           border-right:1px solid var(--line); }
   #right { flex:1; overflow:auto; background:var(--panel); padding:14px; min-width:340px; }
 
-  /* Left: loader bar + page preview with the paper-size coordinate grid
-     overlay (~2cm cells: A4 10x15, B5 9x12, A3 15x21 — set inline by JS). */
+  /* Left: loader bar + page preview with the paper-size + density coordinate
+     grid overlay (legacy ~2cm, compact ~1.4cm, fine ~1cm — set inline by JS). */
   #loaderBar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
   #folderInput { flex:1; min-width:220px; }
   #pageWrap { position:relative; background:var(--imgbg); border:1px solid var(--line);
               border-radius:8px; overflow:hidden; }
   #pageImg { width:100%; display:block; }
   #gridOverlay { position:absolute; inset:0; display:grid;
-                 grid-template-columns:repeat(10,1fr); grid-template-rows:repeat(15,1fr); }
-  .gcell { position:relative; border:1px dashed rgba(127,127,127,.4); background:transparent;
+                 grid-template-columns:repeat(15,1fr); grid-template-rows:repeat(21,1fr); }
+  .gcell { position:relative; border:1px dashed rgba(127,127,127,.65); background:transparent;
            transition:background .1s; }
-  .gcell .glab { position:absolute; top:1px; left:2px; font-size:9px;
-                 color:rgba(127,127,127,.75); pointer-events:none; user-select:none; }
+  /* Coordinate labels must read over a scanned page in both themes: accent
+     colour with a contrast halo. Font shrinks as cells shrink (denser grids)
+     via the overlay's data-density so two-letter labels never overlap. */
+  .gcell .glab { position:absolute; top:1px; left:2px; font-size:13px; font-weight:600;
+                 line-height:1; color:var(--accent);
+                 text-shadow:0 0 3px var(--bg), 0 0 3px var(--bg);
+                 pointer-events:none; user-select:none; }
+  #gridOverlay[data-density="compact"] .glab { font-size:11px; }
+  #gridOverlay[data-density="fine"] .glab { font-size:9px; top:0; left:1px; }
   .gcell.hl { outline:2px solid var(--hl, var(--accent)); outline-offset:-2px; }
   #noPage { padding:60px 20px; text-align:center; color:var(--muted); font-size:14px; }
 
@@ -5328,7 +5335,7 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
   </div>
 
   <div id="split">
-    <!-- LEFT: first student's exam page + 10x15 coordinate grid -->
+    <!-- LEFT: first student's exam page + paper/density coordinate grid -->
     <div id="left">
       <div id="loaderBar">
         <input id="folderInput" type="text" autocomplete="off"
@@ -5340,8 +5347,8 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
       </div>
       <div id="pageWrap">
         <div id="noPage">Load a student folder to preview the first exam paper.<br>
-          A coordinate grid sized for the selected paper (≈2cm cells — A4
-          10×15, B5 9×12, A3 15×21) is laid over the page; type coordinate
+          A coordinate grid sized for the selected paper and grid density
+          (Compact ≈1.4cm or Fine ≈1cm) is laid over the page; type coordinate
           ranges on the right and the matching cells light up here.</div>
         <img id="pageImg" alt="" style="display:none">
         <div id="gridOverlay" style="display:none"></div>
@@ -5362,6 +5369,11 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
           <option value="A4" selected>A4 (210 × 297 mm)</option>
           <option value="A3">A3 (297 × 420 mm)</option>
           <option value="B5">B5 (176 × 250 mm)</option>
+        </select>
+        <span>Grid</span>
+        <select id="gridSelect" title="Cell size of the coordinate grid">
+          <option value="compact" selected>Compact (≈1.4 cm)</option>
+          <option value="fine">Fine (≈1 cm)</option>
         </select>
       </div>
       <div class="hint">
@@ -5393,60 +5405,103 @@ const CLASS_NAME = new URLSearchParams(location.search).get("class") || "";
 $("#classTag").textContent = CLASS_NAME ? ("Class: " + CLASS_NAME)
                                         : "⚠ no class selected — open this from the main screen";
 
-/* Paper-size-dependent grids: every cell ≈2cm x 2cm of physical paper.
-   Mirrors PAPER_GRIDS in exam_engine.py — keep the two in sync. */
-const PAPER_GRIDS = { A4:{cols:10, rows:15}, B5:{cols:9, rows:12}, A3:{cols:15, rows:21} };
-const ALL_COLS = "ABCDEFGHIJKLMNO";
-let COLS = "ABCDEFGHIJ", NROWS = 15;   // set from the paper dropdown below
+/* Paper-size + density grids. Mirrors PAPER_GRIDS in exam_engine.py — that
+   Python table is the source of truth; keep this copy in sync. "legacy" (~2cm)
+   is what every pre-density exam means and the load-only third option; new
+   exams default to "compact" (~1.4cm); "fine" is ~1cm. */
+const PAPER_GRIDS = {
+  A4:{legacy:{cols:10,rows:15}, compact:{cols:15,rows:21}, fine:{cols:21,rows:30}},
+  B5:{legacy:{cols:9,rows:12},  compact:{cols:13,rows:18}, fine:{cols:18,rows:25}},
+  A3:{legacy:{cols:15,rows:21}, compact:{cols:21,rows:30}, fine:{cols:30,rows:42}},
+};
+const GRID_CM = { legacy:"≈2cm", compact:"≈1.4cm", fine:"≈1cm" };
+let NCOLS = 15, NROWS = 21;   // set from the paper + grid dropdowns below
+
+/* Excel-style column names — fine A3 reaches column AD (30 columns), so single
+   letters no longer suffice. Mirrors col_name/col_index in exam_engine.py. */
+function colName(i){
+  i = i | 0; let s = "";
+  while (true) { s = String.fromCharCode(65 + i % 26) + s; i = Math.floor(i / 26) - 1; if (i < 0) return s; }
+}
+function colIndex(letters){
+  const s = String(letters || "").toUpperCase();
+  if (!s || !/^[A-Z]+$/.test(s)) return -1;
+  let idx = 0;
+  for (const ch of s) idx = idx * 26 + (ch.charCodeAt(0) - 64);
+  return idx - 1;
+}
 const Q_COLORS = ["#e0843a","#3aa0e0","#37c97a","#b56ad0","#d0556a","#caa23a",
                   "#2bb8b0","#7d8cf0","#c46fa0","#7fae3d"];
 let FOLDER = "", PAGE_COUNT = 1;
 
 function setStatus(t){ $("#status").textContent = t; }
 
+/* The live grid density — mirrors the #gridSelect value, which may be a
+   load-only "legacy" state when an old exam is open. */
+function currentDensity() { return $("#gridSelect").value || "compact"; }
+
 /* ---------- Dynamic grid overlay (A1 top-left .. bottom-right) ---------- */
 function buildGrid() {
   const ov = $("#gridOverlay"); ov.innerHTML = "";
   for (let r = 1; r <= NROWS; r++) {
-    for (let c = 0; c < COLS.length; c++) {
+    for (let c = 0; c < NCOLS; c++) {
       const cell = document.createElement("div");
       cell.className = "gcell";
-      cell.dataset.cell = COLS[c] + r;
+      cell.dataset.cell = colName(c) + r;
       const lab = document.createElement("span");
-      lab.className = "glab"; lab.textContent = COLS[c] + r;
+      lab.className = "glab"; lab.textContent = colName(c) + r;
       cell.appendChild(lab);
       ov.appendChild(cell);
     }
   }
 }
 
-/* Recompute the grid matrix from the Paper Size dropdown, rebuild the overlay
-   cells + transparent A1/B2/... labels, and re-validate every typed range. */
+/* Recompute the grid matrix from the Paper Size + Grid dropdowns, rebuild the
+   overlay cells + A1/B2/... labels, and re-validate every typed range. */
 function applyPaperGrid() {
-  const g = PAPER_GRIDS[$("#paperSelect").value] || PAPER_GRIDS.A4;
-  COLS = ALL_COLS.slice(0, g.cols);
+  const paper = $("#paperSelect").value;
+  const density = currentDensity();
+  const g = (PAPER_GRIDS[paper] || PAPER_GRIDS.A4)[density]
+         || (PAPER_GRIDS[paper] || PAPER_GRIDS.A4).legacy;
+  NCOLS = g.cols;
   NROWS = g.rows;
   const ov = $("#gridOverlay");
+  ov.dataset.density = density;
   ov.style.gridTemplateColumns = "repeat(" + g.cols + ",1fr)";
   ov.style.gridTemplateRows = "repeat(" + g.rows + ",1fr)";
   buildGrid();
-  $("#gridHint").textContent = "Grid for " + $("#paperSelect").value + ": "
-    + g.cols + "×" + g.rows + " (A1–" + COLS[COLS.length - 1] + g.rows
-    + "), ≈2cm cells.";
+  $("#gridHint").textContent = "Grid for " + paper + ": "
+    + g.cols + "×" + g.rows + " (A1–" + colName(g.cols - 1) + g.rows
+    + "), " + (GRID_CM[density] || "") + " cells.";
   refreshHighlights();
 }
 
-/* Parse "page2!A2:C5" / "A2:C5" / "B7" -> {page,c1,r1,c2,r2} or null.
-   Letters up to O are accepted syntactically; anything outside the CURRENT
-   paper's grid is rejected so a stale A3 range flags red after switching to B5. */
+/* The load-only "Standard (legacy 2 cm)" density is offered only when an exam
+   saved on the old grid is loaded — new exams choose Compact or Fine. */
+function ensureLegacyOption() {
+  const sel = $("#gridSelect");
+  if (![...sel.options].some(o => o.value === "legacy")) {
+    const o = document.createElement("option");
+    o.value = "legacy"; o.textContent = "Standard (legacy 2 cm)";
+    sel.appendChild(o);
+  }
+}
+function dropLegacyOption() {
+  [...$("#gridSelect").options].forEach(o => { if (o.value === "legacy") o.remove(); });
+}
+
+/* Parse "page2!A2:C5" / "A2:C5" / "B7" / "AA5:AD9" -> {page,c1,r1,c2,r2} or
+   null. One or two letters are accepted syntactically; anything outside the
+   CURRENT paper + density grid is rejected so a stale range flags red after
+   switching paper size or density. */
 function parseRange(raw) {
-  const m = /^\s*(?:page\s*(\d+)\s*!\s*)?([A-Oa-o])\s*(\d{1,2})(?:\s*:\s*([A-Oa-o])\s*(\d{1,2}))?\s*$/.exec(raw || "");
+  const m = /^\s*(?:page\s*(\d+)\s*!\s*)?([A-Za-z]{1,2})\s*(\d{1,2})(?:\s*:\s*([A-Za-z]{1,2})\s*(\d{1,2}))?\s*$/.exec(raw || "");
   if (!m) return null;
   const page = m[1] ? parseInt(m[1], 10) : 1;
-  let c1 = COLS.indexOf(m[2].toUpperCase()), r1 = parseInt(m[3], 10);
-  let c2 = m[4] ? COLS.indexOf(m[4].toUpperCase()) : c1;
+  let c1 = colIndex(m[2]), r1 = parseInt(m[3], 10);
+  let c2 = m[4] ? colIndex(m[4]) : c1;
   let r2 = m[5] ? parseInt(m[5], 10) : r1;
-  if (c1 < 0 || c2 < 0) return null;
+  if (c1 < 0 || c2 < 0 || c1 >= NCOLS || c2 >= NCOLS) return null;
   if (r1 < 1 || r1 > NROWS || r2 < 1 || r2 > NROWS) return null;
   if (c1 > c2) [c1, c2] = [c2, c1];
   if (r1 > r2) [r1, r2] = [r2, r1];
@@ -5466,7 +5521,7 @@ function refreshHighlights() {
     const color = Q_COLORS[i % Q_COLORS.length];
     for (let c = rng.c1; c <= rng.c2; c++)
       for (let r = rng.r1; r <= rng.r2; r++)
-        hl[COLS[c] + r] = color;
+        hl[colName(c) + r] = color;
   });
   document.querySelectorAll(".gcell").forEach(cell => {
     const color = hl[cell.dataset.cell];
@@ -5526,6 +5581,7 @@ function configPayload() {
   return {
     name: $("#examName").value.trim(),
     paper_size: $("#paperSelect").value,
+    grid: currentDensity(),
     pdf_folder: FOLDER,
     questions: readRows()
       .filter(q => q.label && q.range)
@@ -5592,7 +5648,13 @@ function loadExamConfig() {
   if (!cfg) return;
   $("#examName").value = cfg.name;
   $("#paperSelect").value = cfg.paper_size || "A4";
-  applyPaperGrid();                       // grid matrix follows the saved paper
+  // Density follows the saved config; a missing/legacy "grid" reveals the
+  // load-only "Standard (legacy 2 cm)" option so the coordinates render on the
+  // right grid. Compact/fine drop that option — new exams never see it.
+  const density = ["compact", "fine"].includes(cfg.grid) ? cfg.grid : "legacy";
+  if (density === "legacy") { ensureLegacyOption(); $("#gridSelect").value = "legacy"; }
+  else { dropLegacyOption(); $("#gridSelect").value = density; }
+  applyPaperGrid();                       // grid matrix follows the saved paper + density
   $("#qRows").innerHTML = "";
   (cfg.questions || []).forEach(q => addRow(q.label, q.range, "0-" + q.max));
   if (cfg.pdf_folder) { $("#folderInput").value = cfg.pdf_folder; loadFolder(); }
@@ -5673,8 +5735,14 @@ $("#saveBtn").addEventListener("click", () => saveSetup(false));
 $("#processBtn").addEventListener("click", processAll);
 $("#examLoadSelect").addEventListener("change", loadExamConfig);
 $("#paperSelect").addEventListener("change", applyPaperGrid);
+$("#gridSelect").addEventListener("change", () => {
+  // Choosing a real density retires the load-only legacy option; the teacher
+  // then re-types any ranges that fall outside the new grid (flagged red).
+  if ($("#gridSelect").value !== "legacy") dropLegacyOption();
+  applyPaperGrid();
+});
 
-applyPaperGrid();           // build the initial (A4 10×15) overlay + labels
+applyPaperGrid();           // build the initial (A4 compact 15×21) overlay + labels
 addRow("Q1", "", "0-3");    // start with one empty row ready to fill
 refreshExamList();
 

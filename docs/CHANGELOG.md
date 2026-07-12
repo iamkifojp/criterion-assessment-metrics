@@ -6,6 +6,50 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-12 — Exam Setup: legible grid + per-exam grid density
+
+**Symptom it addresses:** the coordinate grid in **📝 Exam Setup** was hard to
+work with. Its cell labels (`.glab`, 9 px, faint grey) and dashed borders were
+almost unreadable over a scanned page, and the single ~2 cm cell size (A4
+10×15) was too coarse to frame small answers tightly — a two-line answer often
+had to spill a whole extra cell in each direction.
+
+**What this change does** (Phase 3 of
+[EXAM_SLICER_V2_AND_SYNC_PLAN.md](EXAM_SLICER_V2_AND_SYNC_PLAN.md)):
+
+- **Legibility (CSS only).** Grid labels are now accent-coloured, `600` weight,
+  with a two-layer `text-shadow` halo in the page background colour so they read
+  on both light scans and the dark theme; the label size scales with cell size
+  (13 / 11 / 9 px for legacy / compact / fine) so denser grids never overlap.
+  The dashed cell border is denser (`rgba(127,127,127,.65)`).
+- **Per-exam grid density.** A new config key `"grid"` selects the grid's cell
+  size: `legacy` (~2 cm — the original grid), `compact` (~1.4 cm, the **default
+  for new exams**) or `fine` (~1 cm). `PAPER_GRIDS` (`exam_engine.py`) became a
+  two-level *paper → density → (cols, rows)* table, mirrored verbatim in the
+  Exam Setup JS. `grid_for`, `parse_range`, `range_to_bbox`, `process_exam` and
+  `ExamStore.save_exam` all thread the exam's density through.
+- **Wider columns.** The densest grid (fine A3) is 30 columns, past the old
+  single-letter `A–O` cap, so column names are now Excel-style
+  (`col_name`/`col_index`: A…Z, AA, AB, …) and `_RANGE_RE` accepts one or two
+  letters, with the real bound enforced by `parse_range` against the grid.
+- **Setup UI.** A **Grid** control (Compact / Fine) sits next to Paper size;
+  loading a legacy exam reveals a load-only **Standard (legacy 2 cm)** option so
+  its coordinates render on the right grid. Switching density re-validates every
+  typed range (out-of-range ones flag red) — no silent auto-conversion.
+
+**Backward-compat contract (the important part):** an exam saved before this —
+with **no `"grid"` key** — resolves to `legacy` and parses, highlights and
+slices to **pixel-identical** crops. `grid_for(paper, grid)` returns the legacy
+tuple for it and every threaded call defaults to `legacy`, so nothing about an
+old exam's geometry moves. Covered by `tests/test_exam_grid.py`, which pins the
+legacy geometry independently and asserts new-vs-old `range_to_bbox` equality.
+
+**Deliberately unchanged:** the exported CSV shape (§A.4) — density affects only
+where crops are cut, not the numbers CAM ingests, so CAM needs no change this
+phase.
+
+---
+
 ## 2026-07-12 — Window 3: generated comment now shows on the same repaint
 
 **Symptom it addresses:** in Window 3's AI comment deck, clicking **Generate
