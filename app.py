@@ -6830,6 +6830,29 @@ def _exam_results_for(name: str):
     return sorted(pairs, key=lambda p: student_label(p[0]).lower())
 
 
+# Name of the synthesized single section CGW writes for a legacy / one-section
+# exam (mirrors exam_engine.DEFAULT_SECTION_NAME). A lone section by this name is
+# not "real" strand structure — the banding panel then renders exactly as today.
+_EXAM_DEFAULT_SECTION = "All Questions"
+
+
+def _exam_has_real_sections(secs) -> bool:
+    """True when the exam carries strand structure worth banding per-section:
+    more than one section, or a single *renamed* (non-synthesized) section. A
+    lone default "All Questions" section (or no sections) → False, so the
+    single-line legacy banding layout is used."""
+    if not secs:
+        return False
+    if len(secs) > 1:
+        return True
+    return str(secs[0].get("name", "")) != _EXAM_DEFAULT_SECTION
+
+
+def _clamp_band(value: int) -> int:
+    """Clamp an int suggestion into the legal 0-8 MYP band range."""
+    return max(0, min(8, int(value)))
+
+
 def _render_exam_banding() -> None:
     """Window 1 exam panel: raw totals per student + a 0-8 band dropdown.
 
@@ -6879,32 +6902,42 @@ def _render_exam_banding() -> None:
         existing = {s.student_id: sc.value
                     for s, sc in scores_for_assignment(sel) if sc.is_valid}
 
-        head = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
-        for col, cap in zip(head, ("Student", "Raw score", "%", "Grade (0–8)")):
-            col.caption(cap)
-        for s, r in results:
-            row = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
-            row[0].write(student_label(s))
-            pending = exam_is_pending(r, secs)
-            rmax = resolved_max(r, secs) or asg.max_total or 0
-            if pending:
-                row[1].write(f"? / {rmax or '?'}")
-                row[2].write("?")
-                row[3].button("resolve first", key=f"band_pend_{sel}_{s.student_id}",
-                              disabled=True, width="stretch",
-                              help="This student over-answered a choice section. "
-                                   "Resolve it in Window 3 to enable banding.")
-                continue
-            rtot = resolved_total(r, secs)
-            pct = (rtot / rmax * 100.0) if rmax else 0.0
-            row[1].write(f"{rtot} / {rmax or '?'}")
-            row[2].write(f"{pct:.0f}%")
-            default = existing.get(s.student_id, resolved_suggested_band(r, secs))
-            row[3].selectbox(
-                " ", list(range(0, 9)),
-                index=default if 0 <= default <= 8 else 0,
-                key=f"band_{sel}_{s.student_id}",
-                label_visibility="collapsed")
+        if _exam_has_real_sections(secs):
+            # Sectioned layout (D7/D8): the real cover sheet has a level per
+            # strand plus one final grade. Window 1 is narrow, so each student
+            # is a bordered two-line block — totals + final grade on top, the
+            # per-section subtotals + 0-8 level dropdowns beneath.
+            for s, r in results:
+                _render_banding_student_sectioned(sel, asg, secs, s, r, existing)
+        else:
+            head = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
+            for col, cap in zip(head, ("Student", "Raw score", "%", "Grade (0–8)")):
+                col.caption(cap)
+            for s, r in results:
+                row = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
+                row[0].write(student_label(s))
+                pending = exam_is_pending(r, secs)
+                rmax = resolved_max(r, secs) or asg.max_total or 0
+                if pending:
+                    row[1].write(f"? / {rmax or '?'}")
+                    row[2].write("?")
+                    row[3].button("resolve first",
+                                  key=f"band_pend_{sel}_{s.student_id}",
+                                  disabled=True, width="stretch",
+                                  help="This student over-answered a choice "
+                                       "section. Resolve it in Window 3 to "
+                                       "enable banding.")
+                    continue
+                rtot = resolved_total(r, secs)
+                pct = (rtot / rmax * 100.0) if rmax else 0.0
+                row[1].write(f"{rtot} / {rmax or '?'}")
+                row[2].write(f"{pct:.0f}%")
+                default = existing.get(s.student_id, resolved_suggested_band(r, secs))
+                row[3].selectbox(
+                    " ", list(range(0, 9)),
+                    index=default if 0 <= default <= 8 else 0,
+                    key=f"band_{sel}_{s.student_id}",
+                    label_visibility="collapsed")
 
         if st.button("Apply grades to gradebook", key=f"apply_bands_{sel}",
                      type="primary"):
@@ -6917,6 +6950,94 @@ def _render_exam_banding() -> None:
             st.rerun()
 
 
+def _render_banding_student_sectioned(sel, asg, secs, s, r, existing) -> None:
+    """One bordered two-line student block for the sectioned banding panel (D8).
+
+    Line 1: student label · resolved total/max · % · **final grade** dropdown.
+    Line 2: per section, ``<name> <subtotal>/<max>`` + a 0-8 **level** dropdown.
+
+    Every level and the final grade are teacher-set dropdowns; the app only
+    *suggests* (proportional per section; rounded mean of the section levels for
+    the final). A pending (over-answered, unresolved) section shows ``?`` and
+    disables its own level select; while any section is pending the final-grade
+    select is disabled too (D9). Only the final grade enters the gradebook."""
+    box = st.container(border=True)
+    # Both rows are created up-front so they render in visual order; line 2 is
+    # *populated* first so the section-level widget values feed the final-grade
+    # suggestion computed just below.
+    line1 = box.columns([2.4, 1.1, 0.7, 1.2], vertical_alignment="center")
+    line2 = box.columns(len(secs), vertical_alignment="bottom")
+
+    section_levels: list[int] = []   # non-pending strand levels, section order
+    for i, section in enumerate(secs):
+        stt = section_state(r, section)
+        col = line2[i]
+        lvl_key = f"seclvl_{sel}_{s.student_id}_{stt.name}"
+        if stt.pending:
+            col.caption(f"{stt.name} · ?/{stt.section_max}")
+            col.selectbox(
+                " ", list(range(0, 9)), key=lvl_key, disabled=True,
+                label_visibility="collapsed",
+                help="This student over-answered this choice section — resolve "
+                     "it in Window 3 to enable its level.")
+        else:
+            prop = _clamp_band(round(stt.subtotal / stt.section_max * 8)) \
+                if stt.section_max else 0
+            saved = r.section_bands.get(stt.name)
+            default = saved if saved is not None else prop
+            col.caption(f"{stt.name} · {stt.subtotal}/{stt.section_max}")
+            lvl = col.selectbox(
+                " ", list(range(0, 9)),
+                index=default if 0 <= default <= 8 else 0,
+                key=lvl_key, label_visibility="collapsed")
+            section_levels.append(int(lvl))
+
+    pending = exam_is_pending(r, secs)
+    rmax = resolved_max(r, secs) or asg.max_total or 0
+
+    # Final-grade suggestion. Priority (D8): a band already applied wins; else
+    # the rounded mean of the current section levels; else the proportional
+    # whole-exam suggestion. So the teacher can re-tune sections and the
+    # suggested final follows — until they set the final explicitly. The
+    # signature guard below drops a stale final pick when the section levels
+    # change, so an untouched final keeps tracking the mean across reruns.
+    sig_key = f"bandsig_{sel}_{s.student_id}"
+    final_key = f"band_{sel}_{s.student_id}"
+    sig = tuple(section_levels)
+    prev_sig = st.session_state.get(sig_key)
+    if s.student_id not in existing and prev_sig is not None and prev_sig != sig:
+        st.session_state.pop(final_key, None)
+    st.session_state[sig_key] = sig
+
+    if s.student_id in existing:
+        final_default = existing[s.student_id]
+    elif section_levels:
+        final_default = _clamp_band(round(mean(section_levels)))
+    else:
+        final_default = resolved_suggested_band(r, secs)
+
+    line1[0].write(student_label(s))
+    if pending:
+        line1[1].write(f"? / {rmax or '?'}")
+        line1[2].write("?")
+        line1[3].selectbox(
+            " ", list(range(0, 9)), key=final_key, disabled=True,
+            label_visibility="collapsed",
+            help="A choice section is still pending (`?`) — resolve it in "
+                 "Window 3 before setting the final grade.")
+    else:
+        rtot = resolved_total(r, secs)
+        pct = (rtot / rmax * 100.0) if rmax else 0.0
+        line1[1].write(f"{rtot} / {rmax or '?'}")
+        line1[2].write(f"{pct:.0f}%")
+        line1[3].selectbox(
+            " ", list(range(0, 9)),
+            index=final_default if 0 <= final_default <= 8 else 0,
+            key=final_key, label_visibility="collapsed",
+            help="Final criterion grade — the only value that enters the "
+                 "gradebook. Suggested from the section levels; override freely.")
+
+
 def _apply_exam_bands(asg, crit_letter: str, results) -> int:
     """Write the chosen 0-8 bands as CriterionScores (replacing prior bands)."""
     crit = Criterion(crit_letter)
@@ -6926,20 +7047,39 @@ def _apply_exam_bands(asg, crit_letter: str, results) -> int:
         when = datetime.combine(
             st.session_state["date_override"][asg.name], datetime.min.time())
     applied = 0
+    sectioned = _exam_has_real_sections(secs)
     for s, r in results:
         band = st.session_state.get(f"band_{asg.name}_{s.student_id}")
-        # Pending (`?`) students never rendered a band widget — skip them.
+        # Pending (`?`) students' final grade is disabled/empty — skip them.
         if band is None or exam_is_pending(r, secs):
             continue
         # One band per student per exam: drop any earlier banding first.
         for c, bucket in list(s.scores.items()):
             s.scores[c] = [sc for sc in bucket if sc.assignment != asg.name]
         rtot, rmax = resolved_total(r, secs), resolved_max(r, secs)
+        note = f"banded from raw {rtot}/{rmax or asg.max_total}"
+        # Persist the per-strand levels from the section widgets and record them
+        # on the score note (the digital cover sheet), e.g. "· sections: Knowing
+        # 7, Applying 7, Interpreting 5".
+        if sectioned:
+            strand_parts: list[str] = []
+            for section in secs:
+                stt = section_state(r, section)
+                if stt.pending:
+                    continue
+                lvl = st.session_state.get(
+                    f"seclvl_{asg.name}_{s.student_id}_{stt.name}")
+                if lvl is None:
+                    continue
+                r.section_bands[stt.name] = int(lvl)
+                strand_parts.append(f"{stt.name} {int(lvl)}")
+            if strand_parts:
+                note += " · sections: " + ", ".join(strand_parts)
         s.add_score(CriterionScore(
             criterion=crit, value=int(band), timestamp=when,
             source=f"exam:{asg.name}", assignment=asg.name,
             comment=r.comment,
-            note=f"banded from raw {rtot}/{rmax or asg.max_total}",
+            note=note,
         ))
         applied += 1
     asg.criteria = [crit_letter]
@@ -7998,7 +8138,13 @@ def _render_exam_sections(student) -> None:
                     if stt.over_answered:
                         extra = f"  ·  chose {', '.join(stt.chosen)}"
                     cc[0].caption(f"{label}{extra}")
-                    cc[1].caption(f"{stt.subtotal}/{stt.section_max}")
+                    # Append the teacher's recorded strand level (Phase 6) — the
+                    # digital cover sheet: "12/20 · level 6".
+                    sub = f"{stt.subtotal}/{stt.section_max}"
+                    lvl = r.section_bands.get(stt.name)
+                    if lvl is not None:
+                        sub += f"  ·  level {lvl}"
+                    cc[1].caption(sub)
         # Exam total row: `?` while pending, else the resolved total/max.
         tc = st.columns([3, 1.2], vertical_alignment="center")
         tc[0].caption(f"{asg.name} — total")

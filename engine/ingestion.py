@@ -714,22 +714,34 @@ class IngestionPipeline:
             timestamp, bool(pool_row.get("late")), created)
         return created
 
-    def _carry_forward_chosen(self, target_sid: str,
-                              result: ExamResult) -> None:
-        """Copy the prior result's teacher choice-section picks onto ``result``.
+    def _carry_forward_exam_state(self, target_sid: str,
+                                  result: ExamResult) -> None:
+        """Copy the prior result's teacher decisions onto ``result``.
 
         Shared by :meth:`ingest_exam_csv`'s per-row loop and
         :meth:`materialize_exam_row` so a re-ingest and a Window-2 match
-        preserve resolutions identically. Only picks whose labels the fresh
-        result still has a mark for survive."""
+        preserve resolutions identically. Two kinds of decision carry:
+
+        * choice-section picks (``chosen``): only picks whose labels the fresh
+          result still has a mark for survive;
+        * per-strand levels (``section_bands``, Phase 6): keyed on section name
+          (not labels), so they carry forward wholesale."""
         prev = self.gradebook.students.get(target_sid)
         prev_result = (prev.exam_results.get(result.assignment)
                        if prev is not None else None)
-        if prev_result is not None and prev_result.chosen:
+        if prev_result is None:
+            return
+        if prev_result.chosen:
             for sec_name, picks in prev_result.chosen.items():
                 kept = [lbl for lbl in picks if lbl in result.questions]
                 if kept:
                     result.chosen[str(sec_name)] = kept
+        if getattr(prev_result, "section_bands", None):
+            for sec_name, lvl in prev_result.section_bands.items():
+                try:
+                    result.section_bands[str(sec_name)] = int(lvl)
+                except (TypeError, ValueError):
+                    continue
 
     def materialize_exam_row(self, assignment: str, target_sid: str,
                              pool_row: dict) -> ExamResult:
@@ -739,9 +751,10 @@ class IngestionPipeline:
         ``pool_row`` is an ``is_exam`` dict :meth:`ingest_exam_csv` appended to
         its ``unmatched_out`` collection — the exam sibling of
         :meth:`materialize_row`. Builds the same result a routed ingest would
-        (including the ``chosen`` carry-forward for still-answered labels, so a
-        prior resolution made under the roster key survives a re-match) and
-        attaches it to the roster student. Returns the result created."""
+        (including the ``chosen`` / ``section_bands`` carry-forward, so a prior
+        resolution or strand level made under the roster key survives a
+        re-match) and attaches it to the roster student. Returns the result
+        created."""
         questions: Dict[str, int] = {}
         for lbl, val in (pool_row.get("questions") or {}).items():
             try:
@@ -763,7 +776,7 @@ class IngestionPipeline:
             questions=questions,
             comment=str(pool_row.get("comment") or ""),
         )
-        self._carry_forward_chosen(target_sid, result)
+        self._carry_forward_exam_state(target_sid, result)
         self.gradebook.get_or_create(target_sid).exam_results[assignment] = result
         return result
 
@@ -797,7 +810,8 @@ class IngestionPipeline:
         alias → unambiguous prefix → unmatched) — never a phantom:
 
         * matched rows attach their :class:`ExamResult` to the *resolved*
-          roster student (the ``chosen`` carry-forward is keyed on it too);
+          roster student (the ``chosen`` / ``section_bands`` carry-forward is
+          keyed on it too);
         * unmatched rows append an exam-flavoured pool row to
           ``unmatched_out`` — the assignment path's ``csv_key`` field plus
           ``is_exam: True``, ``questions``, ``total``, ``max_total`` and
@@ -881,8 +895,9 @@ class IngestionPipeline:
                 # reconcile). Carry forward only picks whose labels the student
                 # still has a mark for in the fresh CSV — keyed on the RESOLVED
                 # student, so an alias-routed re-sync finds the picks made
-                # under the roster key.
-                self._carry_forward_chosen(target, result)
+                # under the roster key. Per-strand section bands (Phase 6) ride
+                # the same carry-forward.
+                self._carry_forward_exam_state(target, result)
                 self.gradebook.get_or_create(target).exam_results[assignment] = result
                 created.append(result)
 

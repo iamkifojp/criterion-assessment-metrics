@@ -130,6 +130,8 @@ def _exam_result_to_dict(r: ExamResult) -> Dict[str, Any]:
         "questions": dict(r.questions),
         "comment": r.comment,
         "chosen": {str(k): list(v) for k, v in (r.chosen or {}).items()},
+        "section_bands": {str(k): int(v)
+                          for k, v in (r.section_bands or {}).items()},
     }
 
 
@@ -138,6 +140,14 @@ def _exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
     chosen = {str(k): [str(x) for x in v]
               for k, v in raw_chosen.items() if isinstance(v, list)} \
         if isinstance(raw_chosen, dict) else {}
+    raw_bands = d.get("section_bands") or {}
+    section_bands: Dict[str, int] = {}
+    if isinstance(raw_bands, dict):
+        for k, v in raw_bands.items():
+            try:
+                section_bands[str(k)] = int(v)
+            except (TypeError, ValueError):
+                continue
     return ExamResult(
         assignment=d["assignment"],
         total=int(d.get("total", 0)),
@@ -145,6 +155,7 @@ def _exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
         questions={str(k): int(v) for k, v in (d.get("questions") or {}).items()},
         comment=d.get("comment", ""),
         chosen=chosen,
+        section_bands=section_bands,
     )
 
 
