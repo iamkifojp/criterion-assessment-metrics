@@ -55,7 +55,13 @@ All in `EXAM_SETUP_PAGE` (HTML/CSS/JS string in `app.py`).
 **Verify:** load the sample folder, switch density and colour, confirm labels
 recentre/rescale and the choice survives a reload.
 
-## Phase 2 — Setup form ergonomics (items 2 & 3)
+## Phase 2 — Setup form ergonomics (items 2 & 3) — ✅ Done
+
+Implemented in `EXAM_SETUP_PAGE` (`cam_grading_workspace/app.py`): `Section:`
+label + `.seclabel` style on section rows; question column header `Score` →
+`Max mark`, placeholder/default `0-3` → `3`, `loadExamConfig` now fills the raw
+`q.max`, and the hint reads "Max mark is the highest score, e.g. **3**." Backend
+`parse_max_score` was left untouched (still accepts both `3` and `0-3`).
 
 1. **Section rows** (`addSectionRow`): add a visible text label `Section:`
    before the name input (the pre-filled "All Questions" default hides the
