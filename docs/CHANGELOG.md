@@ -6,6 +6,27 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — CGW exam cosmetics: bare question dropdown + width-aware cell labels
+
+**What this changes** (Phase 1 of
+[EXAM_IDENTITY_AND_BANDING_PLAN.md](EXAM_IDENTITY_AND_BANDING_PLAN.md)) — two
+small Exam-grading readability fixes in `cam_grading_workspace/app.py`.
+
+- **Question dropdown de-clutter (D1).** The single-question picker (`loadExam`)
+  showed each option as `2ap  (0–2)`. The `(0–max)` range is already printed in
+  the grading sheet's question-column header right beside the dropdown, so the
+  option text is now the bare label (`2ap`) — less visual noise, no lost info.
+- **Width-aware cell labels (D2).** `sizeCellLabels()` sized the translucent
+  grid-cell labels by cell **height** only (`(h/NROWS)*0.55`), so wide labels
+  (`D10`, or fine-A3's `AD42`) overflowed horizontally into neighbouring cells.
+  It now also caps by width: it computes the widest possible label on the current
+  grid (`colName(NCOLS-1)+NROWS`) and shrinks the font so that label fits inside
+  one cell width, taking `min(height, width)` cap. Labels no longer bleed across
+  a cell border at any paper size / density / fit mode / window size.
+- Cosmetic-only; no data, config, or grade-file changes.
+
+---
+
 ## 2026-07-13 — User manual: a dedicated "Grading exam papers" section
 
 **What this adds** (Phase 8 of
