@@ -105,7 +105,34 @@ swatch-zoom is active and merely clears it.
    when clicked.
 4. Persist the fit mode in `localStorage` (nice-to-have, cheap).
 
-## Phase 4 — Grading sheet: current question only + keyword checklist (items 7 & 8)
+## Phase 4 — Grading sheet: current question only + keyword checklist (items 7 & 8) — ✅ Done
+
+Implemented in `cam_grading_workspace/app.py` + `exam_engine.py`.
+
+**Single-question sheet, no totals (D3).** `renderExamTable`/`makeExamRow` now
+render only `Student | <current question> | Keywords | Comment`; the ✎ adjust
+button stays in the question header. Every running total is gone from the
+grading UI: the sheet's Total column, the roster-card "total X/M" sub-line (now
+"N/M questions" progress, or "ungraded"), and the "N marks total" in the status
+line. `examTotal`/`examMaxTotal` (and their `td.qtotal` CSS) were deleted —
+totals live only in the CSV export + CAM. Saved-grades shape is unchanged
+(scores still keyed per label; the sheet just shows one column at a time).
+
+**Keyword checklist in exam mode (item 8).** `#kwEditor` is no longer hidden in
+`loadExam`; the editable pill editor drives exams too. Persistence lives in the
+exam grades file (new shape `{"checklist":[{label,type},…], "students":{…}}` in
+`exam_grades_<exam>.json`); `load_exam_grades` now returns `(students,
+checklist)` and `save_exam_grades` round-trips the checklist (missing key → the
+D4 default template via `default_exam_checklist`; `normalize_exam_checklist`
+mirrors `_normalize_checklist`). Each exam student gained `keywords` beside
+`scores`/`comment` (defaults `[]`). Comment composition reuses the assignment
+`autoComment` helper verbatim. `/api/exam/grade` accepts + persists `keywords`;
+new `/api/exam/checklist` persists checklist edits (frontend `pushChecklist`
+routes there when EXAM is active; `remapKeywordLabel` + table re-renders branch
+on EXAM). Exam CSV export appends a `Checked Keywords` column (semicolon-joined)
+before `Comment` — confirmed ACM's exam ingest already reserves that header
+(`engine/ingestion.py` `_EXAM_RESERVED`), so questions still resolve to Q-cols
+only.
 
 Main page, exam mode (`renderExamTable`, `makeExamRow`, `loadExam`).
 
