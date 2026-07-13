@@ -5442,6 +5442,7 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
      with the section name + how-many-count control. Question rows below one
      belong to it. */
   tr.secrow td { background:var(--surface); border-top:1px solid var(--accent); }
+  tr.secrow .seclabel { font-size:12px; font-weight:600; color:var(--muted); margin-right:6px; }
   tr.secrow .secname { width:150px; font-weight:600; color:var(--text); }
   .secreqwrap { font-size:12px; color:var(--muted); margin-left:8px; }
   .secreqwrap input[type=number] { width:52px; padding:5px 6px; border-radius:6px;
@@ -5529,7 +5530,7 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
       <div class="hint">
         One row per question, in the order they should be graded. Coordinate
         ranges use the grid on the left: <b>A2:C5</b> (page 1) or
-        <b>page2!A2:C5</b>. Score is the mark range, e.g. <b>0-3</b>.
+        <b>page2!A2:C5</b>. Max mark is the highest score, e.g. <b>3</b>.
         Use ↑/↓ to reorder. Questions belong to the <b>section header</b> above
         them; an optional <b>name box</b> captures the handwritten name.
         <span id="gridHint"></span>
@@ -5537,7 +5538,7 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
       <table>
         <thead><tr>
           <th></th><th>Question Label</th><th>Coordinate Range</th>
-          <th>Score</th><th colspan="3">Order</th>
+          <th>Max mark</th><th colspan="3">Order</th>
         </tr></thead>
         <tbody id="qRows"></tbody>
       </table>
@@ -5821,7 +5822,7 @@ function addRow(label = "", range = "", score = "") {
     <td><span class="swatch"></span></td>
     <td><input class="qlabel" type="text" placeholder="Q?" value="" autocomplete="off"></td>
     <td><input class="qrange" type="text" placeholder="page1!A2:C5" value="" autocomplete="off"></td>
-    <td><input class="qscore" type="text" placeholder="0-3" value="" autocomplete="off"></td>
+    <td><input class="qscore" type="text" placeholder="3" value="" autocomplete="off"></td>
     <td><button class="rowbtn up" title="Move up">↑</button></td>
     <td><button class="rowbtn dn" title="Move down">↓</button></td>
     <td><button class="rowbtn del" title="Remove">✕</button></td>`;
@@ -5850,6 +5851,7 @@ function addSectionRow(name = "", required = null) {
   tr.innerHTML = `
     <td><span class="swatch secmark">§</span></td>
     <td colspan="3">
+      <span class="seclabel">Section:</span>
       <input class="secname" type="text" placeholder="Section name" autocomplete="off">
       <span class="secreqwrap">· choose
         <input class="secrequired" type="number" min="1" step="1">
@@ -6041,7 +6043,7 @@ function loadExamConfig() {
   });
   sections.forEach(s => {
     addSectionRow(s.name, s.required);
-    (byS[s.name] || []).forEach(q => addRow(q.label, q.range, "0-" + q.max));
+    (byS[s.name] || []).forEach(q => addRow(q.label, q.range, String(q.max)));
   });
   updateNameBtn();
   if (cfg.pdf_folder) { $("#folderInput").value = cfg.pdf_folder; loadFolder(); }
@@ -6229,7 +6231,7 @@ window.addEventListener("resize", sizeCellLabels);  // labels track the cell siz
 initGridColor();            // restore the per-device grid colour before building
 applyPaperGrid();           // build the initial (A4 compact 15×21) overlay + labels
 addSectionRow(DEFAULT_SECTION_NAME);  // new exams start with one section header
-addRow("Q1", "", "0-3");    // start with one empty question row ready to fill
+addRow("Q1", "", "3");      // start with one empty question row ready to fill
 updateNameBtn();
 
 /* Deep-links into this page:
