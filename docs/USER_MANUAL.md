@@ -147,6 +147,26 @@ scanned page with a grid drawn over it. Right pane: the question list.
   graded column. CAM uses these name crops later to help you spot a script saved
   under the wrong student's name. The name box is optional; delete the row to
   remove it.
+- **Name your students (optional).** Below the question list, a collapsible
+  **Students (N)** panel lists every scanned file by its filename, each with a box
+  to type the student's real name. If you framed and processed a name box, each row
+  shows that student's handwritten-name crop right beside the box, so you can read
+  the handwriting as you type. Names save with **Save Setup** / **Process All**.
+  They are **display-only**: the grading screen and the exported CSV show the real
+  name, but the sliced images and the on-disk grades stay keyed by the filename, so
+  naming (or renaming) a student here never disturbs any mark. The payoff is that
+  the exported CSV arrives already matched to your class roster — CAM's 🧩 matcher
+  (step 4) then only has to catch the odd leftover.
+- **Booklet scans — scan everyone the same way.** When you scan folded booklets,
+  the first page of each PDF is often the blank back cover. That's fine: program
+  each question against the page it actually appears on (`page2!…`, `page3!…`),
+  blank leading page included. The one rule is that **every student must be scanned
+  the same way.** If one student's scan is missing that leading page (or has an
+  extra one), all of their crops shift by a page and land on the wrong answers with
+  no error. CAM guards against this: the Students panel flags any script whose page
+  count differs from the rest ("Scan_0003 · 11 pages ⚠ others have 12"), and
+  Process All lists the same mismatches in its finish summary. If you see that
+  warning, re-scan that student before trusting their crops.
 - **Sections.** Questions are grouped into **sections**. A new exam starts with
   one section holding everything; click **+ Add section** to add more (each
   section header has a name and sits above the questions that belong to it — drag
@@ -211,6 +231,17 @@ downloads. CAM watches the folder and **auto-ingests** the exam — no manual
 import needed — and the exam shows up in Window 1's **📝 Exam grading** panel and
 in each student's marks list (Window 3).
 
+**Matching a leftover paper (🧩).** If a script's filename didn't match anyone on
+your roster — a camera-roll name, a typo, a student you named differently — CAM
+does **not** invent a new student for it. The paper waits in a pool, and every
+roster student who is missing that exam shows a **🧩 `<exam>` — N unmatched work**
+button in their Window 2 ⚠ popover. Click it to see the leftover papers as
+thumbnails — the handwritten name crop if you framed a name box, otherwise the
+first answer — each captioned with its raw total (`31/45`). Click the one that is
+theirs: CAM files the result under that student and **remembers the match**, so
+re-syncing the same exam routes it silently from then on. (Naming students at
+setup — step 2 — avoids this in the first place; the matcher is the safety net.)
+
 **Resolving a choice (`?`) in the cockpit.** If the exam had a *choose N*
 section, focus a student in Window 2 and look in Window 3's marks list: each exam
 shows a **📝** block with a row per section (`Section A · 12/20`) and a running
@@ -223,6 +254,24 @@ average** and can't be given a 0–8 grade in the **📝 Exam grading** panel (t
 row is disabled with a nudge to resolve first). The name crops you framed at
 setup show up in the exam's analytics dialog (click the exam in Window 1) next to
 each student id, so a script filed under the wrong name is easy to catch.
+
+**Section levels and the final grade (the digital cover sheet).** Window 1's
+**📝 Exam grading** panel turns an exam's raw marks into a criterion grade, laid
+out like the paper's own cover sheet. When the exam has more than one section,
+each student shows two lines: the **top line** is their resolved total,
+percentage and a **final grade** dropdown (0–8); the **line below** is one
+**level** dropdown per section, beside that section's subtotal
+(`Knowing 12/16`). CAM only *suggests* — each section level is pre-filled from its
+proportional score, and the final grade from the rounded average of the section
+levels — but **you decide**: every level and the final grade is a dropdown you can
+override, and changing a section level re-suggests the final grade until you set
+it yourself. Only the **final grade** enters the gradebook (as this exam's
+criterion score); the section levels are saved with it and written into the
+score's note (`… · sections: Knowing 7, Applying 7, Interpreting 5`), and each
+section row in Window 3 gains a `· level N`. A section still showing `?` (an
+unresolved choice — above) disables its own level box and the final-grade
+dropdown until you resolve it. A plain single-section exam keeps the simple
+one-line panel it has always had.
 
 ### 5 · Grading a cloud-synced class across computers
 
