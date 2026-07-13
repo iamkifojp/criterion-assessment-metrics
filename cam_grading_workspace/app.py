@@ -2819,6 +2819,10 @@ def api_exam_scan_folder():
             return jsonify({"error": "No PDF or image files in that folder."}), 404
         first_name, first_path = files[0]
         pages = exam_engine.page_count(first_path)
+        # Per-file page counts feed the Students panel's booklet-scan outlier
+        # flag (Phase 5, D5): the panel highlights any stem whose count differs
+        # from the class majority ("Scan_0003 · 11 pages ⚠ others have 12").
+        counts = exam_engine.page_counts(files)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({
@@ -2827,6 +2831,7 @@ def api_exam_scan_folder():
         "students": [n for n, _ in files],
         "first_student": first_name,
         "page_count": pages,
+        "page_counts": counts,
     })
 
 
@@ -3050,6 +3055,11 @@ def api_exam_load():
         EXAM_STATE["students"] = roster
         EXAM_STATE["checklist"] = checklist
 
+    # Display-only real names (Phase 5, D5): the grading tab shows
+    # student_names[stem] in place of the raw file stem, but `key` stays the stem
+    # everywhere (crops, /api/exam/grade, the grades file) so nothing downstream
+    # re-keys. Absent name -> the stem itself.
+    student_names = config.get("student_names") or {}
     # Anonymous grading (D6, YouMark-style): blank every display name; the real
     # stem stays in `key` for the round-trip (crops, grades, export all read
     # EXAM_STATE, which stays real). The client re-shuffles + numbers by
@@ -3062,7 +3072,7 @@ def api_exam_load():
         "questions": config["questions"],
         "checklist": checklist,
         "anonymous": anon,
-        "students": [{"key": k, "name": ("" if anon else k), **v}
+        "students": [{"key": k, "name": ("" if anon else student_names.get(k, k)), **v}
                      for k, v in roster.items()],
     })
 
@@ -3173,6 +3183,11 @@ def api_exam_export():
     labels = [q["label"] for q in config["questions"]]
     max_total = sum(q["max"] for q in config["questions"])
     today = datetime.date.today().isoformat()
+    # Display-only real names (Phase 5, D5): write the mapped name into "Student
+    # Name" while the grades file on disk stays keyed by the file stem. Identity
+    # contract: once mapped names flow, CAM matches on those; earlier stem-keyed
+    # matches still route via their per-csv_key aliases (Phase 4), so both coexist.
+    student_names = config.get("student_names") or {}
 
     # "Checked Keywords" (semicolon-joined) sits before Comment, matching the
     # assignment CSV convention; ACM keys columns by header, so the extra column
@@ -3188,7 +3203,7 @@ def api_exam_export():
         nums = [v for v in st["scores"].values() if isinstance(v, int)]
         total = sum(nums) if nums else ""
         keywords = "; ".join(st["keywords"])
-        writer.writerow([name] + cells +
+        writer.writerow([student_names.get(name, name)] + cells +
                         [total, max_total, today, keywords, st["comment"]])
 
     safe_name = re.sub(r'[\\/*?:"<>|]', "_", exam_name).strip() or "Exam"
@@ -5702,6 +5717,22 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
   tr.namerow td { background:var(--accent-tint, rgba(179,85,77,.06)); }
   tr.namerow .namelabel { font-weight:600; color:var(--text); }
   .swatch.namemark { background:#2bb8b0; }
+
+  /* Students naming panel (Phase 5, D5): display-only real names + name-box
+     crops. The file stem stays the storage key; these names are display/export
+     only. One row per student file, collapsible below the question table. */
+  #namePanel { margin-top:16px; border:1px solid var(--line); border-radius:8px;
+               background:var(--surface); padding:8px 12px; }
+  #namePanel > summary { cursor:pointer; font-weight:600; color:var(--text); font-size:13px; }
+  #nameRows { margin-top:10px; display:flex; flex-direction:column; gap:8px; }
+  .stu-row { display:flex; align-items:center; gap:10px; }
+  .stu-crop { height:34px; max-width:150px; border:1px solid var(--line); border-radius:4px;
+              background:var(--imgbg); object-fit:contain; flex:none; }
+  .stu-meta { display:flex; flex-direction:column; gap:1px; min-width:120px; max-width:170px; }
+  .stu-stem { font-size:12px; color:var(--muted); font-family:ui-monospace,Consolas,monospace;
+              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .stu-flag { font-size:11px; color:#d0556a; font-weight:600; }
+  .stu-name { flex:1; min-width:120px; }
 </style>
 <script>
 (function(){
@@ -5805,6 +5836,18 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
         <button id="processBtn">⚙ Process All PDFs</button>
       </div>
       <div id="procNote"></div>
+      <!-- Students naming panel (Phase 5, D5): real names are DISPLAY-ONLY. -->
+      <details id="namePanel" style="display:none">
+        <summary><span id="namePanelTitle">Students</span></summary>
+        <div class="hint" style="margin-top:8px">
+          Real names are <b>display only</b> — the grading tab and the exported
+          "Student Name" column use them, but crops and saved marks always key by
+          the file name. Leave a box blank to keep the file name.
+          If a name box is programmed and processed, its crop shows beside each
+          row so you can read the handwriting while typing.
+        </div>
+        <div id="nameRows"></div>
+      </details>
     </div>
   </div>
 </div>
@@ -5845,8 +5888,16 @@ const Q_COLORS = ["#e0843a","#3aa0e0","#37c97a","#b56ad0","#d0556a","#caa23a",
 const NAME_COLOR = "#2bb8b0";              // name-box highlight (matches its swatch)
 const DEFAULT_SECTION_NAME = "All Questions";  // mirrors exam_engine.DEFAULT_SECTION_NAME
 let FOLDER = "", PAGE_COUNT = 1;
+/* Students naming panel state (Phase 5, D5). STUDENT_NAMES is {stem -> display
+   name} and is the source of truth for what configPayload() saves — it survives
+   even when the panel can't render (e.g. the scan folder isn't on this device),
+   so re-saving a loaded exam never drops names. STUDENT_STEMS/PAGE_COUNTS come
+   from the last folder scan and drive the panel's rows + page-count flags. */
+let STUDENT_NAMES = {}, STUDENT_STEMS = [], PAGE_COUNTS = {};
 
 function setStatus(t){ $("#status").textContent = t; }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
 /* The #qRows tbody holds a mix of rows, distinguished by data-rowtype:
    "name" (optional, pinned first), "section" (a header) and "question". */
@@ -6238,6 +6289,14 @@ function configPayload() {
         questions.push({label, range, max: max || "0-1", section: curSection});
     }
   });
+  // Display-only real names (D5): {stem -> name}, empties dropped. Sourced from
+  // STUDENT_NAMES (kept live by the panel's inputs) so a resave preserves names
+  // even when the panel isn't currently rendered.
+  const studentNames = {};
+  Object.keys(STUDENT_NAMES).forEach(stem => {
+    const v = (STUDENT_NAMES[stem] || "").trim();
+    if (v) studentNames[stem] = v;
+  });
   return {
     name: $("#examName").value.trim(),
     paper_size: $("#paperSelect").value,
@@ -6246,6 +6305,7 @@ function configPayload() {
     name_box: nameBox,
     sections,
     questions,
+    student_names: studentNames,
   };
 }
 
@@ -6262,15 +6322,85 @@ async function loadFolder() {
     const d = await res.json();
     if (!res.ok) { setStatus(""); alert(d.error || "Could not read folder."); return; }
     FOLDER = d.folder; PAGE_COUNT = d.page_count || 1;
+    STUDENT_STEMS = d.students || [];
+    PAGE_COUNTS = d.page_counts || {};
     const sel = $("#pageSelect"); sel.innerHTML = "";
     for (let p = 1; p <= PAGE_COUNT; p++) {
       const o = document.createElement("option");
       o.value = p; o.textContent = "Page " + p; sel.appendChild(o);
     }
     setStatus(d.file_count + " student file(s) — previewing " + d.first_student);
+    renderNamePanel();          // Phase 5: list students for real-name entry
     // Focus-adjust (Phase 6) may want a later page; default to page 1 otherwise.
     showPage(FOCUS_PAGE <= PAGE_COUNT ? FOCUS_PAGE : 1);
   } catch (e) { setStatus(""); alert("Error: " + e); }
+}
+
+/* ---------- Students naming panel (Phase 5, D5) ---------- */
+/* The filename stem is the storage key everywhere (crops, grades file, export
+   csv_key); the names entered here are DISPLAY-ONLY — the grading tab shows them
+   and export writes them into "Student Name", nothing else keys off them. When
+   the exam has a processed name box, each row shows its __name__ crop so the
+   teacher can read the handwriting while typing. */
+function renderNamePanel() {
+  const panel = $("#namePanel"), rows = $("#nameRows");
+  rows.innerHTML = "";
+  if (!STUDENT_STEMS.length) { panel.style.display = "none"; return; }
+  panel.style.display = "";
+  $("#namePanelTitle").textContent = "Students (" + STUDENT_STEMS.length + ")";
+  const majority = majorityPageCount();
+  const examName = $("#examName").value.trim();
+  const hasNameBox = !!nameRow();
+  const bust = Date.now();
+  STUDENT_STEMS.forEach(stem => {
+    const row = document.createElement("div");
+    row.className = "stu-row";
+    // Name-box crop thumbnail — only when a name box is programmed and the exam
+    // is named (so the crop URL resolves); onerror hides it if not yet sliced.
+    let thumb = "";
+    if (hasNameBox && examName) {
+      const src = "/api/exam/crop?class=" + encodeURIComponent(CLASS_NAME)
+                + "&exam=" + encodeURIComponent(examName)
+                + "&q=__name__&student=" + encodeURIComponent(stem)
+                + "&t=" + bust;
+      thumb = '<img class="stu-crop" src="' + src
+            + '" alt="" onerror="this.style.display=\'none\'">';
+    }
+    // Booklet-scan outlier flag (D5): a page count off the class majority means
+    // shifted crops for this student — surface it right where names are entered.
+    const pc = PAGE_COUNTS[stem];
+    let flag = "";
+    if (majority && typeof pc === "number" && pc !== majority)
+      flag = '<span class="stu-flag" title="Others have ' + majority
+           + ' pages — crops may be shifted for this student">⚠ ' + pc + ' pages</span>';
+    row.innerHTML = thumb
+      + '<div class="stu-meta"><span class="stu-stem" title="' + escapeHtml(stem)
+      + '">' + escapeHtml(stem) + '</span>' + flag + '</div>'
+      + '<input class="stu-name" type="text" placeholder="Real name (optional)" autocomplete="off">';
+    const inp = row.querySelector(".stu-name");
+    inp.value = STUDENT_NAMES[stem] || "";
+    inp.addEventListener("input", () => {
+      if (inp.value.trim()) STUDENT_NAMES[stem] = inp.value;
+      else delete STUDENT_NAMES[stem];
+    });
+    rows.appendChild(row);
+  });
+}
+
+/* Most common page count across the scanned files (ties -> larger count); 0
+   when fewer than two files are readable. Mirrors exam_engine.scan_page_warnings
+   so the panel's flag and the process-note warning agree. */
+function majorityPageCount() {
+  const vals = STUDENT_STEMS.map(s => PAGE_COUNTS[s]).filter(v => typeof v === "number");
+  if (vals.length < 2) return 0;
+  const freq = {};
+  vals.forEach(v => { freq[v] = (freq[v] || 0) + 1; });
+  let best = 0, bestN = -1;
+  Object.keys(freq).forEach(k => {
+    const n = freq[k], c = parseInt(k, 10);
+    if (n > bestN || (n === bestN && c > best)) { bestN = n; best = c; }
+  });
+  return best;
 }
 
 function showPage(p) {
@@ -6311,6 +6441,11 @@ function loadExamConfig() {
   const cfg = (JSON.parse($("#examLoadSelect").dataset.exams || "{}"))[name];
   if (!cfg) return;
   resetFocus();               // dropping any prior focus/zoom before rebuilding
+  // Display-only real names (Phase 5, D5): adopt the saved map as the live
+  // source of truth. Kept even if the folder can't load below, so a resave
+  // preserves the names. renderNamePanel() (via loadFolder) fills the inputs.
+  STUDENT_NAMES = Object.assign({}, cfg.student_names || {});
+  STUDENT_STEMS = []; PAGE_COUNTS = {}; renderNamePanel();
   $("#examName").value = cfg.name;
   $("#paperSelect").value = cfg.paper_size || "A4";
   // Density follows the saved config; a missing/legacy "grid" reveals the
@@ -6489,7 +6624,15 @@ async function pollExamJob(jobId) {
                "grading screen's assignment dropdown.";
     if ((r.errors || []).length)
       note += "\n⚠ " + r.errors.length + " problem(s):\n  " + r.errors.slice(0, 12).join("\n  ");
+    // Booklet-scan guard (Phase 5, D5): page-count outliers mean shifted crops.
+    if ((r.warnings || []).length)
+      note += "\n⚠ Scan check — " + r.warnings.length + " student(s) off the "
+            + "class page count (their crops may be shifted):\n  "
+            + r.warnings.slice(0, 12).join("\n  ");
     $("#procNote").textContent = note;
+    // Refresh the Students panel so freshly-sliced name-box crops appear beside
+    // each row (the thumbnails 404'd until this run wrote them).
+    renderNamePanel();
     // D4: a full re-process re-slices every question, so an open grading tab is
     // now stale. Ping it with the same signal a single re-slice writes (no
     // single label — the whole exam was re-processed) so it bumps its crop

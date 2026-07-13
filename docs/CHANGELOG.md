@@ -6,6 +6,42 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — CGW student naming panel + booklet-scan guard
+
+**What this changes** (Phase 5 of
+[EXAM_IDENTITY_AND_BANDING_PLAN.md](EXAM_IDENTITY_AND_BANDING_PLAN.md), D5) — the
+grading workspace's exam side, in `cam_grading_workspace/app.py` +
+`exam_engine.py`. Complements Phase 4: naming students at the source means the
+exported CSV arrives roster-matchable, so CAM's 🧩 matcher is the safety net
+rather than the norm.
+
+- **Display-only `student_names` (engine).** Exam configs gain a
+  `student_names` map (`{file stem -> real name}`). `save_exam` cleans it to
+  str→str, trims values, drops empties, and persists it through both the legacy
+  and portable stores; absent/malformed → `{}` (backward compatible). The stem
+  stays the storage key everywhere — crops, the grades file and the export
+  `csv_key` all key by stem — so these names are display + export only.
+- **Naming panel (CGW setup).** A collapsible "Students (N)" block below the
+  question table lists every scanned file stem with a real-name input, prefilled
+  from the saved map. When a name box is programmed and processed, each row
+  shows its `__name__` crop so the teacher reads the handwriting while typing.
+  Values ride `configPayload()`, saving with Save Setup / Process All. The panel
+  keeps its state in a live `STUDENT_NAMES` object so a resave never drops names
+  even when the scan folder isn't on the current device.
+- **Display + export plumbing.** `/api/exam/load` returns
+  `name = student_names.get(stem, stem)` (still blanked under anonymous
+  grading); `/api/exam/export` writes the mapped name into the "Student Name"
+  column while the on-disk grades file stays stem-keyed.
+- **Booklet-scan consistency guard.** Booklet scans routinely start with a
+  blank back-cover page — harmless when every student is scanned the same way,
+  silently catastrophic (shifted crops, no error) when one isn't. Page-count
+  mismatch is the cheap signal: `/api/exam/scan_folder` now returns per-file
+  page counts, the Students panel flags outliers against the class majority
+  ("Scan_0003 · 11 pages ⚠ others have 12"), and `process_exam` appends a
+  `warnings` list (beside `errors`) surfaced in the process note on a full run.
+  New `exam_engine.page_counts` / `scan_page_warnings` helpers; the JS majority
+  logic mirrors them (mode, ties → larger count).
+
 ## 2026-07-14 — Exam CSVs route through roster identity + name-crop matcher
 
 **What this changes** (Phase 4 of
