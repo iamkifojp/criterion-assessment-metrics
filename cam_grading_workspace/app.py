@@ -2681,11 +2681,21 @@ def api_export():
 # Exam Slicing (setup + grading + item-level CSV export)
 # -----------------------------------------------------------------------------
 # Exam definitions are programmed in /exam_setup, stored in gcg_exams.json per
-# class. Processing slices every student PDF into per-question crops under
-# exam_crops/<class>/<exam>/<Q>/<student>.png; the main UI then grades an exam
-# question-by-question. Grades persist to exam_grades_<exam>.json inside the
-# class output dir (cloud-synced when configured) and export as an item-level
-# CSV (one column per question before Total Score) that ACM auto-ingests.
+# class. Processing slices every student PDF into per-question crops; the main
+# UI then grades an exam question-by-question. Grades persist to
+# exam_grades_<exam>.json inside the class output dir (cloud-synced when
+# configured) and export as an item-level CSV (one column per question before
+# Total Score) that ACM auto-ingests.
+#
+# Portable exam data (Phase 6, decision D5): when a class has a cloud folder,
+# both the crops and the exam definition live inside it so the exam can be
+# graded from any synced device —
+#     crops       -> <cloud>/<class>/exam_crops/<exam>/<Q>/<student>.png
+#     definitions -> <cloud>/<class>/gcg_exams.json  (via ExamStore)
+# Cloud-less classes keep the legacy app-local layout
+# (BASE_DIR/exam_crops/<class>/... and BASE_DIR/gcg_exams.json). Reads try the
+# cloud root first, then the legacy root, so pre-Phase-6 crops keep serving.
+# EXAM_STORE.class_dir is wired below, once exam_output_dir is defined.
 
 EXAM_STORE = exam_engine.ExamStore(BASE_DIR)
 EXAM_CROPS_DIR = os.path.join(BASE_DIR, "exam_crops")
@@ -2722,8 +2732,61 @@ def exam_output_dir(class_name, create=False):
     return BASE_DIR
 
 
-def exam_crop_dir(class_name):
+def _exam_class_dir(class_name, create=False):
+    """A class's portable cloud folder for exam definitions, or None (cloud-less).
+
+    Wraps ``exam_output_dir`` so ``ExamStore`` can decide between the portable
+    per-class ``gcg_exams.json`` and the legacy app-local one without importing
+    any app state. ``BASE_DIR`` (the cloud-less fallback) maps to ``None`` so the
+    store keeps its legacy behaviour there.
+    """
+    d = exam_output_dir(class_name, create=create)
+    return d if d != BASE_DIR else None
+
+
+# Wire the portable-store resolver now that exam_output_dir exists (Phase 6).
+EXAM_STORE.class_dir = _exam_class_dir
+
+
+def _legacy_exam_crop_dir(class_name):
     return os.path.join(EXAM_CROPS_DIR, exam_engine._safe_name(class_name or "Unsorted"))
+
+
+def exam_crop_dir(class_name, create=False):
+    """Where slicing WRITES a class's crops (Phase 6, decision D5).
+
+    ``<cloud>/<class>/exam_crops/`` when the class has a cloud folder (so crops
+    travel with the synced class folder), else the legacy
+    ``BASE_DIR/exam_crops/<class>/`` for cloud-less setups. ``process_exam``
+    creates the per-question subdirs, so ``create`` only needs to guarantee the
+    root when a fresh cloud class folder is being populated.
+    """
+    out = exam_output_dir(class_name, create=create)
+    if out != BASE_DIR:
+        d = os.path.join(out, "exam_crops")
+        if create:
+            try:
+                os.makedirs(d, exist_ok=True)
+            except OSError as e:
+                print("Warning: could not create exam crop root:", e)
+        return d
+    return _legacy_exam_crop_dir(class_name)
+
+
+def exam_crop_roots(class_name):
+    """Candidate crop roots for READS: cloud root first, then the legacy root.
+
+    Both are always returned (callers skip the ones that don't exist) so a class
+    that has moved to the cloud still serves any crops sliced before Phase 6.
+    """
+    roots = []
+    out = exam_output_dir(class_name)
+    if out != BASE_DIR:
+        roots.append(os.path.join(out, "exam_crops"))
+    legacy = _legacy_exam_crop_dir(class_name)
+    if legacy not in roots:
+        roots.append(legacy)
+    return roots
 
 
 @app.route("/exam_setup")
@@ -2843,6 +2906,14 @@ def api_exam_process():
         config = EXAM_STORE.save_exam(class_name, data.get("config") or {})
         if not config.get("pdf_folder"):
             return jsonify({"error": "Load a student PDF folder first."}), 400
+        # pdf_folder is an absolute per-device path (Phase 6 caveat): grading
+        # from synced crops works anywhere, but re-slicing needs the scans on
+        # THIS device. Say so plainly when the folder isn't here.
+        if not os.path.isdir(config["pdf_folder"]):
+            return jsonify({"error":
+                f"This device can't see the scan folder ({config['pdf_folder']!r}) "
+                "— grading still works from the synced crops, but re-slicing "
+                "needs the scan PDFs present on this computer."}), 400
         # Validate the folder and learn the class size up front so the initial
         # response seeds a progress total (process_exam re-scans as it works).
         students = exam_engine.list_student_files(config["pdf_folder"])
@@ -2860,7 +2931,7 @@ def api_exam_process():
             "result": None, "error": None,
         }
     threading.Thread(target=_run_exam_job,
-                     args=(job_id, config, exam_crop_dir(class_name)),
+                     args=(job_id, config, exam_crop_dir(class_name, create=True)),
                      daemon=True).start()
     return jsonify({"ok": True, "job_id": job_id, "exam_name": config["name"],
                     "students": len(students),
@@ -2889,6 +2960,11 @@ def api_exam_process_one():
         config = EXAM_STORE.save_exam(class_name, data.get("config") or {})
         if not config.get("pdf_folder"):
             return jsonify({"error": "Load a student PDF folder first."}), 400
+        if not os.path.isdir(config["pdf_folder"]):
+            return jsonify({"error":
+                f"This device can't see the scan folder ({config['pdf_folder']!r}) "
+                "— grading still works from the synced crops, but re-slicing "
+                "needs the scan PDFs present on this computer."}), 400
         if label not in {q["label"] for q in config["questions"]}:
             return jsonify({"error": f"Question '{label}' is not in this exam."}), 400
         students = exam_engine.list_student_files(config["pdf_folder"])
@@ -2906,7 +2982,7 @@ def api_exam_process_one():
             "result": None, "error": None,
         }
     threading.Thread(target=_run_exam_job,
-                     args=(job_id, config, exam_crop_dir(class_name)),
+                     args=(job_id, config, exam_crop_dir(class_name, create=True)),
                      kwargs={"labels": [label]}, daemon=True).start()
     return jsonify({"ok": True, "job_id": job_id, "exam_name": config["name"],
                     "label": label, "students": len(students)})
@@ -2935,15 +3011,17 @@ def api_exam_load():
 
     # The student list comes from the sliced crops (ground truth of what was
     # processed); fall back to the source folder if slicing hasn't run yet.
-    exam_dir = os.path.join(exam_crop_dir(class_name),
-                            exam_engine._safe_name(exam_name))
+    # Scan both crop roots (cloud + legacy) so a class carries its pre-Phase-6
+    # crops after moving to the cloud (Phase 6 read fallback).
     students = set()
-    for q in config["questions"]:
-        q_dir = os.path.join(exam_dir, exam_engine._safe_name(q["label"]))
-        if os.path.isdir(q_dir):
-            for f in os.listdir(q_dir):
-                if f.lower().endswith(".png"):
-                    students.add(os.path.splitext(f)[0])
+    for root in exam_crop_roots(class_name):
+        exam_dir = os.path.join(root, exam_engine._safe_name(exam_name))
+        for q in config["questions"]:
+            q_dir = os.path.join(exam_dir, exam_engine._safe_name(q["label"]))
+            if os.path.isdir(q_dir):
+                for f in os.listdir(q_dir):
+                    if f.lower().endswith(".png"):
+                        students.add(os.path.splitext(f)[0])
     if not students and config.get("pdf_folder") and os.path.isdir(config["pdf_folder"]):
         try:
             students = {n for n, _ in
@@ -3052,14 +3130,17 @@ def api_exam_crop():
     exam = request.args.get("exam", "")
     q = request.args.get("q", "")
     student = request.args.get("student", "")
-    path = os.path.join(exam_crop_dir(class_name),
-                        exam_engine._safe_name(exam),
-                        exam_engine._safe_name(q),
-                        exam_engine._safe_name(student) + ".png")
-    # _safe_name strips path separators, so the join cannot escape the crops dir.
-    if not os.path.isfile(path):
-        abort(404)
-    return send_file(path, mimetype="image/png")
+    # Try the cloud root first, then the legacy local root (Phase 6 read
+    # fallback). _safe_name strips path separators, so the join cannot escape a
+    # crops dir.
+    rel = os.path.join(exam_engine._safe_name(exam),
+                       exam_engine._safe_name(q),
+                       exam_engine._safe_name(student) + ".png")
+    for root in exam_crop_roots(class_name):
+        path = os.path.join(root, rel)
+        if os.path.isfile(path):
+            return send_file(path, mimetype="image/png")
+    abort(404)
 
 
 @app.route("/api/exam/export")
