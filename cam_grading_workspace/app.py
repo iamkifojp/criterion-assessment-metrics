@@ -5030,9 +5030,12 @@ function cropUrl(q, student) {
 /* Open Exam Setup focused on one question, to adjust its region mid-grading. */
 function openExamAdjust(label) {
   if (!EXAM || !ACTIVE_CLASS_NAME) return;
-  window.open("/exam_setup?class=" + encodeURIComponent(ACTIVE_CLASS_NAME)
+  // D3: one named setup tab — repeat clicks re-navigate it (re-running the
+  // ?focus deep-link) instead of stacking new _blank tabs.
+  const w = window.open("/exam_setup?class=" + encodeURIComponent(ACTIVE_CLASS_NAME)
     + "&exam=" + encodeURIComponent(EXAM.exam_name)
-    + "&focus=" + encodeURIComponent(label), "_blank");
+    + "&focus=" + encodeURIComponent(label), "cam_exam_setup");
+  if (w) w.focus();
 }
 
 /* The Exam Setup tab writes this localStorage key when a re-slice finishes;
@@ -5045,7 +5048,10 @@ window.addEventListener("storage", (e) => {
   if (sig.class === ACTIVE_CLASS_NAME && sig.exam === EXAM.exam_name) {
     EXAM_CROP_BUST = String(sig.ts || Date.now());
     renderExamRoster();
-    setStatus("Re-sliced " + (sig.label || "a question") + " — crops refreshed.");
+    // Empty label = a full Process-All re-process (D4); a label = one question.
+    setStatus(sig.label
+      ? "Re-sliced " + sig.label + " — crops refreshed."
+      : "Exam re-processed — crops refreshed.");
   }
 });
 // No examTotal/examMaxTotal helpers: decision D3 keeps every running total out
@@ -5404,7 +5410,9 @@ $("#examSetupBtn").addEventListener("click", () => {
     alert("Select a saved class first — the exam will be added to that class.");
     return;
   }
-  window.open("/exam_setup?class=" + encodeURIComponent(ACTIVE_CLASS_NAME), "_blank");
+  // D3: same named setup tab as the Adjust routes — never _blank.
+  const w = window.open("/exam_setup?class=" + encodeURIComponent(ACTIVE_CLASS_NAME), "cam_exam_setup");
+  if (w) w.focus();
 });
 $("#questionSelect").addEventListener("change", () => {
   CURRENT_Q = $("#questionSelect").value;
@@ -5706,7 +5714,7 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
     <h1>📝 Exam Setup</h1>
     <span id="classTag"></span>
     <span id="status"></span>
-    <a class="backlink" href="/">← back to grading</a>
+    <a class="backlink" id="backLink" href="/">← back to grading</a>
   </div>
 
   <div id="split">
@@ -6470,11 +6478,30 @@ async function pollExamJob(jobId) {
     if ((r.errors || []).length)
       note += "\n⚠ " + r.errors.length + " problem(s):\n  " + r.errors.slice(0, 12).join("\n  ");
     $("#procNote").textContent = note;
+    // D4: a full re-process re-slices every question, so an open grading tab is
+    // now stale. Ping it with the same signal a single re-slice writes (no
+    // single label — the whole exam was re-processed) so it bumps its crop
+    // cache-buster and refetches every crop in place.
+    try {
+      localStorage.setItem("cam_exam_resliced", JSON.stringify({
+        class: CLASS_NAME, exam: $("#examName").value.trim(), label: "", ts: Date.now()
+      }));
+    } catch (_) {}
     return;
   }
 }
 
 /* ---------- wire up ---------- */
+// D3 smart back-link: when this tab was script-opened from a grading tab,
+// focus that opener and close ourselves; otherwise fall through to href="/"
+// so direct-URL / middle-click / no-JS still navigate normally.
+$("#backLink").addEventListener("click", (e) => {
+  if (window.opener && !window.opener.closed) {
+    e.preventDefault();
+    window.opener.focus();
+    window.close();
+  }
+});
 $("#loadFolderBtn").addEventListener("click", loadFolder);
 $("#folderInput").addEventListener("keydown", e => { if (e.key === "Enter") loadFolder(); });
 $("#pageSelect").addEventListener("change", () => showPage(parseInt($("#pageSelect").value, 10)));
