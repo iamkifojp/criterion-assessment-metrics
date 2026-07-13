@@ -5388,6 +5388,13 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
      layout (page height stays put, so #pageWrap keeps clipping to the page). */
   #pageZoom { position:relative; transform-origin:0 0; transition:transform .15s ease; }
   #pageImg { width:100%; display:block; }
+  /* Fit-page mode (Phase 3): constrain the sheet by height so the whole page is
+     visible at once, and centre it horizontally in the pane. #pageWrap goes flex
+     so #pageZoom shrink-wraps the image — the inset:0 grid overlay keeps tracking
+     the page box. The 150px offset budgets the topbar, loader row and the pane
+     padding sitting above the preview. */
+  #pageWrap.fitpage { display:flex; justify-content:center; }
+  #pageWrap.fitpage #pageImg { width:auto; max-height:calc(100vh - 150px); }
   #gridOverlay { position:absolute; inset:0; display:grid;
                  grid-template-columns:repeat(15,1fr); grid-template-rows:repeat(21,1fr); }
   /* Grid lines take the teacher-chosen colour (--gridcol, set per device by JS)
@@ -5484,8 +5491,10 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
         <select id="pageSelect" title="Page of the first student's PDF">
           <option value="1">Page 1</option>
         </select>
+        <button id="fitToggleBtn" class="secondary hidden"
+                title="Switch between fitting the page width and the whole page">↔ Fit width</button>
         <button id="zoomToggleBtn" class="secondary hidden"
-                title="Restore the full-page view">⤢ Full page</button>
+                title="Clear the zoom-to-question view and return to the fit view">✕ Reset zoom</button>
       </div>
       <div id="pageWrap">
         <div id="noPage">Load a student folder to preview the first exam paper.<br>
@@ -5800,6 +5809,33 @@ function zoomToRangeStr(raw) {
 
 function clearZoom() { ZOOM_RANGE = null; applyZoom(); }
 
+/* ---------- Fit width / fit page (Phase 3) ---------- */
+/* The left pane defaults to fitting the page WIDTH (the img is 100% wide, i.e.
+   today's behaviour). "Fit page" instead constrains the height so the whole
+   sheet is visible at once. A per-device preference; toggling it also clears any
+   active zoom-to-question, which lives independently on #pageZoom's transform. */
+const FIT_MODE_KEY = "gcg_fit_mode";
+let FIT_MODE = "width";     // "width" | "page"
+
+function applyFitMode() {
+  $("#pageWrap").classList.toggle("fitpage", FIT_MODE === "page");
+  $("#fitToggleBtn").textContent = FIT_MODE === "page" ? "⤢ Fit page" : "↔ Fit width";
+  sizeCellLabels();   // the cell pixel height changes with the fit mode
+  applyZoom();        // re-frame any active zoom to the new page box
+}
+
+function initFitMode() {
+  try { FIT_MODE = localStorage.getItem(FIT_MODE_KEY) === "page" ? "page" : "width"; } catch (e) {}
+  applyFitMode();
+}
+
+function toggleFitMode() {
+  FIT_MODE = (FIT_MODE === "page") ? "width" : "page";
+  try { localStorage.setItem(FIT_MODE_KEY, FIT_MODE); } catch (e) {}
+  clearZoom();        // the fit toggle also drops any zoom-to-question (Phase 3)
+  applyFitMode();
+}
+
 /* ---------- Row table (name box · sections · questions, reorderable) ------- */
 /* Reorder respects the pin: the name box stays first, so nothing moves above it
    and the name row carries no ↑/↓. */
@@ -5991,6 +6027,7 @@ function showPage(p) {
     $("#noPage").style.display = "none";
     img.style.display = "block";
     $("#gridOverlay").style.display = "grid";
+    $("#fitToggleBtn").classList.remove("hidden");   // fit toggle lives whenever a page is loaded
     refreshHighlights();
     sizeCellLabels();      // cell pixels are laid out now — size the labels to them
     applyZoom();           // re-frame once the new page's pixels are laid out
@@ -6212,6 +6249,7 @@ $("#addNameBtn").addEventListener("click", () => addNameBoxRow());
 $("#saveBtn").addEventListener("click", () => saveSetup(false));
 $("#processBtn").addEventListener("click", processAll);
 $("#zoomToggleBtn").addEventListener("click", clearZoom);
+$("#fitToggleBtn").addEventListener("click", toggleFitMode);
 $("#resliceBtn").addEventListener("click", resliceOne);
 $("#examLoadSelect").addEventListener("change", loadExamConfig);
 $("#paperSelect").addEventListener("change", applyPaperGrid);
@@ -6229,6 +6267,7 @@ $("#gridColorSelect").addEventListener("change", () => {
 window.addEventListener("resize", sizeCellLabels);  // labels track the cell size
 
 initGridColor();            // restore the per-device grid colour before building
+initFitMode();              // restore the per-device fit-width/fit-page choice
 applyPaperGrid();           // build the initial (A4 compact 15×21) overlay + labels
 addSectionRow(DEFAULT_SECTION_NAME);  // new exams start with one section header
 addRow("Q1", "", "3");      // start with one empty question row ready to fill
