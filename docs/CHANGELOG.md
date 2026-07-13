@@ -6,6 +6,42 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-13 — Exam grading: anonymous mode (YouMark-style positional numbering)
+
+**What this adds** (Phase 5 of
+[EXAM_GRADING_POLISH_PLAN.md](EXAM_GRADING_POLISH_PLAN.md), decision D6) — the
+device-local **Anonymous grading** toggle now covers exam mode, which previously
+always showed the raw filename stems. Papers are numbered by *position* and
+re-shuffled for every question, so a teacher never meets "student 3" twice and no
+prejudice can accumulate across a multi-question paper.
+
+- **Server (display-only, `/api/exam/load`).** When `anonymous_enabled()`, the
+  payload blanks every display `name` (`name: ""`) and adds an `anonymous: true`
+  flag; `key` stays the real stem. `EXAM_STATE` is never mutated (same doctrine
+  as the assignment layer's `present_students()`), so `/api/exam/grade`, crop
+  serving and the CSV export all keep real identifiers. The grade response
+  carries no name field, so nothing leaks there.
+- **Client (per-question numbering).** New `EXAM_ANON` flag (from
+  `data.anonymous`) plus a deterministic mulberry32 PRNG over a string hash
+  (`examStrHash`/`examMulberry32`/`examSeededShuffle`). A single `examView()`
+  returns the ordered `{st,label}` pairs that **both** the roster cards and the
+  sheet rows iterate, so the two screens always share one order. Anonymous on:
+  shuffle with seed `class|exam|CURRENT_Q` and label by position (`01`, `02`, …)
+  — stable on reload, different every question, so the same student gets a
+  different number each time (a progress counter, not an identity). Anonymous
+  off: today's order (server-alphabetical) with real names.
+- **Toggle reload.** Flipping the pref now reloads an open exam (`loadExam`) as
+  well as an open assignment. The ⚙ Settings note was extended to cover exams
+  (positional numbering + real-name exports).
+
+**Backward-compat:** purely a display layer over the existing payload — no change
+to `exam_grades_<exam>.json`, crops, or the exported CSV, all of which stay keyed
+by the real stem. Residue is unchanged from the assignment layer: the real `key`
+still rides the DOM/network and handwriting can identify a student — bias
+reduction, not blind review.
+
+---
+
 ## 2026-07-13 — Exam Setup: grid colour picker + big translucent cell labels
 
 **What this adds** (Phase 1 of
