@@ -547,6 +547,26 @@ student identity** (one file per student, named after the student). Per-crop
 failures are collected into `summary["errors"]` so one bad file doesn't abort
 the whole class.
 
+**Display-only real names.** The filename stem is the storage key *everywhere* —
+crop paths, the grades file, the export `csv_key`. Real names are a separate,
+display-only layer: the exam config carries a `student_names` map
+(`{stem → real name}`), edited in Exam Setup's **Students** panel. `/api/exam/load`
+returns `name = student_names.get(stem, stem)` (still blanked under anonymous
+grading) and the CSV export writes the mapped name into `Student Name`, but the
+stem never moves — so renaming a student never disturbs a crop or a mark. Naming
+at the source means the exported CSV arrives roster-matchable; CAM's 🧩 matcher
+(§10) is the safety net for anything left unmatched. A **booklet-scan consistency
+guard** flags the common shifted-crop hazard: `/api/exam/scan_folder` returns
+per-file page counts, the Students panel flags outliers against the class
+majority, and `process_exam` appends a `warnings` list beside `errors`.
+
+**Name-crop resolution is cloud-root-first.** The optional name box slices to the
+reserved `<output_root>/<Exam>/__name__/<Student>.png`. CAM reads these back for
+the Window-2 matcher tile and the analytics preview via `exam_name_crop_path` /
+`exam_has_name_crops`, which resolve the **cloud class root first, then the legacy
+app-local root** — mirroring the exam-crop dual-root read (§7) so crops sliced
+before a class moved to the cloud still serve.
+
 Exam definitions persist to `gcg_exams.json` (keyed by class name); exam grades
 persist to `exam_grades_<exam>.json` in the class output directory. Both writes
 are atomic (`.tmp` + `os.replace`).
@@ -819,7 +839,15 @@ above.)
    it hands `ingest_csv` the roster keys + the durable `work_aliases` map so an
    unmatched `Student Name` cell is **pooled** (`unmatched_works`) rather than
    minting a phantom student; a fast-path prefix match is auto-recorded as an
-   alias and announced on the sync banner. See §10 and DATA_DICTIONARY C.6.
+   alias and announced on the sync banner. **Since the exam-identity plan Phase 4
+   the exam branch routes the same way:** `ingest_exam_csv` takes the identical
+   routing inputs and resolves each row through the shared pipeline, attaching a
+   matched `ExamResult` to the roster student and pooling an unmatched row as an
+   *exam-flavoured* pool entry (`is_exam` + its `questions`/`total`/`max_total`/
+   `comment`) — so the old "Exam CSVs never route" phantom-per-stem behaviour is
+   gone (a roster ingest also sweeps the stale phantoms earlier unrouted ingests
+   minted). No roster ⇒ today's rosterless behaviour, unchanged. See §10 and
+   DATA_DICTIONARY C.6.
 
 ### Invariant: one assignment, one CSV — Sync refuses contradictory sources
 
@@ -1152,6 +1180,17 @@ rosterless class is unchanged — routing is skipped and the score-only path is
 exactly as before (that "folder-graded before a roster is loaded" behaviour is a
 feature). The durable `work_aliases[class]` map records each match and survives
 Sync's purge-replace; see DATA_DICTIONARY C.6.
+
+**Since the exam-identity plan Phase 4 exam CSVs route through this same
+pipeline** (the old "Exam CSVs never route" carve-out is retired). An unmatched
+exam row pools as an *exam-flavoured* entry (`is_exam` + raw
+`questions`/`total`/`max_total`/`comment`); the 🧩 matcher tile shows the
+script's handwritten **name-box crop** (fallback: the first question crop, then a
+filename tile) captioned with the raw total (`31/45`), and assigning materialises
+an `ExamResult` under the roster student (`materialize_exam_row`) instead of a
+`CriterionScore`. A roster exam ingest additionally **sweeps stale phantoms** —
+students on no roster (active or archived) holding no scores and no exam results,
+minted by the earlier unrouted exam path — reporting them in the sync summary.
 
 ### The send side (Google Apps Script)
 

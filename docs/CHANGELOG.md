@@ -6,6 +6,29 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — Docs: exam identity routing, naming panel, section banding
+
+**What this documents** (Phase 7 of
+[EXAM_IDENTITY_AND_BANDING_PLAN.md](EXAM_IDENTITY_AND_BANDING_PLAN.md)) — the
+docs pass that records Phases 4–6 for future maintainers and the teacher.
+Docs-only; no code changes.
+
+- **ARCHITECTURE.md.** The exam pipeline section now states that exam CSVs route
+  through the same roster-identity resolution as assignment CSVs (the "Exam CSVs
+  never route" note is retired); documents the display-only `student_names` map,
+  `ExamResult.section_bands`, and the cloud-root-first / legacy-fallback
+  resolution shared by the name-crop helpers.
+- **USER_MANUAL.md** ("Grading exam papers"). Adds naming students in the Exam
+  Setup **Students** panel (with the name-box crop workflow), matching leftover
+  papers from Window 2's 🧩 missing popup, setting per-section levels + one final
+  grade in the Window 1 **📝 Exam grading** panel (the digital cover sheet), and a
+  booklet-scanning note — a blank leading page is normal as long as every student
+  is scanned the same way, and the Students panel + process summary flag
+  page-count mismatches.
+- **DATA_DICTIONARY.md.** Documents `student_names` (exam config), `section_bands`
+  (`ExamResult`), and the exam-flavoured `unmatched_works` pool rows
+  (`is_exam` + `questions`/`total`/`max_total`/`comment`).
+
 ## 2026-07-14 — Section-level exam banding, teacher-decided
 
 **What this changes** (Phase 6 of

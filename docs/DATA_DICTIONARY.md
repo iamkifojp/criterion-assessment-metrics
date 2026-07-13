@@ -140,9 +140,12 @@ stores in `cam_grading_workspace/gcg_exams.json`, keyed by class then exam name
 | `range` | e.g. `A1:C3`, `page2!AA5:AD9` | Inclusive cell rectangle, validated against `paper_size` **and** `grid` by `parse_range`. Columns are Excel-style (`A…Z, AA…AD`); fine A3 reaches column AD. |
 | `max` | int | Per-question max score (`parse_max_score` coerces `"0-3"` → `3`). |
 | `section` | string | The `sections[].name` this question belongs to. Blank/unknown ⇒ the first section (e.g. a question dragged above the first header). |
+| `student_names` | `{stem → name}` | **Display-only** real-name map (exam-identity plan Phase 5), edited in Exam Setup's **Students** panel. The filename **stem stays the storage key everywhere** — crop paths, the grades file, the export `csv_key` — so these names are display + export only and never disturb a crop or a mark. `save_exam` cleans it (str→str, values trimmed, empties dropped); absent/malformed ⇒ `{}`. `/api/exam/load` returns `name = student_names.get(stem, stem)` (still blanked under anonymous grading); `/api/exam/export` writes the mapped name into `Student Name`. |
 
 The `grid` and `name_box` keys affect only *where* the crops are cut; they are
-**not** carried in the exported CSV (whose shape is unchanged, §A.4). Section
+**not** carried in the exported CSV (whose shape is unchanged, §A.4).
+`student_names` is display-only and only ever fills the existing `Student Name`
+column with a mapped name — it never adds or reshapes a column. Section
 structure **is** carried, out-of-band, in the definition sidecar (§A.4.2).
 
 ### A.4.2 Exam definition sidecar (`<csv filename>.meta.json`)
@@ -175,6 +178,18 @@ answered more than `required`) stays `?` (excluded from the exam total) until th
 teacher resolves it in Window 3, which records the picked labels in
 `ExamResult.chosen`. Missing/corrupt sidecar ⇒ the pre-Phase-5 all-questions-sum
 behaviour, no error.
+
+**`ExamResult.section_bands`** (exam-identity plan Phase 6) is a
+`{section name → 0–8 level}` map beside `chosen`, holding the teacher's per-strand
+level for the Window-1 banding panel (the digital cover sheet). The app only
+*suggests* — a section level defaults to `round(subtotal / section_max * 8)` and
+the final grade to the rounded mean of the section levels — but every level and
+the final grade is a teacher-set dropdown. Only the **final** grade enters the
+gradebook (one `CriterionScore`); `section_bands` is saved alongside it and folded
+into the score note (`… · sections: Knowing 7, Applying 7, Interpreting 5`), and
+Window 3 appends `· level N` to each section's subtotal. Serialized/deserialized
+exactly like `chosen` (absent ⇒ `{}`, round-tripped) and carried forward across
+re-ingest so a routed re-sync or a Window-2 match keeps the teacher's levels.
 
 ### A.5 File Count / Files — read-only completeness pass (the "Awaiting Grade" gate)
 
@@ -716,6 +731,17 @@ layer** applied over **purge-replace** ingest.
   grade-less row minted no student before either). `materialize_row()` /
   `assign_work()` drain a row out of the pool into a real score under the roster
   id; the recorded alias then routes that csv_key automatically on the next sync.
+- **Exam-flavoured pool rows** (exam-identity plan Phase 4). An unmatched
+  **exam** row (A.4) pools in the same `unmatched_works[class][exam]` list but
+  carries an `is_exam: true` flag plus the raw exam fields a match needs to
+  materialize an `ExamResult` — `questions` (`{label → mark}`), `total`,
+  `max_total` and `comment` — alongside the shared `csv_key`. The Window-2 🧩
+  matcher renders these with the script's handwritten name-box crop (fallback:
+  first-question crop, then a filename tile) captioned with the raw total
+  (`31/45`); `materialize_exam_row` / `assign_work` drain the row into an
+  `ExamResult` under the roster id (preserving any prior `chosen` picks) and
+  record the durable alias, so a re-sync routes it silently. Plain JSON, so the
+  extra fields ride the existing session persistence unchanged.
 - **Rosterless classes** never populate either store — `ingest_csv` skips routing
   when `roster_keys` is empty, and the score-only "folder-graded before a roster"
   path (ARCHITECTURE §10) stays intact. **Pre-Phase-3 phantom students** from
