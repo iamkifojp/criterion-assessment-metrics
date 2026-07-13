@@ -75,7 +75,16 @@ label + `.seclabel` style on section rows; question column header `Score` →
    - Displays elsewhere (question dropdown "(0–3)", sheet header) are
      unchanged — they show the range, which is fine.
 
-## Phase 3 — Fit width / fit page toggle (item 4)
+## Phase 3 — Fit width / fit page toggle (item 4) — ✅ Done
+
+Implemented in `EXAM_SETUP_PAGE` (`cam_grading_workspace/app.py`). A persistent
+`#fitToggleBtn` (revealed once a page loads) cycles `↔ Fit width` / `⤢ Fit page`;
+the choice is stored per device in `localStorage["gcg_fit_mode"]`. Fit-page adds
+`.fitpage` to `#pageWrap` (flex-centred) with `#pageImg { width:auto;
+max-height:calc(100vh - 150px) }`, and re-runs the Phase 1 label sizing +
+`applyZoom` on toggle. The old restore-view button was repurposed into a separate
+`✕ Reset zoom` button (still `#zoomToggleBtn`, shown only while a `ZOOM_RANGE` is
+active); the fit toggle also clears any active zoom.
 
 Left pane of Exam Setup. Today `#zoomToggleBtn` appears only while a
 swatch-zoom is active and merely clears it.
