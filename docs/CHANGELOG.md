@@ -6,6 +6,37 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-13 — Exam Setup: grid colour picker + big translucent cell labels
+
+**What this adds** (Phase 1 of
+[EXAM_GRADING_POLISH_PLAN.md](EXAM_GRADING_POLISH_PLAN.md)) — a teacher
+live-testing the slicer couldn't read the coordinate grid over a scanned page:
+the muted grey lines and small corner labels washed out. The grid is now
+brightly recolourable and its labels are large, centred and translucent.
+
+- **Grid colour picker (per device).** A new `#gridColorSelect` sits beside the
+  Grid density dropdown with three high-contrast choices — Neon green `#39FF14`
+  (default), Bright blue `#00BFFF`, Bright magenta `#FF00E5`. The choice persists
+  in `localStorage["gcg_grid_color"]` (a device preference, *not* part of the
+  exam definition) and drives a single `--gridcol` CSS variable on `#gridOverlay`
+  that all grid colouring reads.
+- **Grid lines.** `.gcell` borders switch from fixed grey to
+  `color-mix(in srgb, var(--gridcol) 65%, transparent)` — still `1px dashed`
+  (density, not weight, was the complaint).
+- **Cell labels.** `.glab` is reworked to fill the cell (`inset:0`, flex-centred),
+  `font-weight:800`, `color:var(--gridcol)`, `opacity:.4`, no text-shadow. Size
+  is computed from the live cell height by `sizeCellLabels()`
+  (`max(9px, round(cellH × 0.55))` → `--glabsize`), replacing the old
+  per-density static font-size rules, and recomputed after the page image loads,
+  on window resize, and on any paper/density change.
+
+**Backward-compat:** purely a programming-time visual change in the Exam Setup
+page — no change to saved exam definitions, crops, or grades. Question-range
+highlight tints (`Q_COLORS`) are untouched and stay distinguishable from the
+grid colour.
+
+---
+
 ## 2026-07-13 — Exam: adjust a question's region during grading + re-slice one
 
 **What this adds** (Phase 6 of

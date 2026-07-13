@@ -5390,17 +5390,20 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
   #pageImg { width:100%; display:block; }
   #gridOverlay { position:absolute; inset:0; display:grid;
                  grid-template-columns:repeat(15,1fr); grid-template-rows:repeat(21,1fr); }
-  .gcell { position:relative; border:1px dashed rgba(127,127,127,.65); background:transparent;
-           transition:background .1s; }
-  /* Coordinate labels must read over a scanned page in both themes: accent
-     colour with a contrast halo. Font shrinks as cells shrink (denser grids)
-     via the overlay's data-density so two-letter labels never overlap. */
-  .gcell .glab { position:absolute; top:1px; left:2px; font-size:13px; font-weight:600;
-                 line-height:1; color:var(--accent);
-                 text-shadow:0 0 3px var(--bg), 0 0 3px var(--bg);
+  /* Grid lines take the teacher-chosen colour (--gridcol, set per device by JS)
+     at partial alpha — density, not weight, was the legibility complaint. */
+  .gcell { position:relative;
+           border:1px dashed color-mix(in srgb, var(--gridcol, #39FF14) 65%, transparent);
+           background:transparent; transition:background .1s; }
+  /* Coordinate labels: bold, centred, filling the cell, in the chosen grid
+     colour at ~40% opacity (no halo). Font size is computed from the live cell
+     height (JS sets --glabsize) so labels recentre/rescale with density + fit
+     mode instead of relying on per-density static rules. */
+  .gcell .glab { position:absolute; inset:0; display:flex;
+                 align-items:center; justify-content:center;
+                 font-size:var(--glabsize, 13px); font-weight:800; line-height:1;
+                 color:var(--gridcol, #39FF14); opacity:.4;
                  pointer-events:none; user-select:none; }
-  #gridOverlay[data-density="compact"] .glab { font-size:11px; }
-  #gridOverlay[data-density="fine"] .glab { font-size:9px; top:0; left:1px; }
   .gcell.hl { outline:2px solid var(--hl, var(--accent)); outline-offset:-2px; }
   #noPage { padding:60px 20px; text-align:center; color:var(--muted); font-size:14px; }
 
@@ -5516,6 +5519,12 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
           <option value="compact" selected>Compact (≈1.4 cm)</option>
           <option value="fine">Fine (≈1 cm)</option>
         </select>
+        <span>Grid colour</span>
+        <select id="gridColorSelect" title="Colour of the coordinate grid and its labels (saved on this device)">
+          <option value="#39FF14" selected>Neon green</option>
+          <option value="#00BFFF">Bright blue</option>
+          <option value="#FF00E5">Bright magenta</option>
+        </select>
       </div>
       <div class="hint">
         One row per question, in the order they should be graded. Coordinate
@@ -5599,6 +5608,40 @@ function nameRow(){ return $("#qRows tr.namerow"); }
    load-only "legacy" state when an old exam is open. */
 function currentDensity() { return $("#gridSelect").value || "compact"; }
 
+/* ---------- Grid colour + label sizing (Phase 1) ---------- */
+/* The grid colour is a per-device preference (localStorage), not part of the
+   exam definition — it only tints the overlay + labels while programming. All
+   grid colouring reads the --gridcol CSS variable set here. */
+const GRID_COLOR_KEY = "gcg_grid_color";
+const GRID_COLOR_DEFAULT = "#39FF14";
+
+function applyGridColor(col) {
+  $("#gridOverlay").style.setProperty("--gridcol", col || GRID_COLOR_DEFAULT);
+}
+
+/* Size the cell labels from the live cell height so they stay ~55% of a cell in
+   any density / window size / fit mode. Clamped to 9px so fine grids on a small
+   window stay renderable. Called after the page image lays out, on resize, and
+   whenever the grid matrix changes. */
+function sizeCellLabels() {
+  const ov = $("#gridOverlay");
+  const h = ov.clientHeight;
+  if (!h || !NROWS) return;
+  const px = Math.max(9, Math.round((h / NROWS) * 0.55));
+  ov.style.setProperty("--glabsize", px + "px");
+}
+
+/* Restore the saved grid colour (or the neon-green default) on load. A stored
+   value that isn't one of the three options leaves the select empty — fall back
+   so the overlay still colours consistently. */
+function initGridColor() {
+  let col = GRID_COLOR_DEFAULT;
+  try { col = localStorage.getItem(GRID_COLOR_KEY) || GRID_COLOR_DEFAULT; } catch (e) {}
+  $("#gridColorSelect").value = col;
+  if (!$("#gridColorSelect").value) { col = GRID_COLOR_DEFAULT; $("#gridColorSelect").value = col; }
+  applyGridColor(col);
+}
+
 /* ---------- Dynamic grid overlay (A1 top-left .. bottom-right) ---------- */
 function buildGrid() {
   const ov = $("#gridOverlay"); ov.innerHTML = "";
@@ -5633,6 +5676,7 @@ function applyPaperGrid() {
     + g.cols + "×" + g.rows + " (A1–" + colName(g.cols - 1) + g.rows
     + "), " + (GRID_CM[density] || "") + " cells.";
   refreshHighlights();
+  sizeCellLabels();        // NROWS changed — recompute the translucent label size
   applyZoom();             // grid dims changed — re-frame any active zoom
 }
 
@@ -5946,6 +5990,7 @@ function showPage(p) {
     img.style.display = "block";
     $("#gridOverlay").style.display = "grid";
     refreshHighlights();
+    sizeCellLabels();      // cell pixels are laid out now — size the labels to them
     applyZoom();           // re-frame once the new page's pixels are laid out
   };
 }
@@ -6174,7 +6219,14 @@ $("#gridSelect").addEventListener("change", () => {
   if ($("#gridSelect").value !== "legacy") dropLegacyOption();
   applyPaperGrid();
 });
+$("#gridColorSelect").addEventListener("change", () => {
+  const col = $("#gridColorSelect").value || GRID_COLOR_DEFAULT;
+  try { localStorage.setItem(GRID_COLOR_KEY, col); } catch (e) {}
+  applyGridColor(col);
+});
+window.addEventListener("resize", sizeCellLabels);  // labels track the cell size
 
+initGridColor();            // restore the per-device grid colour before building
 applyPaperGrid();           // build the initial (A4 compact 15×21) overlay + labels
 addSectionRow(DEFAULT_SECTION_NAME);  // new exams start with one section header
 addRow("Q1", "", "0-3");    // start with one empty question row ready to fill
