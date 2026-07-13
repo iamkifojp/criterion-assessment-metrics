@@ -5676,6 +5676,10 @@ EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
             border-radius:5px; width:26px; height:26px; padding:0; font-size:13px; }
   .rowbtn:hover { background:var(--btn-hover); color:var(--text); filter:none; }
   .rowbtn.del:hover { background:#d0556a; color:#fff; border-color:#d0556a; }
+  /* ✎ adjust button shares the swatch cell — keep it snug and aligned. */
+  .rowbtn.adj { width:22px; height:22px; font-size:12px; vertical-align:middle; }
+  .rowbtn.adj:hover { color:var(--accent); border-color:var(--accent); }
+  tr.focusrow .rowbtn.adj { background:var(--accent); color:#fff; border-color:var(--accent); }
   #actions { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
   #addRowBtns { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
   #procNote { margin-top:10px; font-size:12px; color:var(--muted); white-space:pre-wrap; }
@@ -6098,7 +6102,7 @@ function addRow(label = "", range = "", score = "") {
   const tr = document.createElement("tr");
   tr.dataset.rowtype = "question";
   tr.innerHTML = `
-    <td><span class="swatch"></span></td>
+    <td><span class="swatch"></span><button class="rowbtn adj" title="Adjust & re-slice this question">✎</button></td>
     <td><input class="qlabel" type="text" placeholder="Q?" value="" autocomplete="off"></td>
     <td><input class="qrange" type="text" placeholder="page1!A2:C5" value="" autocomplete="off"></td>
     <td><input class="qscore" type="text" placeholder="3" value="" autocomplete="off"></td>
@@ -6115,6 +6119,14 @@ function addRow(label = "", range = "", score = "") {
   // Clicking the colour swatch zooms the preview to this question's cells.
   tr.querySelector(".swatch").addEventListener("click", () =>
     zoomToRangeStr(tr.querySelector(".qrange").value.trim()));
+  // ✎ moves the focus-adjust to this question (from inside Exam Setup — no
+  // deep-link needed). enterFocusMode clears .focusrow from every other row,
+  // so clicking it while another question is focused just moves the focus.
+  tr.querySelector(".adj").addEventListener("click", () => {
+    const lbl = tr.querySelector(".qlabel").value.trim();
+    if (!lbl) { setStatus("Give this question a label before adjusting it."); return; }
+    enterFocusMode(lbl);
+  });
   tb.appendChild(tr);
   renumber();
 }
