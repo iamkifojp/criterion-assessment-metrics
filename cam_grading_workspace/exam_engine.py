@@ -40,6 +40,7 @@ import json
 import os
 import re
 import threading
+from collections import Counter
 
 from PIL import Image
 
@@ -273,6 +274,49 @@ def page_count(path):
     return 1
 
 
+def page_counts(students):
+    """{student: page_count} for a ``[(student, path)]`` list; None on unreadable.
+
+    Used by the setup screen's Students panel and process_exam's scan guard to
+    spot booklet scans whose page counts don't line up across the class.
+    """
+    out = {}
+    for student, path in students:
+        try:
+            out[student] = page_count(path)
+        except Exception:
+            out[student] = None
+    return out
+
+
+def scan_page_warnings(counts):
+    """Human-readable warnings for students off the majority page count.
+
+    ``counts`` is a ``{student: page_count|None}`` map (see ``page_counts``).
+    Returns one warning string per student whose count differs from the class
+    majority (the mode; ties resolve to the larger count). Empty when there are
+    fewer than two readable files or every file agrees — the common, healthy case.
+
+    This is the booklet-scan guard (Phase 5, D5): a folded booklet routinely
+    scans with a blank leading page (its back cover), which is harmless as long
+    as *every* student is scanned identically. One student scanned differently
+    shifts their pages and lands every crop on the wrong region **without**
+    erroring, so a page-count mismatch is the only cheap signal.
+    """
+    known = [c for c in counts.values() if isinstance(c, int)]
+    if len(known) < 2:
+        return []
+    freq = Counter(known)
+    top = max(freq.values())
+    majority = max(c for c, n in freq.items() if n == top)
+    warnings = []
+    for student in sorted(counts, key=str.lower):
+        c = counts[student]
+        if isinstance(c, int) and c != majority:
+            warnings.append(f"{student} · {c} page(s) ⚠ others have {majority}")
+    return warnings
+
+
 def load_page_image(path, page_number):
     """Return one page of a student file as a Pillow RGB image (1-based page).
 
@@ -359,7 +403,13 @@ def process_exam(config, output_root, progress=None, labels=None):
     # Count only gradable questions being sliced (the name box never counts).
     n_questions = sum(1 for lbl, _ in regions if lbl != NAME_BOX_DIR)
     summary = {"students": len(students), "questions": n_questions,
-               "crops": 0, "errors": []}
+               "crops": 0, "errors": [], "warnings": []}
+    # Booklet-scan consistency guard (Phase 5, D5): on a full run, flag any
+    # student whose PDF page count differs from the class majority before slicing
+    # shifts their crops silently. Skipped on a single-question re-slice
+    # (``labels`` given), which isn't a full pass and shouldn't re-open every PDF.
+    if labels is None:
+        summary["warnings"] = scan_page_warnings(page_counts(students))
     total = len(students)
 
     for done, (student, path) in enumerate(students, 1):
@@ -605,6 +655,20 @@ class ExamStore:
             raise ValueError("Program at least one question before saving.")
         # Every exam ends up with ≥1 section; questions get pinned to one (Phase 4B).
         sections = normalize_sections(config.get("sections"), questions)
+        # Display-only real-name map (Phase 5, D5): {file stem -> display name}.
+        # The stem stays the storage key everywhere — crops, the grades file and
+        # the export csv_key all key by stem — so these names are used ONLY for
+        # display in the grading tab and as the "Student Name" cell on export.
+        # Clean to a str->str map, trimming values and dropping empties; absent or
+        # malformed -> {} (full backward compatibility with pre-Phase-5 configs).
+        student_names = {}
+        raw_names = config.get("student_names")
+        if isinstance(raw_names, dict):
+            for stem, disp in raw_names.items():
+                stem = str(stem).strip()
+                disp = str(disp).strip()
+                if stem and disp:
+                    student_names[stem] = disp
         clean = {
             "name": name,
             "paper_size": config["paper_size"],
@@ -613,6 +677,7 @@ class ExamStore:
             "name_box": name_box,
             "sections": sections,
             "questions": questions,
+            "student_names": student_names,
         }
         with _LOCK:
             path = self._class_store_path(class_name, create=True)
