@@ -687,6 +687,24 @@ still keys on them and the export is byte-identical whether the toggle is on or
 off. Anonymity is bias-reduction, not blind review: the `key` still embeds the
 real id and the "↗ open" link still serves the real file.
 
+**Exam mode uses the same toggle but a YouMark-style presentation
+(Exam Grading Polish plan Phase 5, decision D6).** Assignments carry *one* seeded order for
+their whole payload; an exam is graded question-by-question, so a single stable
+order would let prejudice about "student 3" accumulate across questions. Instead
+the server side is minimal — when the toggle is on, `/api/exam/load` blanks every
+display `name` (`name: ""`) and sets `anonymous: true`, leaving `key` (the real
+stem) and `EXAM_STATE` untouched, so grading, crop serving and the CSV export
+stay real exactly as above. The **client** owns the order: a deterministic
+mulberry32 PRNG (`examSeededShuffle`) re-shuffles the roster with
+seed `class|exam|CURRENT_Q` and numbers papers by **position** — `01`, `02`, … —
+via one shared `examView()` that both the roster cards and the sheet rows iterate
+(so the two screens never disagree). The seed changes with the question, so the
+order is stable on reload but different for every question and the same student
+gets a different number each time — a progress counter, never an identity.
+Toggling the pref reloads an open exam just as it reloads an open assignment. Same
+residue caveat: the real `key` still rides the DOM/network and handwriting can
+identify a student.
+
 ### "Awaiting Grade" — a two-state rule on folder-backed work
 
 Window 3 shows every active assignment as editable mark(s) when scores exist.
