@@ -4544,12 +4544,165 @@ def restore_assignment(name: str) -> None:
     persist()
 
 
+def _read_json_dict(path: str) -> dict:
+    """Load a JSON object from ``path``; {} on any read/parse error or non-dict."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _atomic_write_json(path: str, data: dict) -> bool:
+    """Rewrite ``path`` via tmp+os.replace (last-writer-wins). True on success."""
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        return True
+    except OSError as e:
+        print(f"[exam purge] could not rewrite {path}: {e}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def _path_within(root: str, path: str) -> bool:
+    """True when ``path`` resolves inside ``root`` (both realpath-normalised).
+
+    Guards every delete in :func:`_purge_exam_cgw_artifacts` so a mangled exam
+    slug can never escape the class folder / crop roots and touch unrelated data.
+    """
+    try:
+        root_r = os.path.realpath(root)
+        return os.path.commonpath([root_r, os.path.realpath(path)]) == root_r
+    except (ValueError, OSError):
+        return False
+
+
+def _purge_exam_cgw_artifacts(name: str, classes) -> None:
+    """Delete the on-disk CGW artifacts of a permanently-deleted *exam* (D7).
+
+    Removes, per class the exam belonged to: the sliced crop tree (the Phase-6
+    cloud root AND the legacy app-local root), the exam's definition entry (the
+    portable per-class store AND the legacy app-local store), the
+    ``exam_grades_<exam>.json`` grading file, and the exported
+    ``<exam>_Grades_*.csv`` plus its ``.meta.json`` sidecar.
+
+    The exported CSV MUST go: CAM's watch-folder sync re-ingests any
+    ``*_Grades_*.csv`` it finds, so leaving it behind would resurrect the
+    "deleted" exam on the next sync.
+
+    The exam's real name is recovered by matching the assignment name (itself
+    derived from the CSV filename) against the stored exam names via the same
+    sanitize→clean round-trip the importer uses. No stored exam matches -> delete
+    nothing file-side (logged); the exam name is never guessed. Every delete is
+    scoped to an expected root (:func:`_path_within`) and tolerates missing
+    paths, so a half-migrated class simply skips whatever isn't there.
+    """
+    key = clean_assignment_name(_safe_dirname(name))
+    legacy_defs = os.path.join(GRADING_WORKSPACE_DIR, "gcg_exams.json")
+    legacy_all = _read_json_dict(legacy_defs)
+    legacy_classes = legacy_all.get("classes")
+    legacy_classes = legacy_classes if isinstance(legacy_classes, dict) else {}
+
+    for class_name in (classes or {""}):
+        class_folder = class_data_dir(class_name)          # <db>/<class>
+        cloud_crops = os.path.join(class_folder, "exam_crops")
+        legacy_crops = os.path.join(EXAM_CROPS_DIR,
+                                    _safe_dirname(class_name or "Unsorted"))
+        portable_defs = os.path.join(class_folder, "gcg_exams.json")
+        portable_all = _read_json_dict(portable_defs)
+        portable_exams = portable_all.get("exams")
+        portable_exams = portable_exams if isinstance(portable_exams, dict) else {}
+        legacy_exams = legacy_classes.get(class_name, {})
+        legacy_exams = legacy_exams if isinstance(legacy_exams, dict) else {}
+
+        # Match against the exam names in BOTH stores via the importer's round-trip.
+        matched = [ex for ex in (set(portable_exams) | set(legacy_exams))
+                   if clean_assignment_name(_safe_dirname(ex)) == key]
+        if not matched:
+            print(f"[exam purge] no stored exam matches assignment {name!r} "
+                  f"(key={key!r}) in class {class_name!r}; skipping file cleanup")
+            continue
+
+        for exam in matched:
+            slug = _safe_dirname(exam)   # mirrors exam_engine._safe_name on disk
+
+            # 1) Crop trees: cloud (Phase 6) + legacy app-local, both guarded.
+            for tree, guard in ((os.path.join(cloud_crops, slug), cloud_crops),
+                                (os.path.join(legacy_crops, slug), legacy_crops)):
+                if not os.path.isdir(tree):
+                    continue
+                if not _path_within(guard, tree):
+                    print(f"[exam purge] refused out-of-root crop path {tree}")
+                    continue
+                try:
+                    shutil.rmtree(tree)
+                    print(f"[exam purge] removed crops {tree}")
+                except OSError as e:
+                    print(f"[exam purge] could not remove crops {tree}: {e}")
+
+            # 2) Grading file in the class folder.
+            grades = os.path.join(class_folder, f"exam_grades_{slug}.json")
+            if os.path.isfile(grades) and _path_within(class_folder, grades):
+                try:
+                    os.remove(grades)
+                    print(f"[exam purge] removed grades {grades}")
+                except OSError as e:
+                    print(f"[exam purge] could not remove {grades}: {e}")
+
+            # 3) Exported CSV + .meta.json sidecar in the class folder. Exact
+            #    prefix + suffix; the only live wildcard is the date/counter tail.
+            pattern = os.path.join(glob.escape(class_folder),
+                                   glob.escape(f"{slug}_Grades_") + "*.csv")
+            for csv_path in glob.glob(pattern):
+                if not _path_within(class_folder, csv_path):
+                    print(f"[exam purge] refused out-of-root csv {csv_path}")
+                    continue
+                for p in (csv_path, csv_path + ".meta.json"):
+                    if not os.path.isfile(p):
+                        continue
+                    try:
+                        os.remove(p)
+                        print(f"[exam purge] removed {p}")
+                    except OSError as e:
+                        print(f"[exam purge] could not remove {p}: {e}")
+
+            # 4) Definition entry — portable per-class store (drop only this exam).
+            if exam in portable_exams:
+                portable_exams.pop(exam, None)
+                portable_all["exams"] = portable_exams
+                if _atomic_write_json(portable_defs, portable_all):
+                    print(f"[exam purge] dropped {exam!r} from {portable_defs}")
+
+            # 5) Definition entry — legacy app-local store (drop only this exam).
+            if exam in legacy_exams:
+                legacy_exams.pop(exam, None)
+                legacy_classes[class_name] = legacy_exams
+                legacy_all["classes"] = legacy_classes
+                if _atomic_write_json(legacy_defs, legacy_all):
+                    print(f"[exam purge] dropped {exam!r} from {legacy_defs}")
+
+
 def delete_assignment_permanent(name: str) -> None:
-    """Hard-delete: purge the assignment record AND every score it produced."""
+    """Hard-delete: purge the assignment record AND every score it produced.
+
+    For an **exam** assignment this also purges the grading workspace's on-disk
+    artifacts (crops, definition, grading file, exported CSV) via
+    :func:`_purge_exam_cgw_artifacts` — see decision D7."""
     # Remember which classes held this name before the records go, so the
     # cloud-sync registry rows below can be scoped to them.
     classes = {getattr(a, "class_name", "") for a in gb().assignments
                if a.name == name}
+    # Whether this assignment is an exam (checked before the records are dropped)
+    # decides if the CGW artifact purge below runs.
+    is_exam = any(getattr(a, "is_exam", False)
+                  for a in gb().assignments if a.name == name)
     gb().assignments = [a for a in gb().assignments if a.name != name]
     for student in gb():
         for crit, bucket in list(student.scores.items()):
@@ -4584,6 +4737,13 @@ def delete_assignment_permanent(name: str) -> None:
                  if rec.get("assignment") in (name, key)
                  and (not classes or rec.get("class") in classes)]:
         reg.pop(path, None)
+    # Phase 7 (D7): an exam also owns artifacts on disk in the grading workspace
+    # — sliced crops, the exam definition, the grading file, and the exported
+    # CSV. Purge them too, most importantly the CSV, which the watch-folder sync
+    # would otherwise re-ingest and resurrect the "deleted" exam. Normal
+    # assignments carry no such artifacts and skip this entirely.
+    if is_exam:
+        _purge_exam_cgw_artifacts(name, classes)
     persist()
 
 
@@ -6284,8 +6444,18 @@ def archived_dialog() -> None:
         st.caption("No archived assignments for this class. Deleting an "
                    "assignment from the table moves it here, where it can be "
                    "restored or purged.")
+    active = st.session_state["active_class"]
     for nm in archived:
         st.markdown(f"**{nm}**")
+        rec = next((a for a in gb().assignments
+                    if a.name == nm and getattr(a, "class_name", "") == active),
+                   None)
+        if bool(getattr(rec, "is_exam", False)):
+            # D7: a permanent delete of an exam also purges its grading-workspace
+            # artifacts. Spell that out so the teacher knows the crops and the
+            # exported CSV go with it (the CSV must, or the sync re-ingests it).
+            st.caption("🗑 Also deletes the sliced answer images, exam "
+                       "definition, grading file and exported CSV for this exam.")
         cc = st.columns([1, 1, 1.4], vertical_alignment="center")
         if cc[0].button("Restore", key=f"arch_res_{nm}"):
             restore_assignment(nm)

@@ -6,6 +6,41 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-13 — Permanent delete of an exam purges its grading-workspace artifacts
+
+**Symptom** (Phase 7 of
+[EXAM_GRADING_POLISH_PLAN.md](EXAM_GRADING_POLISH_PLAN.md), decision D7) —
+deleting an exam assignment in Window 1 and purging it from the Archived dialog
+left its sliced crops on disk and, worse, left the exported `*_Grades_*.csv` in
+the class folder, which the watch-folder sync would re-ingest — resurrecting the
+"deleted" exam on the next sync.
+
+- **`delete_assignment_permanent(name)`** now checks `is_exam` (before the
+  records are dropped) and, for an exam, calls the new
+  **`_purge_exam_cgw_artifacts(name, classes)`**. Normal assignments carry no
+  such artifacts and skip it entirely.
+- **What it removes, per class the exam belonged to:** the sliced crop tree
+  (`<cloud>/<class>/exam_crops/<exam>/` **and** the legacy
+  `cam_grading_workspace/exam_crops/<class>/<exam>/`), the exam's definition
+  entry in both the portable per-class `<cloud>/<class>/gcg_exams.json` and the
+  legacy app-local `gcg_exams.json` (rewritten without that one entry — never
+  the whole file), the `exam_grades_<exam>.json` grading file, and the exported
+  `<exam>_Grades_*.csv` **plus its `.meta.json` sidecar**.
+- **Never guesses.** The exam's real name is recovered by matching the
+  assignment name (itself derived from the CSV filename) against the stored exam
+  names via the same sanitize→clean round-trip the importer uses
+  (`clean_assignment_name(_safe_dirname(...))`). No stored exam matches → nothing
+  is deleted file-side (logged).
+- **Guarded + tolerant.** Every delete is scoped to its expected root
+  (`_path_within`, realpath-normalised) so a mangled slug can never escape, and
+  missing paths are skipped — a half-migrated class simply cleans up whatever is
+  present. Definition rewrites are atomic (`.tmp`+`os.replace`).
+- **UX.** The Archived dialog now captions exam rows: "Also deletes the sliced
+  answer images, exam definition, grading file and exported CSV for this exam."
+  Restore is unaffected — only "Delete permanently" triggers the purge.
+
+---
+
 ## 2026-07-13 — Portable exam data: crops + definitions into the class folder
 
 **What this adds** (Phase 6 of
