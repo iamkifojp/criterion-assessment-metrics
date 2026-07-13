@@ -6,6 +6,53 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — Exam CSVs route through roster identity + name-crop matcher
+
+**What this changes** (Phase 4 of
+[EXAM_IDENTITY_AND_BANDING_PLAN.md](EXAM_IDENTITY_AND_BANDING_PLAN.md)) — the
+correctness half of the exam identity work, in `engine/ingestion.py` + CAM
+`app.py` (D6).
+
+- **Exam ingest routes (engine).** `ingest_exam_csv` treated the "Student Name"
+  cell (a PDF filename stem) as a student id, minting a phantom student per
+  unmatched row — the roster student then showed the exam as missing forever.
+  It now takes the same optional routing inputs as `ingest_csv` (`roster_keys`,
+  `aliases`, `unmatched_out`, `auto_aliases_out`) and routes every row through
+  the shared `resolve_identity` pipeline (exact → durable alias → unambiguous
+  prefix → pool). Matched rows attach their `ExamResult` to the roster student
+  (the `chosen` carry-forward is keyed on the *resolved* student, so
+  alias-routed re-syncs keep teacher resolutions); unmatched rows pool as
+  exam-flavoured rows (`is_exam: True` + `questions`/`total`/`max_total`/
+  `comment`, sheet-wide and sidecar max backfilled). No roster → byte-identical
+  legacy behaviour.
+- **Sync caller (CAM).** `_ingest_cloud_file` passes the routing inputs to the
+  exam branch too; the existing purge-replace pool rebuild and auto-alias
+  recording fire for exams unchanged. The "Exam CSVs never route" note dies.
+- **Visual matching.** A pooled exam row surfaces in the same Window-2 missing
+  popup 🧩 matcher as assignment works. Its tile shows the script's
+  handwritten **name-box crop** (fallback: the first question crop found on
+  disk; final fallback a filename tile) captioned `stem · 31/45` (raw total).
+  Assigning writes the durable alias and materialises an `ExamResult` under the
+  roster student via the new `materialize_exam_row` (the exam sibling of
+  `materialize_row`, preserving prior `chosen` picks) — re-syncs then route
+  silently via the alias.
+- **Name-crop dual-root fix.** `exam_name_crop_path` / `exam_has_name_crops`
+  only checked the legacy app-local `cam_grading_workspace/exam_crops/…` root,
+  so cloud-backed classes (crops under `<class folder>/exam_crops/…` since the
+  slicer-v2 plan's Phase 6) lost the Window-1 mis-named-script preview. Both
+  helpers (and the new `exam_crop_path`) now resolve cloud-root-first with the
+  legacy root as fallback, mirroring the exam-delete purge. Also fixed
+  `_cgw_safe_name`'s sanitizer drift (it was missing `\` and `/` versus CGW's
+  `_safe_name`).
+- **Phantom cleanup.** On a routed exam ingest (roster classes only), students
+  who are on no class's roster (active or archived) and hold no scores and no
+  exam results — the phantoms earlier unrouted exam ingests minted — are
+  removed and reported in the sync summary.
+- Covered by `tests/test_exam_identity.py` (routing, pooling, materialise,
+  phantom sweep, dual-root crops, end-to-end scoped sync).
+
+---
+
 ## 2026-07-14 — CGW exam tab discipline + Process-All crop refresh
 
 **What this changes** (Phase 2 of

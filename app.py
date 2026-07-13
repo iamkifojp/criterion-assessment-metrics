@@ -128,9 +128,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GRADING_WORKSPACE_DIR = os.path.join(BASE_DIR, "cam_grading_workspace")
 GRADING_PORT = 5001
 
-# CGW slices exam pages into exam_crops/<class>/<exam>/<Q or __name__>/<student>.png
-# beside its own app.py. CAM reads those crops read-only (e.g. Window 1's exam
-# analytics name-crop preview, Phase 5E). The reserved __name__ dir holds the
+# CGW slices exam pages into <cloud class folder>/exam_crops/<exam>/<Q or
+# __name__>/<student>.png (the Phase-6 cloud root) — older installs used an
+# exam_crops/<class>/... tree beside CGW's own app.py (the legacy root). CAM
+# reads those crops read-only (e.g. Window 1's exam analytics name-crop preview,
+# the Window 2 exam matcher) and, like the exam-delete purge, resolves against
+# BOTH roots: cloud first, legacy fallback. The reserved __name__ dir holds the
 # optional handwritten-name box crop.
 EXAM_CROPS_DIR = os.path.join(GRADING_WORKSPACE_DIR, "exam_crops")
 EXAM_NAME_BOX_DIR = "__name__"
@@ -140,22 +143,42 @@ def _cgw_safe_name(name: str) -> str:
     """Mirror of ``cam_grading_workspace/exam_engine._safe_name`` — the on-disk
     slug CGW uses for class / exam / label / student path segments. Kept in sync
     so CAM can resolve a crop's path from the same class/exam/student strings."""
-    return re.sub(r'[\*?:"<>|]', "_", str(name or "").strip()).strip() or "Unnamed"
+    return re.sub(r'[\\/*?:"<>|]', "_", str(name or "").strip()).strip() or "Unnamed"
+
+
+def _exam_crop_dirs(class_name: str, exam_name: str) -> list:
+    """The exam's candidate crop-tree roots, cloud (Phase 6) first, legacy
+    app-local second — mirroring the dual-root resolution the exam-delete purge
+    (:func:`_purge_exam_cgw_artifacts`) already does."""
+    slug = _cgw_safe_name(exam_name)
+    return [
+        os.path.join(class_data_dir(class_name), "exam_crops", slug),
+        os.path.join(EXAM_CROPS_DIR, _cgw_safe_name(class_name or "Unsorted"),
+                     slug),
+    ]
+
+
+def exam_crop_path(class_name: str, exam_name: str, label: str,
+                   student_key: str) -> str:
+    """Absolute path to one student's crop for ``label`` (a question label or
+    the reserved ``__name__`` box), or "" when none exists under either root."""
+    for d in _exam_crop_dirs(class_name, exam_name):
+        p = os.path.join(d, _cgw_safe_name(label),
+                         _cgw_safe_name(student_key) + ".png")
+        if os.path.isfile(p):
+            return p
+    return ""
 
 
 def exam_name_crop_path(class_name: str, exam_name: str, student_key: str) -> str:
     """Absolute path to a student's name-box crop, or "" when none exists."""
-    p = os.path.join(EXAM_CROPS_DIR, _cgw_safe_name(class_name or "Unsorted"),
-                     _cgw_safe_name(exam_name), EXAM_NAME_BOX_DIR,
-                     _cgw_safe_name(student_key) + ".png")
-    return p if os.path.isfile(p) else ""
+    return exam_crop_path(class_name, exam_name, EXAM_NAME_BOX_DIR, student_key)
 
 
 def exam_has_name_crops(class_name: str, exam_name: str) -> bool:
     """True when CGW sliced a name box for this exam (a __name__ crop dir)."""
-    d = os.path.join(EXAM_CROPS_DIR, _cgw_safe_name(class_name or "Unsorted"),
-                     _cgw_safe_name(exam_name), EXAM_NAME_BOX_DIR)
-    return os.path.isdir(d)
+    return any(os.path.isdir(os.path.join(d, EXAM_NAME_BOX_DIR))
+               for d in _exam_crop_dirs(class_name, exam_name))
 
 # Window-2 unmatched-work thumbnails (Phase 4). Rendered first-page/image PNGs
 # are disk-cached here, keyed by source path + mtime + width, so re-opening the
@@ -4355,7 +4378,14 @@ def _ingest_cloud_file(path: str, fname: str, class_name: str,
     scores); fast-path prefix matches are recorded into the durable
     ``work_aliases[class]`` and announced on ``summary`` when one is given. A
     rosterless class skips all of this (legacy behaviour — the score-only
-    folder-graded-before-roster path stays intact). Exam CSVs never route."""
+    folder-graded-before-roster path stays intact).
+
+    **Exam CSVs route too (Phase 4, exam identity plan).** An exam export's
+    ``Student Name`` is a PDF filename stem, so it flows through the identical
+    resolution via :meth:`IngestionPipeline.ingest_exam_csv`; unmatched rows
+    pool as exam-flavoured rows (``is_exam: True``) for the Window-2 matcher,
+    and — roster classes only — phantom students an earlier unrouted exam
+    ingest minted are swept once they hold no scores and no exam results."""
     # The export names files "<assignment>_Grades_<deadline>.csv"; trim the
     # Grades tag and trailing date so the timeline shows just the clean name
     # (an embedded "(Crit X)" hint is preserved for criterion detection).
@@ -4395,14 +4425,21 @@ def _ingest_cloud_file(path: str, fname: str, class_name: str,
     aliases = dict(st.session_state["work_aliases"].get(class_name, {}))
     unmatched: list = []
     auto_aliases: dict = {}
+    is_exam_file = False
     try:
         # Exam exports (item-level, raw marks) route to the exam pipeline; the
         # header decides — a "Total Score" column marks a CAM exam CSV.
         with open(path, "r", encoding="utf-8-sig", newline="") as fh:
             header = [h.strip() for h in (next(csv.reader(fh), []) or [])]
-        if is_exam_csv(header):
+        is_exam_file = is_exam_csv(header)
+        if is_exam_file:
             created = IngestionPipeline(gb()).ingest_exam_csv(
-                path, assignment=assignment)
+                path, assignment=assignment,
+                roster_keys=roster_keys or None,
+                aliases=aliases or None,
+                unmatched_out=unmatched,
+                auto_aliases_out=auto_aliases,
+            )
         else:
             created = IngestionPipeline(gb()).ingest_csv(
                 path, assignment=assignment, manual_criterion_target=target,
@@ -4435,6 +4472,37 @@ def _ingest_cloud_file(path: str, fname: str, class_name: str,
                         f"🔗 {assignment}: matched `{ck}` → {rk} by prefix "
                         f"(recorded as an alias).")
 
+    # Phantom cleanup (exam identity plan, Phase 4): earlier UNROUTED exam
+    # ingests minted a student per raw "Student Name" stem (e.g.
+    # `https___smiletutor.sg…`). Now that this exam re-ingested routed, those
+    # phantoms hold nothing — the purge-replace above stripped their exam
+    # result — so sweep any student who is on NO class's roster and holds no
+    # scores and no exam results. Roster-keyed classes only (a rosterless
+    # class's students ARE its raw-id students), and the emptiness test keeps
+    # every real student from any class safe.
+    if is_exam_file and roster_keys:
+        all_roster_keys = {e.get("key")
+                           for entries in st.session_state["rosters"].values()
+                           for e in (entries or []) if e.get("key")}
+        # Soft-removed students stay protected too — Restore expects their
+        # gradebook record (name/gender) to still be there.
+        all_roster_keys |= {
+            e.get("key")
+            for entries in st.session_state["archived_students"].values()
+            for e in (entries or []) if e.get("key")}
+        phantoms = [sid for sid, s in gb().students.items()
+                    if sid not in all_roster_keys
+                    and not any(s.scores.values())
+                    and not getattr(s, "exam_results", {})]
+        for sid in phantoms:
+            del gb().students[sid]
+        if phantoms and summary is not None:
+            summary["messages"].append(
+                f"🧹 {assignment}: removed {len(phantoms)} phantom student "
+                f"record(s) minted by earlier exam ingests "
+                f"({', '.join(sorted(phantoms)[:5])}"
+                f"{', …' if len(phantoms) > 5 else ''}).")
+
     _ensure_class(class_name)
     if gb().assignments:
         gb().assignments[-1].class_name = class_name
@@ -4452,11 +4520,14 @@ def assign_work(class_name: str, assignment: str, csv_key: str,
 
     Writes the durable alias ``csv_key → roster_key`` — so every later re-sync of
     this assignment routes the work the same way, surviving Sync's purge-replace
-    — then immediately re-materializes the pooled row's score(s) under
-    ``roster_key`` through the SAME engine path a routed ingest uses
-    (:meth:`IngestionPipeline.materialize_row`), removes the row from the pool,
-    and persists. Returns ``True`` on success, ``False`` when the pooled row is
-    gone (already assigned, or the pool was rebuilt by a fresh sync).
+    — then immediately re-materializes the pooled row under ``roster_key``
+    through the SAME engine path a routed ingest uses
+    (:meth:`IngestionPipeline.materialize_row` for score rows,
+    :meth:`IngestionPipeline.materialize_exam_row` for ``is_exam`` rows, which
+    attach an :class:`ExamResult` instead of CriterionScores), removes the row
+    from the pool, and persists. Returns ``True`` on success, ``False`` when the
+    pooled row is gone (already assigned, or the pool was rebuilt by a fresh
+    sync).
 
     The grade lives in the CSV/pool, not the source file, so a work whose file
     was deleted after export (a sanctioned workflow) still assigns."""
@@ -4469,8 +4540,11 @@ def assign_work(class_name: str, assignment: str, csv_key: str,
     #    re-sync always routes this csv_key to the roster student.
     st.session_state["work_aliases"].setdefault(
         class_name, {})[csv_key] = roster_key
-    # 2. Re-materialize the pooled score(s) under the roster student now.
-    IngestionPipeline(gb()).materialize_row(assignment, roster_key, row)
+    # 2. Re-materialize the pooled row under the roster student now.
+    if row.get("is_exam"):
+        IngestionPipeline(gb()).materialize_exam_row(assignment, roster_key, row)
+    else:
+        IngestionPipeline(gb()).materialize_row(assignment, roster_key, row)
     # 3. Drop it from the pool; prune an emptied assignment / class.
     pool_map[assignment] = [r for r in rows if r.get("csv_key") != csv_key]
     if not pool_map[assignment]:
@@ -7372,12 +7446,47 @@ def _work_thumbnail(row: dict, folder_ref: str, width: int):
     return png, ""
 
 
-def _work_caption(row: dict) -> str:
-    """The tile's secondary filename caption — the newest listed file's basename.
+def _exam_pool_thumbnail(cls: str, assignment: str, row: dict, width: int,
+                         question_labels: list):
+    """``(png_bytes | None, note)`` for one pooled *exam* row at ``width``.
 
-    Filenames here are meaningless camera-roll noise (that's the whole reason
-    the work is unmatched), so this is a hint under the image, never the
-    identification channel."""
+    The identification channel is the handwritten **name-box crop** CGW sliced
+    for this script (the same crop Window 1's mis-named-script preview shows);
+    an exam programmed without a name box falls back to the first question's
+    crop that survives on disk (same directory layout). ``None`` + note when no
+    crop exists under either root — the tile then identifies by filename stem
+    alone."""
+    key = row.get("csv_key", "")
+    path = exam_name_crop_path(cls, assignment, key)
+    if not path:
+        for lbl in question_labels:
+            path = exam_crop_path(cls, assignment, lbl, key)
+            if path:
+                break
+    if not path:
+        return None, "No crop on disk for this script."
+    png = _render_work_png(path, width)
+    if png is None:
+        return None, "Crop could not be rendered."
+    return png, ""
+
+
+def _work_caption(row: dict) -> str:
+    """The tile's secondary caption.
+
+    Assignment rows: the newest listed file's basename. Filenames here are
+    meaningless camera-roll noise (that's the whole reason the work is
+    unmatched), so this is a hint under the image, never the identification
+    channel.
+
+    Exam rows: the PDF filename stem (the exam's storage key) plus the raw
+    total (``31/45``) — the exam counterpart of a grade caption."""
+    if row.get("is_exam"):
+        stem = (row.get("csv_key") or "").strip() or "(no filename)"
+        total = row.get("total")
+        mx = row.get("max_total") or 0
+        raw = f"{total}/{mx}" if mx else f"{total}"
+        return f"{stem} · {raw}"
     first = (row.get("files", "") or "").split(";")[0].strip()
     return first or "(no filename)"
 
@@ -7409,13 +7518,32 @@ def match_works_dialog(student_key: str, assignment: str) -> None:
                     if a.name == assignment
                     and getattr(a, "class_name", "") == cls), None)
     folder_ref = getattr(asg_rec, "folder_ref", "") if asg_rec else ""
+    # Exam pools (Phase 4, exam identity plan): the thumbnail is the name-box
+    # crop (fallback: a question crop), not a folder-ref render. One pool is
+    # one CSV, so its rows are uniformly exam or not.
+    q_labels = list(getattr(asg_rec, "question_labels", []) or []) \
+        if asg_rec else []
+    is_exam_pool = any(r.get("is_exam") for r in pool)
+
+    def _pool_thumbnail(row, width):
+        if row.get("is_exam"):
+            return _exam_pool_thumbnail(cls, assignment, row, width,
+                                        q_labels or
+                                        list(row.get("questions") or {}))
+        return _work_thumbnail(row, folder_ref, width)
 
     st.markdown(
         f"**{assignment}** — pick **{first}**'s submission from the "
         f"{len(pool)} unmatched work(s) below.")
-    st.caption("Filenames here are camera-roll noise — identify by the image. "
-               "Click ⤢ to enlarge a work (to read a handwritten name), then "
-               f"“This is {first}’s work” to assign it.")
+    if is_exam_pool:
+        st.caption("Each tile shows the script's handwritten name box (or a "
+                   "question crop) with its filename stem and raw total. "
+                   "Click ⤢ to enlarge, then "
+                   f"“This is {first}’s work” to assign it.")
+    else:
+        st.caption("Filenames here are camera-roll noise — identify by the "
+                   "image. Click ⤢ to enlarge a work (to read a handwritten "
+                   f"name), then “This is {first}’s work” to assign it.")
     if not pool:
         st.success("No unmatched works remain for this assignment.")
         return
@@ -7431,8 +7559,7 @@ def match_works_dialog(student_key: str, assignment: str) -> None:
                      width="stretch"):
             st.session_state.pop(ekey, None)
             st.rerun(scope="fragment")
-        png, note = _work_thumbnail(enlarged_row, folder_ref,
-                                    THUMB_ENLARGE_WIDTH)
+        png, note = _pool_thumbnail(enlarged_row, THUMB_ENLARGE_WIDTH)
         if png is not None:
             st.image(png, width="stretch")
         else:
@@ -7459,8 +7586,7 @@ def match_works_dialog(student_key: str, assignment: str) -> None:
             ck = row.get("csv_key", "")
             with col:
                 with st.container(border=True):
-                    png, note = _work_thumbnail(row, folder_ref,
-                                                THUMB_GRID_WIDTH)
+                    png, note = _pool_thumbnail(row, THUMB_GRID_WIDTH)
                     if png is not None:
                         st.image(png, width="stretch")
                     else:

@@ -714,6 +714,59 @@ class IngestionPipeline:
             timestamp, bool(pool_row.get("late")), created)
         return created
 
+    def _carry_forward_chosen(self, target_sid: str,
+                              result: ExamResult) -> None:
+        """Copy the prior result's teacher choice-section picks onto ``result``.
+
+        Shared by :meth:`ingest_exam_csv`'s per-row loop and
+        :meth:`materialize_exam_row` so a re-ingest and a Window-2 match
+        preserve resolutions identically. Only picks whose labels the fresh
+        result still has a mark for survive."""
+        prev = self.gradebook.students.get(target_sid)
+        prev_result = (prev.exam_results.get(result.assignment)
+                       if prev is not None else None)
+        if prev_result is not None and prev_result.chosen:
+            for sec_name, picks in prev_result.chosen.items():
+                kept = [lbl for lbl in picks if lbl in result.questions]
+                if kept:
+                    result.chosen[str(sec_name)] = kept
+
+    def materialize_exam_row(self, assignment: str, target_sid: str,
+                             pool_row: dict) -> ExamResult:
+        """Re-create the :class:`ExamResult` for one pooled *unmatched* exam row
+        under ``target_sid``.
+
+        ``pool_row`` is an ``is_exam`` dict :meth:`ingest_exam_csv` appended to
+        its ``unmatched_out`` collection — the exam sibling of
+        :meth:`materialize_row`. Builds the same result a routed ingest would
+        (including the ``chosen`` carry-forward for still-answered labels, so a
+        prior resolution made under the roster key survives a re-match) and
+        attaches it to the roster student. Returns the result created."""
+        questions: Dict[str, int] = {}
+        for lbl, val in (pool_row.get("questions") or {}).items():
+            try:
+                questions[str(lbl)] = max(0, int(val))
+            except (TypeError, ValueError):
+                continue
+        try:
+            total = max(0, int(pool_row.get("total")))
+        except (TypeError, ValueError):
+            total = sum(questions.values())
+        try:
+            max_total = max(0, int(pool_row.get("max_total") or 0))
+        except (TypeError, ValueError):
+            max_total = 0
+        result = ExamResult(
+            assignment=assignment,
+            total=total,
+            max_total=max_total,
+            questions=questions,
+            comment=str(pool_row.get("comment") or ""),
+        )
+        self._carry_forward_chosen(target_sid, result)
+        self.gradebook.get_or_create(target_sid).exam_results[assignment] = result
+        return result
+
     def ingest_exam_csv(
         self,
         path: str,
@@ -721,6 +774,10 @@ class IngestionPipeline:
         *,
         id_column: str = "Student Name",
         ingest_time: Optional[datetime] = None,
+        roster_keys: Optional[set] = None,
+        aliases: Optional[Dict[str, str]] = None,
+        unmatched_out: Optional[List[dict]] = None,
+        auto_aliases_out: Optional[Dict[str, str]] = None,
     ) -> List[ExamResult]:
         """Ingest a CAM item-level exam export (raw marks, off the 0-8 scale).
 
@@ -731,12 +788,31 @@ class IngestionPipeline:
         student a 0-8 band (the Window 1 exam-banding dropdown), which then
         enters the gradebook as an ordinary ``CriterionScore``. Returns the
         results created.
-        """
+
+        **Roster-aware identity routing (opt-in, backward-compatible).** The
+        exam CSV's ``Student Name`` cell is a PDF filename stem, not a roster
+        id, so an unrouted ingest mints a phantom student per unmatched row.
+        When ``roster_keys`` is a non-empty set, each row is routed through the
+        same :func:`resolve_identity` pipeline as :meth:`ingest_csv` (exact →
+        alias → unambiguous prefix → unmatched) — never a phantom:
+
+        * matched rows attach their :class:`ExamResult` to the *resolved*
+          roster student (the ``chosen`` carry-forward is keyed on it too);
+        * unmatched rows append an exam-flavoured pool row to
+          ``unmatched_out`` — the assignment path's ``csv_key`` field plus
+          ``is_exam: True``, ``questions``, ``total``, ``max_total`` and
+          ``comment`` (everything :meth:`materialize_exam_row` needs);
+        * fast-path prefix matches record ``{csv_key: roster_key}`` into
+          ``auto_aliases_out`` for the caller to persist.
+
+        With ``roster_keys`` falsy (the default) none of this runs and every
+        row is ingested under its raw id exactly as before."""
         ingest_time = ingest_time or datetime.now()
         created: List[ExamResult] = []
         max_total = 0
         labels: List[str] = []
         exam_date: Optional[datetime] = None
+        pool_start = len(unmatched_out) if unmatched_out is not None else 0
 
         with open(path, "r", encoding="utf-8-sig", newline="") as fh:
             reader = csv.DictReader(fh)
@@ -766,33 +842,61 @@ class IngestionPipeline:
                 max_total = max(max_total, row_max)
                 if exam_date is None and date_column:
                     exam_date = parse_iso_date(row.get(date_column))
+                comment = (row.get("Comment") or "").strip()
+
+                # Identity routing (skipped entirely when roster_keys is falsy →
+                # legacy: target is the raw id and nothing pools).
+                target = sid
+                if roster_keys:
+                    target, auto_alias = resolve_identity(sid, roster_keys,
+                                                          aliases)
+                    if target is None:
+                        # Unmatched → pool an exam-flavoured row for visual
+                        # matching (never mint a phantom student). Every exam
+                        # row is a real script (CGW writes one per student
+                        # PDF), so unlike the grade-less assignment rows there
+                        # is no "carried nothing" skip.
+                        if unmatched_out is not None:
+                            unmatched_out.append({
+                                "csv_key": sid,
+                                "is_exam": True,
+                                "questions": dict(questions),
+                                "total": total,
+                                "max_total": row_max,
+                                "comment": comment,
+                            })
+                        continue
+                    if auto_alias is not None and auto_aliases_out is not None:
+                        auto_aliases_out[sid] = auto_alias
 
                 result = ExamResult(
                     assignment=assignment,
                     total=total,
                     max_total=row_max,
                     questions=questions,
-                    comment=(row.get("Comment") or "").strip(),
+                    comment=comment,
                 )
                 # Preserve teacher choice-section resolutions across re-ingest
                 # (purge-replace must not wipe them — same spirit as the Late
                 # reconcile). Carry forward only picks whose labels the student
-                # still has a mark for in the fresh CSV.
-                prev = self.gradebook.students.get(sid)
-                prev_result = (prev.exam_results.get(assignment)
-                               if prev is not None else None)
-                if prev_result is not None and prev_result.chosen:
-                    for sec_name, picks in prev_result.chosen.items():
-                        kept = [lbl for lbl in picks if lbl in result.questions]
-                        if kept:
-                            result.chosen[str(sec_name)] = kept
-                self.gradebook.get_or_create(sid).exam_results[assignment] = result
+                # still has a mark for in the fresh CSV — keyed on the RESOLVED
+                # student, so an alias-routed re-sync finds the picks made
+                # under the roster key.
+                self._carry_forward_chosen(target, result)
+                self.gradebook.get_or_create(target).exam_results[assignment] = result
                 created.append(result)
 
-        # Backfill the sheet-wide max onto rows whose Max Total cell was blank.
+        # Backfill the sheet-wide max onto rows whose Max Total cell was blank —
+        # pooled unmatched rows included, so a later materialization carries the
+        # same max a routed ingest would have.
+        new_pool = (unmatched_out[pool_start:]
+                    if unmatched_out is not None else [])
         for r in created:
             if not r.max_total:
                 r.max_total = max_total
+        for pr in new_pool:
+            if not pr.get("max_total"):
+                pr["max_total"] = max_total
 
         # Definition sidecar (Phase 5B): when CGW dropped a <csv>.meta.json,
         # attach its section structure and recompute every result's max via the
@@ -803,6 +907,8 @@ class IngestionPipeline:
             section_total_max = sum(section_max(s) for s in sections)
             for r in created:
                 r.max_total = section_total_max
+            for pr in new_pool:
+                pr["max_total"] = section_total_max
             max_total = section_total_max
 
         self.gradebook.register_assignment(
