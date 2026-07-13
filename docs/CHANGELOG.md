@@ -42,6 +42,96 @@ reduction, not blind review.
 
 ---
 
+## 2026-07-13 — Exam grading sheet: current question only + keyword checklist
+
+**What this adds** (Phase 4 of
+[EXAM_GRADING_POLISH_PLAN.md](EXAM_GRADING_POLISH_PLAN.md), decisions D3/D4) — the
+exam grading sheet was a wide matrix with a running Total; a teacher live-testing
+it noted the visible total biases grading while later questions are still
+unmarked, and that exams had no keyword shortcuts the way assignments do. The
+sheet is now one question at a time with **no running totals anywhere in the
+grading UI**, and the keyword checklist works in exam mode.
+
+- **Single-question sheet, no totals (D3).** `renderExamTable`/`makeExamRow`
+  render only `Student | <current question> | Keywords | Comment`; the ✎ adjust
+  button stays in the question header, and switching `#questionSelect`
+  re-renders. Every running total is gone: the sheet's Total column, the
+  roster-card "total X/M" sub-line (now "N/M questions" progress, or
+  "ungraded"), and the "N marks total" status line. `examTotal`/`examMaxTotal`
+  and their `td.qtotal` CSS were deleted — totals live only in the CSV export +
+  CAM. The saved-grades shape is unchanged (scores still keyed per label; the
+  sheet just shows one column at a time).
+- **Keyword checklist in exam mode (D4).** `#kwEditor` is no longer hidden in
+  `loadExam`; the editable pill editor drives exams too. Persistence rides the
+  exam grades file — new shape `{"checklist":[{label,type},…], "students":{…}}`
+  in `exam_grades_<exam>.json`: `load_exam_grades` now returns
+  `(students, checklist)` and `save_exam_grades` round-trips the checklist
+  (missing key → the D4 default template via `default_exam_checklist`;
+  `normalize_exam_checklist` mirrors `_normalize_checklist`). Each exam student
+  gained `keywords` beside `scores`/`comment` (default `[]`). Comment
+  composition reuses the assignment `autoComment` helper verbatim.
+  `/api/exam/grade` accepts + persists `keywords`; new `/api/exam/checklist`
+  persists rubric edits.
+- **CSV export.** Appends a `Checked Keywords` column (semicolon-joined) before
+  `Comment`, matching the assignment CSV convention. ACM's exam ingest already
+  reserves that header (`engine/ingestion.py` `_EXAM_RESERVED`), so questions
+  still resolve to Q-columns only.
+
+**Backward-compat:** old `exam_grades_<exam>.json` files without a `checklist`
+key load fine (default template) and without per-student `keywords` default to
+`[]`; scores are untouched. The D4 default template is `illegible handwriting`,
+`more explanation needed`, `wrong format`, `incomplete answer`,
+`check calculations` (all type "growth"), editable per exam.
+
+---
+
+## 2026-07-13 — Exam Setup: fit-width / fit-page toggle
+
+**What this adds** (Phase 3 of
+[EXAM_GRADING_POLISH_PLAN.md](EXAM_GRADING_POLISH_PLAN.md)) — the Exam Setup left
+pane only ever fit the page to the pane *width*, so a tall scanned page ran off
+the bottom and the teacher had to scroll to place the grid. A persistent toggle
+now switches between fit-width and whole-page-visible.
+
+- **Fit toggle.** A persistent `#fitToggleBtn` (revealed once a page loads)
+  cycles `↔ Fit width` / `⤢ Fit page`; the choice is stored per device in
+  `localStorage["gcg_fit_mode"]` (default fit-width, today's behaviour).
+- **Fit page.** Adds `.fitpage` to `#pageWrap` (flex-centred) under which
+  `#pageImg { width:auto; max-height:calc(100vh - 150px) }`, so the whole page
+  is visible in the pane. The grid overlay is `inset:0`, so it follows
+  automatically; the Phase 1 label sizing + `applyZoom` re-run on toggle because
+  the cell pixel size changes.
+- **Zoom interaction.** Swatch-/focus-zoom still works in either fit mode (it's
+  a transform on `#pageZoom`). The old restore-view button was repurposed into a
+  separate `✕ Reset zoom` button (still `#zoomToggleBtn`, shown only while a
+  `ZOOM_RANGE` is active); the fit toggle also clears any active zoom.
+
+**Backward-compat:** purely a programming-time view preference — no change to
+saved exam definitions, crops, or grades.
+
+---
+
+## 2026-07-13 — Exam Setup: form ergonomics (Section: label + Max mark entry)
+
+**What this adds** (Phase 2 of
+[EXAM_GRADING_POLISH_PLAN.md](EXAM_GRADING_POLISH_PLAN.md)) — two small setup-form
+snags from live testing: the pre-filled "All Questions" default hid the section
+box's placeholder so teachers didn't know what it was for, and the `0-3` score
+placeholder invited teachers to type a range when only the max mark is needed.
+
+- **Section rows.** `addSectionRow` now shows a visible `Section:` text label
+  (new `.seclabel` style) before the name input; the `§` swatch is kept.
+- **Max mark entry.** The question column header `Score` → `Max mark`, the
+  placeholder/default `0-3` → `3`, `loadExamConfig` fills the raw `q.max` (not
+  `"0-" + q.max`), and the hint reads "Max mark is the highest score, e.g. **3**."
+
+**Backward-compat:** the backend `parse_max_score` is untouched — it still
+accepts both `3` and `0-3`, so old-style typing keeps working. Displays that
+legitimately show a range (the question dropdown's "(0–3)", the sheet header)
+are unchanged.
+
+---
+
 ## 2026-07-13 — Exam Setup: grid colour picker + big translucent cell labels
 
 **What this adds** (Phase 1 of
