@@ -6,6 +6,31 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — CGW exam tab discipline + Process-All crop refresh
+
+**What this changes** (Phase 2 of
+[EXAM_IDENTITY_AND_BANDING_PLAN.md](EXAM_IDENTITY_AND_BANDING_PLAN.md)) — all in
+`cam_grading_workspace/app.py`.
+
+- **One named setup tab (D3).** The grading tab opened Exam Setup with
+  `window.open(url, "_blank")`, so every Adjust / Exam Setup click stacked a new
+  tab. Both routes (`openExamAdjust`, the `#examSetupBtn` handler) now target the
+  named `"cam_exam_setup"` window and `.focus()` it — repeat clicks re-navigate
+  the single setup tab (re-running the `?exam=&focus=` deep-link so focus-adjust
+  still lands on the right question).
+- **Smart back-link (D3).** The `← back to grading` link, when the setup tab was
+  script-opened from a grading tab, now focuses that opener and closes itself;
+  otherwise (direct URL / middle-click / no-JS) it falls through to `href="/"`.
+- **Process All refreshes the grading tab (D4).** Only single-question re-slices
+  pinged an open grading tab, so a full Process-All left its crops stale.
+  `pollExamJob` now writes the same `localStorage["cam_exam_resliced"]` signal
+  (with an empty label = whole exam) that a single re-slice writes; the grading
+  tab's `storage` listener bumps its crop cache-buster and refetches every crop
+  in place, showing "Exam re-processed — crops refreshed."
+- Behaviour-only; no data, config, or grade-file changes.
+
+---
+
 ## 2026-07-14 — CGW exam cosmetics: bare question dropdown + width-aware cell labels
 
 **What this changes** (Phase 1 of
