@@ -138,6 +138,21 @@ class RoutedIngest(_EngineBase):
         self.assertEqual(
             self.gb.students["100001"].exam_results[EXAM].chosen, {"B": ["Q2"]})
 
+    def test_alias_routed_reingest_keeps_section_bands(self):
+        # Phase 6: per-strand levels survive a routed re-ingest like ``chosen``.
+        _write_exam_csv(self.csv, [("weird_stem", 4, 5, 9, 20, "")])
+        aliases = {"weird_stem": "100001"}
+        self.pipe.ingest_exam_csv(
+            self.csv, assignment=EXAM, roster_keys={"100001"}, aliases=aliases)
+        res = self.gb.students["100001"].exam_results[EXAM]
+        res.section_bands["Knowing"] = 7
+        res.section_bands["Applying"] = 5
+        self.pipe.ingest_exam_csv(
+            self.csv, assignment=EXAM, roster_keys={"100001"}, aliases=aliases)
+        self.assertEqual(
+            self.gb.students["100001"].exam_results[EXAM].section_bands,
+            {"Knowing": 7, "Applying": 5})
+
 
 class MaterializeExamRow(_EngineBase):
     ROW = {"csv_key": "scan_0007", "is_exam": True,
@@ -158,6 +173,12 @@ class MaterializeExamRow(_EngineBase):
         first.chosen["B"] = ["Q2", "Q9"]   # Q9 no longer answered
         again = self.pipe.materialize_exam_row(EXAM, "100001", dict(self.ROW))
         self.assertEqual(again.chosen, {"B": ["Q2"]})
+
+    def test_preserves_prior_section_bands(self):
+        first = self.pipe.materialize_exam_row(EXAM, "100001", dict(self.ROW))
+        first.section_bands["B"] = 6
+        again = self.pipe.materialize_exam_row(EXAM, "100001", dict(self.ROW))
+        self.assertEqual(again.section_bands, {"B": 6})
 
 
 # --------------------------------------------------------------------------

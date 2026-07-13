@@ -126,6 +126,13 @@ class ExamResult:
     # all-required exams; a section stays "pending" until its entry here names
     # exactly ``required`` of the answered labels. Preserved across re-ingest.
     chosen: Dict[str, List[str]] = field(default_factory=dict)
+    # section name -> teacher-picked 0-8 level for that strand (Phase 6). The
+    # real cover sheet has the teacher circle a level per strand (section), then
+    # decide one final criterion grade; this holds those per-strand levels. The
+    # app only *suggests* them (proportional per section); only the final grade
+    # enters the gradebook. Empty for legacy / single-section exams. Preserved
+    # across re-ingest exactly like ``chosen``.
+    section_bands: Dict[str, int] = field(default_factory=dict)
 
     @property
     def percent(self) -> float:

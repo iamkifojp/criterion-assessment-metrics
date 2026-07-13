@@ -249,5 +249,26 @@ class TestSidecarIngest(unittest.TestCase):
         self.assertIsNone(load_exam_sidecar(os.path.join(self.tmp, "nope.csv")))
 
 
+class SectionBandsPersistence(unittest.TestCase):
+    """Phase 6: ``ExamResult.section_bands`` survives the dict round-trip and
+    defaults to ``{}`` for a legacy record with no such key."""
+
+    def test_round_trip(self):
+        from engine.persistence import (exam_result_to_dict,
+                                         exam_result_from_dict)
+        r = ExamResult(assignment="Mid", total=13, max_total=20,
+                       questions={"Q1": 8, "Q3": 5},
+                       section_bands={"Knowing": 7, "Applying": 5})
+        back = exam_result_from_dict(exam_result_to_dict(r))
+        self.assertEqual(back.section_bands, {"Knowing": 7, "Applying": 5})
+
+    def test_absent_defaults_empty(self):
+        from engine.persistence import exam_result_from_dict
+        back = exam_result_from_dict(
+            {"assignment": "Mid", "total": 9, "max_total": 20,
+             "questions": {"Q1": 9}})
+        self.assertEqual(back.section_bands, {})
+
+
 if __name__ == "__main__":
     unittest.main()

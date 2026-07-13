@@ -96,6 +96,49 @@ class ApplyBandsPendingSkip(_Base):
         self.assertIn("17/18", note)   # Q1 9 + Q3 8
 
 
+class SectionBandsApply(_Base):
+    """Phase 6: applying persists per-strand levels from the section widgets and
+    folds them into the score note; the panel-shape helper flags real sections."""
+
+    def test_persists_section_bands_and_note(self):
+        asg = self.gb.assignments[0]
+        bob = self.gb.students["Bob"]
+        results = [(bob, bob.exam_results["Mid"])]
+        self.ss["band_Mid_Bob"] = 5
+        self.ss["seclvl_Mid_Bob_A"] = 6
+        self.ss["seclvl_Mid_Bob_B"] = 4
+        app._apply_exam_bands(asg, "A", results)
+        self.assertEqual(bob.exam_results["Mid"].section_bands, {"A": 6, "B": 4})
+        note = bob.scores["A"][0].note
+        self.assertIn("sections: A 6, B 4", note)
+
+    def test_pending_section_omitted_from_note(self):
+        # Ada is pending in B until resolved; resolve so she can band, but her
+        # B level widget is unset -> B is simply omitted, A still recorded.
+        asg = self.gb.assignments[0]
+        ada = self.gb.students["Ada"]
+        ada.exam_results["Mid"].chosen["B"] = ["Q3"]
+        results = [(ada, ada.exam_results["Mid"])]
+        self.ss["band_Mid_Ada"] = 8
+        self.ss["seclvl_Mid_Ada_A"] = 8
+        app._apply_exam_bands(asg, "A", results)
+        self.assertEqual(ada.exam_results["Mid"].section_bands, {"A": 8})
+        self.assertIn("sections: A 8", ada.scores["A"][0].note)
+
+    def test_has_real_sections_helper(self):
+        self.assertTrue(app._exam_has_real_sections(SECTIONS))
+        self.assertFalse(app._exam_has_real_sections(None))
+        self.assertFalse(app._exam_has_real_sections([]))
+        # A lone synthesized default section is not "real" strand structure.
+        default = [{"name": "All Questions", "required": None,
+                    "questions": [{"label": "Q1", "max": 10}]}]
+        self.assertFalse(app._exam_has_real_sections(default))
+        # A single *renamed* section is real.
+        renamed = [{"name": "Knowing", "required": None,
+                    "questions": [{"label": "Q1", "max": 10}]}]
+        self.assertTrue(app._exam_has_real_sections(renamed))
+
+
 class AssignmentTableRawAvg(_Base):
     def test_raw_avg_excludes_pending(self):
         # Only Bob (resolved, total 14) counts; Ada pending -> excluded.

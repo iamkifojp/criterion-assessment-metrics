@@ -6,6 +6,43 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — Section-level exam banding, teacher-decided
+
+**What this changes** (Phase 6 of
+[EXAM_IDENTITY_AND_BANDING_PLAN.md](EXAM_IDENTITY_AND_BANDING_PLAN.md), D7/D8/D9)
+— CAM's Window 1 exam panel, in `engine/models.py`, `engine/persistence.py` and
+`app.py`. The real Year 7 cover sheet is the model: raw marks *inform*, the
+teacher circles a level per strand (section), then decides one final criterion
+grade. The app only suggests; every level and the final grade are dropdowns.
+
+- **`ExamResult.section_bands` (engine).** New `{section name -> 0-8 level}` map
+  beside `chosen`. Serialized/deserialized like `chosen` (absent → `{}`,
+  round-tripped) and carried forward across re-ingest by the renamed
+  `_carry_forward_exam_state` (choice picks *and* strand levels), so a routed
+  re-sync or a Window-2 match keeps the teacher's levels.
+- **Two-line banding panel (`_render_exam_banding`).** When an exam has real
+  section structure — more than one section, or a single *renamed* section (a
+  lone synthesized "All Questions" still renders exactly as today) — each
+  student is a bordered two-line block: line 1 is the resolved total · % · final
+  grade dropdown; line 2 is, per section, `<name> <subtotal>/<max>` and a 0-8
+  level dropdown. Window 1 is narrow, so one wide row per student can't hold 3+
+  sections.
+- **Suggestions, not decisions.** A section level defaults to the saved band,
+  else the proportional `round(subtotal / section_max * 8)`. The final grade
+  defaults to an applied band, else the rounded mean of the current section
+  levels, else the whole-exam proportional suggestion — and it *follows* the
+  section levels on rerun (a signature guard drops a stale, untouched final when
+  the levels change) until the teacher sets it explicitly.
+- **Pending (`?`) at section granularity.** An over-answered, unresolved choice
+  section shows `?/max` and disables *its own* level dropdown; while any section
+  is pending the final-grade dropdown is disabled too. Other sections stay
+  editable. Resolution is still done in Window 3.
+- **Apply + Window 3.** Applying still writes exactly one `CriterionScore` (the
+  final grade) per student, additionally persisting the section levels and
+  folding them into the score note (`… · sections: Knowing 7, Applying 7,
+  Interpreting 5`). Window 3's section rows append `· level N` to their subtotal
+  caption — the digital cover sheet.
+
 ## 2026-07-14 — CGW student naming panel + booklet-scan guard
 
 **What this changes** (Phase 5 of
