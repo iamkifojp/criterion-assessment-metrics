@@ -6,6 +6,44 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-13 — Portable exam data: crops + definitions into the class folder
+
+**What this adds** (Phase 6 of
+[EXAM_GRADING_POLISH_PLAN.md](EXAM_GRADING_POLISH_PLAN.md), decision D5) — an exam
+used to be pinned to the machine that sliced it: crops lived under
+`cam_grading_workspace/exam_crops/<class>/…` and definitions in the app-local
+`gcg_exams.json`. Both now live *inside a cloud-synced class folder* when the
+class has one, so the exam can be graded from any synced device.
+
+- **Crop root.** New `exam_crop_dir(class_name, create=True)` writes to
+  `<cloud>/<class>/exam_crops/<exam>/<Q>/<student>.png` for a cloud-backed class,
+  else the legacy `BASE_DIR/exam_crops/<class>/…`. Both slicing paths
+  (`/api/exam/process`, `/api/exam/process_one`) write the resolved root.
+- **Read fallback.** New `exam_crop_roots(class_name)` returns the cloud root
+  first, then the legacy root; the student-discovery scan in `/api/exam/load` and
+  crop serving (`/api/exam/crop`) try each in order, so crops sliced before a
+  class moved to the cloud keep serving. Legacy crops are never moved or deleted.
+- **Portable definition store.** `ExamStore` grows a per-class
+  `<cloud>/<class>/gcg_exams.json` shaped `{"exams": {…}}`. Reads prefer it once
+  it exists; saves target it when the class has a cloud folder; the **first save
+  migrates** that class's legacy exams into it (never clobbering, never rewriting
+  the legacy file, which stays as a frozen fallback). Wired via
+  `EXAM_STORE.class_dir = _exam_class_dir` (resolver → the class cloud folder or
+  `None`); cloud-less classes keep the legacy app-local store unchanged.
+- **Cross-device caveat.** `pdf_folder` is an absolute per-device path: grading
+  from synced crops works anywhere, but *re-slicing* needs the scans present on
+  that device. `/api/exam/process*` now detects a missing scan folder and says
+  exactly that ("This device can't see the scan folder … grading still works
+  from the synced crops"). Volume note: ~`students × (questions+1)` PNGs per exam
+  land in the cloud folder and must sync before another device sees them.
+
+**Concurrency/backward-compat:** atomic `.tmp`+`os.replace` per file,
+last-writer-wins (same doctrine as exam grades). `ExamStore(base_dir)` with no
+resolver stays legacy-only, so existing tests and cloud-less setups are
+unaffected; migration is one-directional and additive.
+
+---
+
 ## 2026-07-13 — Exam grading: anonymous mode (YouMark-style positional numbering)
 
 **What this adds** (Phase 5 of

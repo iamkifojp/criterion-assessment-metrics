@@ -385,8 +385,17 @@ def process_exam(config, output_root, progress=None, labels=None):
 
 # --- Exam config + grade persistence -------------------------------------------
 #
-# Exam definitions live in gcg_exams.json beside app.py, keyed by class name:
-#     {"classes": {"7A": {"Physics Midterm": {<config>}, ...}}}
+# Exam definitions live in two places (Phase 6, decision D5):
+#   * the legacy app-local gcg_exams.json beside app.py, keyed by class:
+#         {"classes": {"7A": {"Physics Midterm": {<config>}, ...}}}
+#   * a per-class *portable* store <class cloud folder>/gcg_exams.json holding
+#     only that class's exams, so a cloud-synced class carries its definitions
+#     (and, with the synced crops, its whole exam) to any device:
+#         {"exams": {"Physics Midterm": {<config>}, ...}}
+# When a class has a cloud folder the portable store is authoritative (reads
+# prefer it, saves target it, and the first save migrates the class's legacy
+# exams into it); the legacy file then stays as a frozen fallback and is never
+# rewritten. Cloud-less classes keep using the legacy file exactly as before.
 # Grades for an exam live in exam_grades_<exam>.json inside the class output
 # directory (the cloud-synced class folder when configured), shaped like:
 #     {"students": {"Tanaka": {"scores": {"Q1": 2}, "comment": ""}}, ...}
@@ -490,29 +499,70 @@ def build_sidecar(config):
 
 
 class ExamStore:
-    """Owns gcg_exams.json (definitions) and per-exam grade files."""
+    """Owns gcg_exams.json (definitions) and per-exam grade files.
 
-    def __init__(self, base_dir):
+    ``class_dir`` is an optional resolver ``class_name -> portable class folder``
+    (or ``None`` for cloud-less classes). When it returns a folder, that class's
+    exams live in ``<folder>/gcg_exams.json`` (the portable store); otherwise the
+    legacy app-local ``gcg_exams.json`` is used. Left ``None`` (e.g. in tests and
+    the framework-free engine on its own) the store is legacy-only — fully
+    backward compatible.
+    """
+
+    def __init__(self, base_dir, class_dir=None):
         self.path = os.path.join(base_dir, "gcg_exams.json")
+        self.class_dir = class_dir
 
-    def _read(self):
+    # -- low-level file I/O (atomic writes; last-writer-wins per file) ----------
+    @staticmethod
+    def _read_file(path):
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f) or {}
         except (OSError, ValueError):
-            data = {}
-        classes = data.get("classes")
-        return {"classes": classes if isinstance(classes, dict) else {}}
+            return {}
+        return data if isinstance(data, dict) else {}
 
-    def _write(self, data):
-        tmp = self.path + ".tmp"
+    @staticmethod
+    def _write_file(path, data):
+        tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self.path)
+        os.replace(tmp, path)
+
+    # -- store resolution -------------------------------------------------------
+    def _class_store_path(self, class_name, create=False):
+        """``<class folder>/gcg_exams.json`` for a cloud-backed class, else None."""
+        if not self.class_dir or not class_name:
+            return None
+        try:
+            d = self.class_dir(class_name, create=create)
+        except Exception:
+            d = None
+        return os.path.join(d, "gcg_exams.json") if d else None
+
+    def _legacy_class_exams(self, class_name):
+        """This class's exams from the legacy app-local store ({} if none)."""
+        data = self._read_file(self.path)
+        classes = data.get("classes")
+        classes = classes if isinstance(classes, dict) else {}
+        exams = classes.get(class_name or "", {})
+        return exams if isinstance(exams, dict) else {}
+
+    def _portable_exams(self, path):
+        """The ``exams`` map inside a portable class store ({} if absent)."""
+        exams = self._read_file(path).get("exams")
+        return exams if isinstance(exams, dict) else {}
 
     def list_exams(self, class_name):
         with _LOCK:
-            return dict(self._read()["classes"].get(class_name or "", {}))
+            path = self._class_store_path(class_name)
+            # The portable store is authoritative once it exists (post-migration
+            # saves go only there); before that, or for cloud-less classes, fall
+            # back to the legacy file.
+            if path and os.path.isfile(path):
+                return dict(self._portable_exams(path))
+            return dict(self._legacy_class_exams(class_name))
 
     def get_exam(self, class_name, exam_name):
         return self.list_exams(class_name).get(exam_name)
@@ -565,9 +615,31 @@ class ExamStore:
             "questions": questions,
         }
         with _LOCK:
-            data = self._read()
-            data["classes"].setdefault(class_name or "Unsorted", {})[name] = clean
-            self._write(data)
+            path = self._class_store_path(class_name, create=True)
+            if path:
+                # Portable per-class store. On the first save for this class,
+                # migrate its legacy exams across so nothing is lost when the
+                # class moves to the cloud; never clobber the legacy file.
+                first = not os.path.isfile(path)
+                data = self._read_file(path)
+                exams = data.get("exams")
+                if not isinstance(exams, dict):
+                    exams = {}
+                if first:
+                    for nm, cfg in self._legacy_class_exams(class_name).items():
+                        exams.setdefault(nm, cfg)
+                exams[name] = clean
+                data["exams"] = exams
+                self._write_file(path, data)
+            else:
+                # Legacy app-local store (cloud-less classes, unchanged shape).
+                data = self._read_file(self.path)
+                classes = data.get("classes")
+                if not isinstance(classes, dict):
+                    classes = {}
+                    data["classes"] = classes
+                classes.setdefault(class_name or "Unsorted", {})[name] = clean
+                self._write_file(self.path, data)
         return clean
 
 
