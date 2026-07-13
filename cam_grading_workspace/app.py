@@ -2702,7 +2702,8 @@ EXAM_STATE = {
     "class_name": None,
     "exam_name": None,
     "config": None,      # the saved exam definition
-    "students": {},      # student -> {"scores": {label: int}, "comment": str}
+    "students": {},      # student -> {"scores": {label: int}, "comment", "keywords"}
+    "checklist": [],     # editable keyword rubric, persisted with the grades
 }
 
 
@@ -2953,13 +2954,15 @@ def api_exam_load():
         return jsonify({"error": "No sliced student answers found — run "
                                  "'Process All PDFs' in Exam Setup first."}), 404
 
-    saved = exam_engine.load_exam_grades(exam_output_dir(class_name), exam_name)
+    saved, checklist = exam_engine.load_exam_grades(
+        exam_output_dir(class_name), exam_name)
     roster = {}
     for name in sorted(students, key=str.lower):
         prev = saved.get(name) or {}
         roster[name] = {
             "scores": {k: v for k, v in (prev.get("scores") or {}).items()},
             "comment": prev.get("comment", ""),
+            "keywords": list(prev.get("keywords") or []),
         }
 
     with STATE_LOCK:
@@ -2967,11 +2970,13 @@ def api_exam_load():
         EXAM_STATE["exam_name"] = exam_name
         EXAM_STATE["config"] = config
         EXAM_STATE["students"] = roster
+        EXAM_STATE["checklist"] = checklist
 
     return jsonify({
         "class_name": class_name,
         "exam_name": exam_name,
         "questions": config["questions"],
+        "checklist": checklist,
         "students": [{"key": k, "name": k, **v} for k, v in roster.items()],
     })
 
@@ -2995,13 +3000,41 @@ def api_exam_grade():
             }
         if "comment" in data:
             st["comment"] = str(data["comment"])
+        if "keywords" in data and isinstance(data["keywords"], list):
+            st["keywords"] = [str(x) for x in data["keywords"]]
         try:
             exam_engine.save_exam_grades(
                 exam_output_dir(EXAM_STATE["class_name"], create=True),
-                EXAM_STATE["exam_name"], EXAM_STATE["students"])
+                EXAM_STATE["exam_name"], EXAM_STATE["students"],
+                EXAM_STATE["checklist"])
         except OSError as e:
             return jsonify({"error": f"Could not save exam grades: {e}"}), 500
         return jsonify({"ok": True, "student": {"key": key, **st}})
+
+
+@app.route("/api/exam/checklist", methods=["POST"])
+def api_exam_checklist():
+    """Persist the keyword rubric for the currently-open exam.
+
+    Receives the FULL checklist array and stores it beside the marks in
+    exam_grades_<exam>.json (student scores/keywords/comments are untouched, so
+    a header edit can never disturb a saved mark). Mirrors /api/checklist for
+    the assignment layer.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    checklist = _normalize_checklist(data.get("checklist"))
+    with STATE_LOCK:
+        if not EXAM_STATE["exam_name"]:
+            return jsonify({"error": "No exam is currently loaded."}), 400
+        EXAM_STATE["checklist"] = checklist
+        try:
+            exam_engine.save_exam_grades(
+                exam_output_dir(EXAM_STATE["class_name"], create=True),
+                EXAM_STATE["exam_name"], EXAM_STATE["students"],
+                EXAM_STATE["checklist"])
+        except OSError as e:
+            return jsonify({"error": f"Could not save exam checklist: {e}"}), 500
+        return jsonify({"ok": True, "checklist": checklist})
 
 
 @app.route("/api/exam/crop")
@@ -3044,15 +3077,19 @@ def api_exam_export():
         class_name = EXAM_STATE["class_name"]
         config = EXAM_STATE["config"]
         students = {k: {"scores": dict(v.get("scores") or {}),
-                        "comment": v.get("comment", "")}
+                        "comment": v.get("comment", ""),
+                        "keywords": list(v.get("keywords") or [])}
                     for k, v in EXAM_STATE["students"].items()}
 
     labels = [q["label"] for q in config["questions"]]
     max_total = sum(q["max"] for q in config["questions"])
     today = datetime.date.today().isoformat()
 
+    # "Checked Keywords" (semicolon-joined) sits before Comment, matching the
+    # assignment CSV convention; ACM keys columns by header, so the extra column
+    # is ignored by its exam ingest until it wants it.
     header = (["Student Name"] + labels +
-              ["Total Score", "Max Total", "Due Date", "Comment"])
+              ["Total Score", "Max Total", "Due Date", "Checked Keywords", "Comment"])
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(header)
@@ -3061,8 +3098,9 @@ def api_exam_export():
         cells = [st["scores"].get(lbl, "") for lbl in labels]
         nums = [v for v in st["scores"].values() if isinstance(v, int)]
         total = sum(nums) if nums else ""
+        keywords = "; ".join(st["keywords"])
         writer.writerow([name] + cells +
-                        [total, max_total, today, st["comment"]])
+                        [total, max_total, today, keywords, st["comment"]])
 
     safe_name = re.sub(r'[\\/*?:"<>|]', "_", exam_name).strip() or "Exam"
     filename = f"{safe_name}_Grades_{today}.csv"
@@ -3171,7 +3209,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
   th.qcur, td.qcur { background:var(--row-hl); }
   select.qscore { width:60px; padding:5px; background:var(--panel2); color:var(--text);
                   border:1px solid var(--line); border-radius:5px; font-size:14px; }
-  td.qtotal { font-weight:700; white-space:nowrap; }
   /* ✎ region-adjust button on each exam question column header (Phase 6). */
   button.qadjust { background:transparent; color:var(--muted); border:1px solid transparent;
                    padding:0 4px; font-size:12px; line-height:1.4; border-radius:4px; }
@@ -4715,9 +4752,12 @@ function checklistPayload() {
     .filter(k => k.label);
 }
 async function pushChecklist() {
-  if (!STUDENTS.length) return;     // headers attach to a loaded folder
+  // Exam mode stores the rubric with the exam's grades; assignment mode stores
+  // it under the loaded folder. Either way the headers need an open target.
+  const url = EXAM ? "/api/exam/checklist" : "/api/checklist";
+  if (!EXAM && !STUDENTS.length) return;   // headers attach to a loaded folder
   try {
-    await fetch("/api/checklist", {
+    await fetch(url, {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({checklist: checklistPayload()})
     });
@@ -4732,11 +4772,20 @@ function saveChecklistNow() {          // click-away / add / delete -> immediate
   pushChecklist();
 }
 
+/* Re-render whichever grading matrix is active so the checkbox column adopts
+   the latest rubric labels. */
+function rerenderGradingTable() {
+  if (EXAM) renderExamTable(); else renderTable();
+}
+
 /* When a criteria is renamed, carry every student's existing checkbox mark and
-   any comment text over to the new label so nothing is silently dropped. */
+   any comment text over to the new label so nothing is silently dropped. Works
+   for both the assignment roster and the exam roster. */
 function remapKeywordLabel(oldLabel, newLabel) {
   if (!oldLabel || oldLabel === newLabel) return;
-  STUDENTS.forEach(st => {
+  const roster = EXAM ? EXAM.students : STUDENTS;
+  const persist = EXAM ? saveExamStudent : save;
+  roster.forEach(st => {
     let touched = false;
     if (Array.isArray(st.keywords) && st.keywords.includes(oldLabel)) {
       st.keywords = st.keywords.map(x => x === oldLabel ? newLabel : x);
@@ -4746,7 +4795,7 @@ function remapKeywordLabel(oldLabel, newLabel) {
       st.comment = st.comment.split(oldLabel).join(newLabel);  // literal replace
       touched = true;
     }
-    if (touched) save(st);            // persist the migrated marks for this student
+    if (touched) persist(st);         // persist the migrated marks for this student
   });
 }
 
@@ -4786,7 +4835,7 @@ function renderTags() {
       }
       oldLabel = KEYWORDS[i].label;
       inp.size = Math.max(6, inp.value.length);
-      renderTable();                         // checkbox column adopts final labels
+      rerenderGradingTable();                // checkbox column adopts final labels
       saveChecklistNow();
     };
     inp.addEventListener("change", commit);
@@ -4799,7 +4848,7 @@ function renderTags() {
     del.textContent = "×"; del.title = "Remove this criteria";
     del.addEventListener("click", () => {
       KEYWORDS.splice(i, 1);
-      renderTags(); renderTable(); saveChecklistNow();
+      renderTags(); rerenderGradingTable(); saveChecklistNow();
     });
 
     t.appendChild(inp); t.appendChild(del);
@@ -4811,7 +4860,7 @@ function addKeyword() {
   const v = $("#newKw").value.trim(); if (!v) return;
   KEYWORDS.push({label:v, type: $("#newKwType").value === "growth" ? "growth" : "positive"});
   $("#newKw").value = "";
-  renderTags(); renderTable(); saveChecklistNow();
+  renderTags(); rerenderGradingTable(); saveChecklistNow();
 }
 
 /* ---------- Exam mode (grading a sliced scanned exam) ----------
@@ -4858,13 +4907,9 @@ window.addEventListener("storage", (e) => {
     setStatus("Re-sliced " + (sig.label || "a question") + " — crops refreshed.");
   }
 });
-function examMaxTotal() {
-  return EXAM.questions.reduce((a, q) => a + (Number(q.max) || 0), 0);
-}
-function examTotal(st) {
-  const vals = EXAM.questions.map(q => st.scores[q.label]).filter(v => v !== undefined);
-  return vals.length ? vals.reduce((a, v) => a + Number(v), 0) : null;
-}
+// No examTotal/examMaxTotal helpers: decision D3 keeps every running total out
+// of the grading UI (they belong only to the CSV export + CAM). Completion is
+// tracked per-question instead — see examFullyGraded and the roster progress.
 function examFullyGraded(st) {
   return EXAM.questions.every(q => st.scores[q.label] !== undefined);
 }
@@ -4883,9 +4928,22 @@ async function loadExam(examName) {
     if (!res.ok) { setStatus(""); alert(data.error || "Failed to load exam."); return; }
     EXAM = data;
     EXAM_BY_KEY = {};
-    EXAM.students.forEach(st => { st.scores = st.scores || {}; EXAM_BY_KEY[st.key] = st; });
+    EXAM.students.forEach(st => {
+      st.scores = st.scores || {};
+      st.keywords = st.keywords || [];
+      EXAM_BY_KEY[st.key] = st;
+    });
     CURRENT_Q = EXAM.questions.length ? EXAM.questions[0].label : null;
     examSelectedKey = null;
+
+    // The exam's own keyword rubric (D4 default when the exam has none saved),
+    // editable per exam exactly like the assignment checklist.
+    KEYWORDS = (Array.isArray(data.checklist) && data.checklist.length)
+      ? data.checklist.map(k => ({
+          label: String(k.label || "").trim(),
+          type:  k.type === "growth" ? "growth" : "positive",
+        })).filter(k => k.label)
+      : [];
 
     // Question selector drives which answer slice the left screen shows.
     const qs = $("#questionSelect");
@@ -4899,10 +4957,13 @@ async function loadExam(examName) {
     $("#examAdjustBtn").classList.remove("hidden");
     $("#examCsvBtn").classList.remove("hidden");
     $("#setupbar").classList.add("hidden");     // MYP criteria don't apply here
-    $("#kwEditor").classList.add("hidden");
+    $("#kwEditor").classList.remove("hidden");  // keyword checklist works for exams too
     $("#folderName").textContent = "📝 " + EXAM.exam_name;
+    // No running total here (decision D3): a visible total while later
+    // questions are still ungraded reinforces bias. Totals live only in the CSV.
     setStatus(EXAM.students.length + " student(s) · " + EXAM.questions.length
-              + " question(s) · " + examMaxTotal() + " marks total");
+              + " question(s)");
+    renderTags();
     renderExamTable();
     renderExamRoster();
     updateCamModNote();   // exam mode — folder MODIFIED note doesn't apply
@@ -4945,9 +5006,12 @@ function renderExamRoster() {
     }
 
     const meta = document.createElement("div"); meta.className = "meta";
-    const total = examTotal(st);
+    // Progress, not a total (decision D3): how many questions are graded, never
+    // a running score sum while grading is still in flight.
+    const done = EXAM.questions.filter(q => st.scores[q.label] !== undefined).length;
+    const nq = EXAM.questions.length;
     meta.innerHTML = `<div class="nm">${escapeHtml(st.name)}</div>`
-      + `<div class="sub">${total !== null ? "total " + total + "/" + examMaxTotal() : "ungraded"}</div>`;
+      + `<div class="sub">${done ? done + "/" + nq + " questions" : "ungraded"}</div>`;
     card.appendChild(meta);
 
     card.addEventListener("click", () => selectExamStudent(st.key, true));
@@ -4979,25 +5043,29 @@ function attachExamZoom(img, url) {
   }, {passive:false});
 }
 
-/* Right screen: flexible matrix — one score column per question, each with its
-   own 0..max range; the question being viewed is highlighted. */
+/* Right screen: one column for the CURRENT question only (decision D3) — no
+   other questions, and no running Total, so a visible sum can't bias grading
+   while later questions are unmarked. Keywords + Comment mirror the assignment
+   sheet. Switching #questionSelect re-renders to the next question's column. */
 function renderExamTable() {
   if (!EXAM || !EXAM.students.length) {
     tableWrap.innerHTML = '<div class="empty">No sliced students found.</div>';
     return;
   }
+  const q = EXAM.questions.find(x => x.label === CURRENT_Q) || EXAM.questions[0];
   const t = document.createElement("table");
-  const qcols = EXAM.questions.map(q =>
-    `<th class="${q.label === CURRENT_Q ? "qcur" : ""}" title="Range ${escapeHtml(q.range)}">`
-    + `${escapeHtml(q.label)}<br>(0–${q.max}) `
-    + `<button class="qadjust" type="button" data-q="${escapeHtml(q.label)}"`
-    + ` title="Adjust this question's region during grading">✎</button></th>`).join("");
-  t.innerHTML = `<thead><tr><th class="idcol">Student</th>${qcols}`
-              + `<th>Total</th><th>Comment</th></tr></thead>`;
+  const qcol = q
+    ? `<th class="qcur" title="Range ${escapeHtml(q.range)}">`
+      + `${escapeHtml(q.label)}<br>(0–${q.max}) `
+      + `<button class="qadjust" type="button" data-q="${escapeHtml(q.label)}"`
+      + ` title="Adjust this question's region during grading">✎</button></th>`
+    : "";
+  t.innerHTML = `<thead><tr><th class="idcol">Student</th>${qcol}`
+              + `<th>Keywords</th><th>Comment</th></tr></thead>`;
   const tb = document.createElement("tbody");
   EXAM.students.forEach(st => tb.appendChild(makeExamRow(st)));
   t.appendChild(tb);
-  // The ✎ per column opens Exam Setup focused on that question (Phase 6).
+  // The ✎ opens Exam Setup focused on this question (Phase 6).
   t.querySelectorAll("button.qadjust").forEach(b =>
     b.addEventListener("click", (e) => { e.stopPropagation(); openExamAdjust(b.dataset.q); }));
   tableWrap.innerHTML = "";
@@ -5013,9 +5081,10 @@ function makeExamRow(st) {
   tdN.innerHTML = `<span class="sid">${escapeHtml(st.name)}</span>`;
   tr.appendChild(tdN);
 
-  EXAM.questions.forEach(q => {
-    const td = document.createElement("td");
-    if (q.label === CURRENT_Q) td.classList.add("qcur");
+  // Only the current question's score column (D3): no running total anywhere.
+  const q = EXAM.questions.find(x => x.label === CURRENT_Q) || EXAM.questions[0];
+  if (q) {
+    const td = document.createElement("td"); td.classList.add("qcur");
     const sel = document.createElement("select");
     sel.className = "qscore"; sel.dataset.q = q.label;
     const blank = document.createElement("option");
@@ -5030,18 +5099,34 @@ function makeExamRow(st) {
     sel.addEventListener("change", () => {
       if (sel.value === "") delete st.scores[q.label];
       else st.scores[q.label] = Number(sel.value);
-      const tot = tr.querySelector("td.qtotal");
-      const sum = examTotal(st);
-      tot.textContent = sum !== null ? sum + " / " + examMaxTotal() : "—";
       saveExamStudent(st);
     });
     td.appendChild(sel); tr.appendChild(td);
-  });
+  }
 
-  const tdT = document.createElement("td"); tdT.className = "qtotal";
-  const sum = examTotal(st);
-  tdT.textContent = sum !== null ? sum + " / " + examMaxTotal() : "—";
-  tr.appendChild(tdT);
+  // Keyword checklist — same checkbox pills as assignment mode; ticking
+  // rebuilds the auto part of the comment while keeping any free text.
+  st.keywords = st.keywords || [];
+  const tdK = document.createElement("td");
+  const box = document.createElement("div"); box.className = "kw";
+  KEYWORDS.forEach(k => {
+    const lab = document.createElement("label");
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = k.label;
+    cb.checked = st.keywords.includes(k.label);
+    cb.addEventListener("change", () => {
+      if (cb.checked) { if (!st.keywords.includes(k.label)) st.keywords.push(k.label); }
+      else st.keywords = st.keywords.filter(x => x !== k.label);
+      st.comment = autoComment(st);
+      const ta = tr.querySelector("textarea.comment"); if (ta) ta.value = st.comment;
+      saveExamStudent(st);
+    });
+    const span = document.createElement("span");
+    span.className = k.type === "growth" ? "grow" : "pos";
+    span.textContent = k.label;
+    lab.appendChild(cb); lab.appendChild(span);
+    box.appendChild(lab);
+  });
+  tdK.appendChild(box); tr.appendChild(tdK);
 
   const tdC = document.createElement("td");
   const ta = document.createElement("textarea"); ta.className = "comment";
@@ -5058,7 +5143,8 @@ async function saveExamStudent(st) {
   try {
     await fetch("/api/exam/grade", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({key: st.key, scores: st.scores, comment: st.comment || ""})
+      body: JSON.stringify({key: st.key, scores: st.scores,
+                            comment: st.comment || "", keywords: st.keywords || []})
     });
   } catch (e) { console.warn("exam save failed", e); }
   const tr = tableWrap.querySelector(`tr[data-key="${cssEsc(st.key)}"]`);

@@ -571,26 +571,87 @@ class ExamStore:
         return clean
 
 
+# Default keyword checklist for a freshly-opened exam (Phase 4, decision D4).
+# All type "growth" — exam feedback flags what still needs fixing. Editable per
+# exam exactly like the assignment checklist, and stored beside the marks in
+# exam_grades_<exam>.json so the rubric syncs across devices with the grades.
+DEFAULT_EXAM_CHECKLIST = [
+    {"label": "illegible handwriting", "type": "growth"},
+    {"label": "more explanation needed", "type": "growth"},
+    {"label": "wrong format", "type": "growth"},
+    {"label": "incomplete answer", "type": "growth"},
+    {"label": "check calculations", "type": "growth"},
+]
+
+
+def normalize_exam_checklist(raw):
+    """Coerce a stored exam checklist into a clean [{label, type}] list.
+
+    Mirrors app._normalize_checklist (kept here so the framework-free engine
+    owns exam-file I/O end to end): accepts the rich object form or a bare list
+    of strings (default type 'positive'), drops anything malformed, and returns
+    [] for empty input so callers can fall back to DEFAULT_EXAM_CHECKLIST.
+    """
+    out = []
+    for item in (raw or []):
+        if isinstance(item, str):
+            label = item.strip()
+            if label:
+                out.append({"label": label, "type": "positive"})
+        elif isinstance(item, dict):
+            label = str(item.get("label", "")).strip()
+            if label:
+                typ = item.get("type")
+                out.append({"label": label,
+                            "type": "growth" if typ == "growth" else "positive"})
+    return out
+
+
+def default_exam_checklist():
+    """A fresh copy of the D4 default template (never share the module list)."""
+    return [dict(k) for k in DEFAULT_EXAM_CHECKLIST]
+
+
 def exam_grades_path(output_dir, exam_name):
     return os.path.join(output_dir, f"exam_grades_{_safe_name(exam_name)}.json")
 
 
 def load_exam_grades(output_dir, exam_name):
-    """{student: {"scores": {label: int}, "comment": str}} or {}."""
+    """Return (students, checklist) for one exam.
+
+    ``students`` is {student: {"scores": {label: int}, "comment": str,
+    "keywords": [str]}} (or {} when nothing is saved yet). ``checklist`` is the
+    saved [{label, type}] rubric, or the D4 default template when the key is
+    absent (backward compatible with pre-Phase-4 files that stored only
+    students).
+    """
     path = exam_grades_path(output_dir, exam_name)
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f) or {}
     except (OSError, ValueError):
-        return {}
+        return {}, default_exam_checklist()
     students = data.get("students")
-    return students if isinstance(students, dict) else {}
+    students = students if isinstance(students, dict) else {}
+    checklist = normalize_exam_checklist(data.get("checklist"))
+    if not checklist:
+        checklist = default_exam_checklist()
+    return students, checklist
 
 
-def save_exam_grades(output_dir, exam_name, students):
+def save_exam_grades(output_dir, exam_name, students, checklist=None):
+    """Write students + the exam's keyword checklist atomically.
+
+    ``checklist`` is normalized before writing; None falls back to the D4
+    default so the file always carries a usable rubric.
+    """
     os.makedirs(output_dir, exist_ok=True)
     path = exam_grades_path(output_dir, exam_name)
+    clean_checklist = normalize_exam_checklist(checklist)
+    if not clean_checklist:
+        clean_checklist = default_exam_checklist()
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"students": students}, f, ensure_ascii=False, indent=2)
+        json.dump({"checklist": clean_checklist, "students": students},
+                  f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
