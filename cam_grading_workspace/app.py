@@ -5092,7 +5092,7 @@ async function loadExam(examName) {
     qs.innerHTML = "";
     EXAM.questions.forEach(q => {
       const o = document.createElement("option");
-      o.value = q.label; o.textContent = q.label + "  (0–" + q.max + ")";
+      o.value = q.label; o.textContent = q.label;   // D1: bare label — the sheet header's qcol already shows (0–max)
       qs.appendChild(o);
     });
     qs.classList.remove("hidden");
@@ -5864,8 +5864,15 @@ function applyGridColor(col) {
 function sizeCellLabels() {
   const ov = $("#gridOverlay");
   const h = ov.clientHeight;
-  if (!h || !NROWS) return;
-  const px = Math.max(9, Math.round((h / NROWS) * 0.55));
+  if (!h || !NROWS || !NCOLS) return;
+  // D2: size by BOTH axes so wide labels (D10, fine-A3's AD42) never bleed
+  // horizontally into a neighbouring cell.
+  const heightPx = (h / NROWS) * 0.55;
+  const cellW = ov.clientWidth / NCOLS;
+  const maxChars = (colName(NCOLS - 1) + NROWS).length;   // widest label on this grid
+  // 0.62 ≈ average glyph width in ems for the 800-weight UI font; 0.85 keeps a margin.
+  const widthCap = maxChars ? (cellW * 0.85) / (maxChars * 0.62) : heightPx;
+  const px = Math.max(9, Math.round(Math.min(heightPx, widthCap)));
   ov.style.setProperty("--glabsize", px + "px");
 }
 
