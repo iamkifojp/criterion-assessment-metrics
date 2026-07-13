@@ -199,7 +199,20 @@ never needed; Phase 4 remains the safety net.
    "Student Name". Note the identity contract this creates: once mapped names
    flow, CAM matches those (Phase 4 aliases handle any earlier stem-keyed
    matches — both can coexist because aliases are per-csv_key).
-5. Docs note in the code where `student_names` is read, mirroring the
+5. **Scan-consistency guard (booklet scanning).** Booklet scans routinely
+   start with a blank page (the back cover lands first when the folded sheet
+   is scanned) — harmless when every student's PDF has it, silently
+   catastrophic when one student's doesn't: their content shifts a page and
+   every crop lands wrong without erroring. Page-count mismatch is the cheap
+   signal:
+   - `/api/exam/scan_folder` returns per-file page counts (it already walks
+     the folder; `exam_engine.page_count` exists);
+   - the Students panel flags outliers against the majority count
+     ("Scan_0003 · 11 pages ⚠ others have 12");
+   - `process_exam` appends a warning per mismatched student to the summary
+     (a `warnings` list beside `errors`, surfaced in the process note) so a
+     full run never slices shifted pages silently.
+6. Docs note in the code where `student_names` is read, mirroring the
    "display-only doctrine" comments.
 
 **Verify:** name two students in the panel, save, reload setup — names
@@ -270,8 +283,12 @@ single-section exam renders byte-identical to today.
 3. **USER_MANUAL.md** ("Grading exam papers" section): naming students in
    Exam Setup (with the name-box workflow), matching leftover papers via the
    missing popup's 🧩, section levels + final grade in the Window 1 panel
-   (mirroring the paper cover sheet), and a warning that blank leading scan
-   pages shift every `pageN!` coordinate.
+   (mirroring the paper cover sheet), and a booklet-scanning note: a blank
+   leading page (the booklet's back cover) is normal and fine — program the
+   `pageN!` coordinates on pages as they appear in the PDF — **as long as
+   every student is scanned the same way**; the Students panel and the
+   process summary flag page-count mismatches, which mean shifted crops for
+   those students.
 4. **DATA_DICTIONARY.md:** `student_names` (exam config), `section_bands`
    (ExamResult), exam-flavoured unmatched pool rows.
 
