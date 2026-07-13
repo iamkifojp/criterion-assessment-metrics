@@ -6,6 +6,36 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-13 — User manual: a dedicated "Grading exam papers" section
+
+**What this adds** (Phase 8 of
+[EXAM_GRADING_POLISH_PLAN.md](EXAM_GRADING_POLISH_PLAN.md)) —
+[USER_MANUAL.md](USER_MANUAL.md) mentioned exam grading only in scattered notes
+under "The grading workspace"; there was no walkthrough of the full loop and none
+of the Phase 1–7 polish was documented for the teacher.
+
+- **New "Grading exam papers" section** walks the whole loop as numbered steps:
+  create the exam in Window 1 → Exam Setup (scan folder, grid density + colour
+  picker, fit width/page, name box, sections, max marks, Save + Process All PDFs)
+  → grade one question at a time (question dropdown, single-question sheet with
+  **no running totals**, keyword checklist, comments, ✎ adjust + re-slice,
+  anonymous positional numbering) → Export CSV → CAM auto-ingest → cockpit
+  (including resolving a `?` choice section) → permanent-delete purge.
+- **Explains the anonymous numbering** the way the teacher experiences it — papers
+  numbered by *position* (`01`, `02`, …) and **re-shuffled per question**, so a
+  number is a progress counter, not an identity, and no impression accumulates
+  across questions. Notes it's bias reduction, not blind review.
+- **New cloud-folder subsection** documents the portability trade-offs from
+  decision D5/D6: sync lag after slicing (hundreds of PNGs, ~students × questions
+  per exam), the space they occupy, and that *re-slicing* still needs the scan
+  PDFs present on that device while grading alone doesn't.
+- The pre-existing exam-setup notes (grid density, name box, sections, resolving a
+  choice, adjusting a question's box) were folded into the new section's steps
+  rather than left as loose paragraphs — no content dropped, deduplicated.
+- Docs-only; no code changes.
+
+---
+
 ## 2026-07-13 — Permanent delete of an exam purges its grading-workspace artifacts
 
 **Symptom** (Phase 7 of

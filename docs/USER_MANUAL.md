@@ -100,61 +100,156 @@ bias), and PDF exam slicing for marking scanned papers. It hands finished grades
 back to the dashboard automatically. Setup is in
 [Setup · the grading workspace](SETUP.md#7-optional-the-grading-workspace--google-drive).
 
-**Exam setup — grid density.** In **📝 Exam Setup** you frame each question by
-typing a coordinate range (like `A1:C3`) against a grid drawn over the scanned
-page. Next to **Paper size** is a **Grid** control that sets how fine that grid
-is: **Compact (≈1.4 cm cells)** is the default and suits most papers; **Fine
-(≈1 cm cells)** lets you frame small answers tightly (its columns run past Z into
-AA, AB, … for the densest pages). Pick the density *before* you type the ranges
-— switching it afterwards re-checks every range against the new grid and
-red-flags any that no longer fit, so you'd re-type them. Older exams you saved
-before this option keep their original grid: loading one shows a **Standard
-(legacy 2 cm)** state so its coordinates still line up, and you only move to
-Compact/Fine when you choose to.
+---
 
-**Exam setup — name box.** Click **+ Add name box** to frame the region where
-students write their name. It appears as a pinned **Name** row above your
-questions — give it a coordinate range like any question, but it has no score
-and never becomes a graded column. CAM uses these name crops later to help you
-spot a script saved under the wrong student's name. The name box is optional;
-delete the row to remove it.
+## Grading exam papers
 
-**Exam setup — sections.** Questions are grouped into **sections**. A new exam
-starts with one section holding everything; click **+ Add section** to add more
-(each section header has a name and sits above the questions that belong to it —
-drag questions with ↑/↓ to move them between sections). By default every
-question in a section counts. If a section is a **choice** — students answer,
-say, 2 of 4 questions — untick **all required** on its header and type how many
-**choose N** count. When a student answers more than that, CAM shows the section
-as unresolved (`?`) and you pick which answers count from the cockpit (Window 3);
-it never guesses. Older exams with no sections load as a single default section
-and grade exactly as before.
+Marking a scanned paper exam runs end to end through the workspace: you frame
+each question once, CAM slices every student's script into per-question answer
+images, you grade one question at a time across the whole class, and the totals
+land back in the cockpit. This section walks the whole loop.
 
-**Resolving a choice (`?`) in the cockpit.** Once a section exam is synced back
-into CAM, focus a student in Window 2 and look in Window 3's marks list: each
-exam shows a **📝** block with a row per section (`Section A · 12/20`) and a
-running exam total. A section a student *over-answered* shows a **? resolve**
-button and the exam total reads **?** until you deal with it. Click it, tick the
-answers that should count (you can pick up to the section's *choose N* — the rest
-grey out), and Save. The total flips from `?` to a number, and you can reopen and
-change your picks any time. Until you resolve it, that student is **left out of
-the exam's class average** and can't be given a 0–8 grade in Window 1's **📝 Exam
-grading** panel (their row there is disabled with a nudge to resolve first). The
-name crops you framed at setup show up in the exam's analytics dialog (click the
-exam in Window 1) next to each student id, so a script filed under the wrong name
-is easy to catch.
+### 1 · Create the exam in Window 1
 
-**Adjusting a question's box while grading.** If a question's crop is cutting off
-an answer, you don't have to re-process the whole exam. In the grading screen's
-exam mode, click the **✎** on that question's column (or **✎ Adjust** next to the
-question selector) — Exam Setup opens focused on that question, scrolled to its
-row with the page preview **zoomed in** on its cells so you can see exactly what's
-being framed. Widen or shift its coordinate range, then click **⚙ Re-slice this
-question**: only that question is re-cropped for every student (it takes seconds),
-and every mark you've already entered stays put. Back in the grading tab the
-question's answer images refresh to the new framing on their own. Use **⤢ Full
-page** to zoom back out; you can also click any question's colour swatch in setup
-to zoom straight to it.
+In Window 1, use **Add assignment / exam** and mark it as an **exam**. The new
+exam appears in the timeline like any assignment, but with a **🛠 Exam setup**
+button — click it to open the grading workspace's Exam Setup screen for this
+exam.
+
+### 2 · Set up the exam (Exam Setup)
+
+Exam Setup is where you tell CAM what the paper looks like. Left pane: the
+scanned page with a grid drawn over it. Right pane: the question list.
+
+- **Load the scans.** Point the folder field at the folder of scanned PDFs (one
+  PDF per student, or one multi-page PDF — the workspace handles both). The
+  first page renders in the left pane.
+- **Grid density.** You frame each question by typing a coordinate range (like
+  `A1:C3`) against the grid. Next to **Paper size** the **Grid** control sets how
+  fine the grid is: **Compact (≈1.4 cm cells)** is the default and suits most
+  papers; **Fine (≈1 cm cells)** lets you frame small answers tightly (its
+  columns run past Z into AA, AB, … for the densest pages). Pick the density
+  *before* you type the ranges — switching it afterwards re-checks every range
+  against the new grid and red-flags any that no longer fit, so you'd re-type
+  them. Older exams saved before this option keep their original grid: loading
+  one shows a **Standard (legacy 2 cm)** state so its coordinates still line up.
+- **Grid colour.** Next to the Grid control is a colour picker — **Neon green**
+  (default), **Bright blue**, or **Bright magenta**. It only tints the grid lines
+  and cell labels drawn over the page, so pick whichever stands out best against
+  the ink and paper you're marking. The choice is remembered on this device.
+- **Fit width / fit page.** The **↔ Fit width** button (top of the left pane)
+  toggles to **⤢ Fit page**: fit width fills the pane's width (good for reading
+  small handwriting); fit page shows the whole sheet at once (good for framing).
+  Remembered per device.
+- **Name box.** Click **+ Add name box** to frame the region where students write
+  their name. It appears as a pinned **Name** row above your questions — give it
+  a coordinate range like any question, but it has no score and never becomes a
+  graded column. CAM uses these name crops later to help you spot a script saved
+  under the wrong student's name. The name box is optional; delete the row to
+  remove it.
+- **Sections.** Questions are grouped into **sections**. A new exam starts with
+  one section holding everything; click **+ Add section** to add more (each
+  section header has a name and sits above the questions that belong to it — drag
+  questions with ↑/↓ to move them between sections). By default every question in
+  a section counts. If a section is a **choice** — students answer, say, 2 of 4
+  questions — untick **all required** on its header and type how many **choose N**
+  count. When a student answers more than that, CAM shows the section as
+  unresolved (`?`) and you pick which answers count from the cockpit (Window 3);
+  it never guesses. Older exams with no sections load as a single default
+  section and grade exactly as before.
+- **Max marks.** Each question row has a **Max mark** field — type just the
+  highest score for that question (e.g. `3`). That's all it needs.
+- **Save + process.** Click **💾 Save Setup** to store the exam definition, then
+  **⚙ Process All PDFs** to slice every student's script into one answer image
+  per question (plus a name crop, if you framed one). This can take a moment for
+  a full class; when it finishes the exam is ready to grade.
+
+### 3 · Grade it, one question at a time
+
+Switch to the grading screen's exam mode. A **question dropdown** at the top
+picks which question you're marking; every student card and every sheet row shows
+*that* question's answer image and nothing else.
+
+- **One question across the whole class.** The sheet shows only the current
+  question's score column, plus **Keywords** and **Comment** — no running totals
+  anywhere. That's deliberate: a visible total while later questions are still
+  ungraded nudges you toward marking to a target instead of marking the answer in
+  front of you. Totals live only in the export and the cockpit. Completion shows
+  as a graded tick and an "N of M questions" progress count, not a score.
+- **Keywords checklist.** Tick the quick keyword pills — the starter set is
+  *illegible handwriting*, *more explanation needed*, *wrong format*, *incomplete
+  answer*, *check calculations* — to drop stock feedback into the comment.
+  Ticking or unticking rebuilds the auto-generated part of the comment while
+  keeping anything you typed yourself. Edit the pill list per exam, just like the
+  assignment checklist.
+- **Comments.** Type free-text feedback in the Comment cell; it's saved with the
+  score and rides along into the export.
+- **Adjust a question's box (re-slice).** If a crop is cutting off an answer, you
+  don't have to re-process the whole exam. Click the **✎** on that question's
+  column (or **✎ Adjust** next to the question selector) — Exam Setup opens
+  focused on that question, scrolled to its row with the preview **zoomed in** on
+  its cells. Widen or shift its range, then click **⚙ Re-slice this question**:
+  only that question is re-cropped for every student (seconds), and every mark you
+  already entered stays put. Back in grading the answer images refresh on their
+  own. Use **⤢ Fit page** to zoom back out; you can also click any question's
+  colour swatch in setup to zoom straight to it.
+- **Anonymous mode (positional numbering).** Turn on **Anonymous grading** (in
+  the workspace settings, per device) and exam papers are shown by *position* —
+  `01`, `02`, `03`, … — with names hidden. The number is a progress counter, not
+  an identity: the order is **re-shuffled for every question**, so paper `03` on
+  Q1 is a different student than paper `03` on Q2, and no impression of a
+  particular student can build up across questions. The numbering is stable if
+  you reload the same question. This reduces bias but isn't blind review — a
+  student who wrote their name inside the answer is still visible, and the
+  exported CSV keeps the real names either way.
+
+### 4 · Export → CAM auto-ingest → the cockpit
+
+When every question is graded, click **Export CSV**. If the class has a cloud
+folder the CSV is written straight into it (named after the exam); otherwise it
+downloads. CAM watches the folder and **auto-ingests** the exam — no manual
+import needed — and the exam shows up in Window 1's **📝 Exam grading** panel and
+in each student's marks list (Window 3).
+
+**Resolving a choice (`?`) in the cockpit.** If the exam had a *choose N*
+section, focus a student in Window 2 and look in Window 3's marks list: each exam
+shows a **📝** block with a row per section (`Section A · 12/20`) and a running
+exam total. A section a student *over-answered* shows a **? resolve** button and
+the exam total reads **?** until you deal with it. Click it, tick the answers
+that should count (up to the section's *choose N* — the rest grey out), and Save.
+The total flips from `?` to a number, and you can reopen and change your picks any
+time. Until you resolve it, that student is **left out of the exam's class
+average** and can't be given a 0–8 grade in the **📝 Exam grading** panel (their
+row is disabled with a nudge to resolve first). The name crops you framed at
+setup show up in the exam's analytics dialog (click the exam in Window 1) next to
+each student id, so a script filed under the wrong name is easy to catch.
+
+### 5 · Grading a cloud-synced class across computers
+
+If the class's data folder is cloud-synced (OneDrive / Google Drive), its exams
+become **portable**: the sliced answer images and the exam definition live inside
+the class folder, so you can grade the same exam from any computer that syncs it.
+Two things to keep in mind:
+
+- **Sync lag after slicing.** Processing a class produces hundreds of small PNGs
+  (roughly *students × questions* per exam — e.g. 30 students × 22 questions ≈ 660
+  files). They must finish uploading before another device can see them, and they
+  do take up space in the cloud folder.
+- **Re-slicing needs the scans.** Grading works anywhere from the synced crops,
+  but *re-slicing* a question re-reads the original scan PDFs, which are an
+  absolute path on the computer that did the slicing. On a device that can't see
+  that scan folder, CAM says so plainly and grading still works from the crops —
+  you just can't re-frame a question there.
+
+### 6 · Deleting an exam permanently
+
+Archiving an exam (Window 1) is soft and reversible — **Restore** brings it back
+untouched. **Delete permanently** in the Archived dialog is the one that reaches
+into the workspace: for an exam it also removes the **sliced answer images, the
+exam definition, the grading file and the exported CSV** for that exam (the
+dialog spells this out before you confirm). The CSV *must* go, or the watch-folder
+sync would just re-ingest it and resurrect the "deleted" exam. As with any
+permanent delete, it's gated behind the **Confirm** checkbox.
 
 ---
 
