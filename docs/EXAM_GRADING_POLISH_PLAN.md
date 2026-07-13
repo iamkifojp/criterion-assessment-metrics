@@ -172,7 +172,31 @@ Main page, exam mode (`renderExamTable`, `makeExamRow`, `loadExam`).
      exam ingest tolerates the extra column before shipping (it keys columns
      by header).
 
-## Phase 5 — Anonymous exam grading (item 6)
+## Phase 5 — Anonymous exam grading (item 6) — ✅ Done
+
+Implemented in `cam_grading_workspace/app.py` (frontend + `/api/exam/load`).
+
+**Server (D6, display-only).** When `anonymous_enabled()`, `/api/exam/load`
+blanks every display name (`name: ""`) and adds an `anonymous: true` flag to the
+payload; `key` stays the real stem. `EXAM_STATE` is never mutated (same doctrine
+as `present_students()`), so `/api/exam/grade`, crop serving and the CSV export
+all read real identifiers unchanged. `/api/exam/grade`'s response carries no name
+field, so nothing leaks there.
+
+**Client (YouMark-style numbering).** New `EXAM_ANON` global (set from
+`data.anonymous` in `loadExam`) plus a deterministic mulberry32 PRNG over a
+string hash (`examStrHash`/`examMulberry32`/`examSeededShuffle`). A single
+`examView()` returns the ordered `{st,label}` pairs both the roster and the sheet
+iterate, so the two screens always share one order. Anonymous on: shuffle with
+seed `class|exam|CURRENT_Q` and label by position (`01`, `02`, …) — stable on
+reload, re-shuffled per question, so no number ever tracks a student across
+questions. Anonymous off: today's order (server-alphabetical) with real names.
+`renderExamRoster`/`renderExamTable`/`makeExamRow` now take the label from
+`examView()`. Toggling the pref reloads an open exam (`loadExam`) as well as an
+open assignment. The settings-modal note now covers exams (positional numbering
++ real-name exports). Residue is unchanged from the assignment layer: real keys
+still ride the DOM/network and handwriting can identify a student — bias
+reduction, not blind review.
 
 The device pref (`anonymous_grading`) must cover exam mode; today
 `/api/exam/load` returns raw filename stems. Design is **YouMark-style

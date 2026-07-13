@@ -2972,12 +2972,20 @@ def api_exam_load():
         EXAM_STATE["students"] = roster
         EXAM_STATE["checklist"] = checklist
 
+    # Anonymous grading (D6, YouMark-style): blank every display name; the real
+    # stem stays in `key` for the round-trip (crops, grades, export all read
+    # EXAM_STATE, which stays real). The client re-shuffles + numbers by
+    # position per question — see examView(). Same display-only doctrine as the
+    # assignment layer's present_students(); EXAM_STATE is never mutated here.
+    anon = anonymous_enabled()
     return jsonify({
         "class_name": class_name,
         "exam_name": exam_name,
         "questions": config["questions"],
         "checklist": checklist,
-        "students": [{"key": k, "name": k, **v} for k, v in roster.items()],
+        "anonymous": anon,
+        "students": [{"key": k, "name": ("" if anon else k), **v}
+                     for k, v in roster.items()],
     })
 
 
@@ -3508,9 +3516,12 @@ HTML_PAGE = r"""<!DOCTYPE html>
       </label>
       <div class="sm-note" style="margin-bottom:12px;">
         Hides student names, IDs and filenames and shuffles the grading order to
-        reduce bias. It does not stop a student writing their name inside the
-        work, and the “↗ open” link still shows the real file. The exported CSV
-        keeps the real names either way. Reload the assignment to apply a change.
+        reduce bias. In exam grading, papers are numbered by position (01, 02, …)
+        and re-shuffled for every question, so a number never identifies a
+        student. It does not stop a student writing their name inside the work,
+        and the “↗ open” link still shows the real file. The exported CSV — for
+        both assignments and exams — keeps the real names either way. Reload the
+        assignment to apply a change.
       </div>
       <label class="sm-field">
         <span>Cloud Sync Directory · managed by CAM</span>
@@ -3912,7 +3923,9 @@ $("#anonToggle").addEventListener("change", async () => {
     });
   } catch (e) { console.warn("prefs save failed", e); }
   $("#settingsStatus").textContent = on ? "Anonymous grading on." : "Anonymous grading off.";
-  if (STUDENTS.length && $("#assignmentSelect").value &&
+  if (EXAM && EXAM.exam_name) {
+    loadExam(EXAM.exam_name);   // re-fetch the exam so names blank/unblank at once
+  } else if (STUDENTS.length && $("#assignmentSelect").value &&
       !$("#assignmentSelect").value.startsWith("exam::")) {
     loadFolder();     // re-fetch the assignment so the new payload takes effect
   }
@@ -4873,6 +4886,53 @@ let EXAM = null;            // {exam_name, questions:[{label,range,max}], studen
 let EXAM_BY_KEY = {};
 let CURRENT_Q = null;       // label of the question currently on the left screen
 let examSelectedKey = null;
+let EXAM_ANON = false;      // anonymous grading on for this exam (server pref, D6)
+
+/* Anonymous exam order (decision D6, YouMark-style). The server blanks the
+   display names and the client re-orders + numbers per question so the same
+   student never carries a stable alias across questions. A deterministic
+   mulberry32 PRNG seeded on a string hash of class|exam|question gives an order
+   that is stable across reloads but different for every question. */
+function examStrHash(s) {
+  let h = 1779033703 ^ s.length;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return h >>> 0;
+}
+function examMulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function examSeededShuffle(arr, seedStr) {
+  const rng = examMulberry32(examStrHash(seedStr));
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/* The ordered (student, display-label) pairs the roster + sheet both iterate,
+   so the two screens always share one order. Anonymous on: shuffle per question
+   (seed = class|exam|CURRENT_Q) and label by POSITION — "01", "02", … — which
+   is a progress counter, not an identity (the same student gets a different
+   number on the next question). Anonymous off: today's order (as the server
+   sends it, alphabetical) with real names. */
+function examView() {
+  if (!EXAM) return [];
+  if (!EXAM_ANON) return EXAM.students.map(st => ({st, label: st.name}));
+  const seed = (ACTIVE_CLASS_NAME || "") + "|" + (EXAM.exam_name || "")
+             + "|" + (CURRENT_Q || "");
+  return examSeededShuffle(EXAM.students, seed)
+    .map((st, i) => ({st, label: String(i + 1).padStart(2, "0")}));
+}
 
 /* Cache-buster bumped when a question is re-sliced in the Exam Setup tab
    (Phase 6). Appended to crop URLs so the browser refetches the new framing
@@ -4927,6 +4987,7 @@ async function loadExam(examName) {
     const data = await res.json();
     if (!res.ok) { setStatus(""); alert(data.error || "Failed to load exam."); return; }
     EXAM = data;
+    EXAM_ANON = !!data.anonymous;   // server blanked names; client numbers by position
     EXAM_BY_KEY = {};
     EXAM.students.forEach(st => {
       st.scores = st.scores || {};
@@ -4983,7 +5044,7 @@ function exitExamMode() {
 function renderExamRoster() {
   roster.innerHTML = "";
   if (!EXAM) return;
-  EXAM.students.forEach(st => {
+  examView().forEach(({st, label}) => {
     const card = document.createElement("div");
     card.className = "scard" + (examFullyGraded(st) ? " graded" : "")
                    + (st.key === examSelectedKey ? " selected" : "");
@@ -4991,7 +5052,7 @@ function renderExamRoster() {
 
     const img = document.createElement("img");
     img.className = "exam-img"; img.loading = "lazy";
-    img.src = cropUrl(CURRENT_Q, st.key); img.alt = st.name;
+    img.src = cropUrl(CURRENT_Q, st.key); img.alt = label;
     img.onerror = () => img.replaceWith(Object.assign(document.createElement("div"),
       {className: "ph", textContent: "No slice for " + CURRENT_Q}));
     attachExamZoom(img, cropUrl(CURRENT_Q, st.key));
@@ -5010,7 +5071,7 @@ function renderExamRoster() {
     // a running score sum while grading is still in flight.
     const done = EXAM.questions.filter(q => st.scores[q.label] !== undefined).length;
     const nq = EXAM.questions.length;
-    meta.innerHTML = `<div class="nm">${escapeHtml(st.name)}</div>`
+    meta.innerHTML = `<div class="nm">${escapeHtml(label)}</div>`
       + `<div class="sub">${done ? done + "/" + nq + " questions" : "ungraded"}</div>`;
     card.appendChild(meta);
 
@@ -5063,7 +5124,7 @@ function renderExamTable() {
   t.innerHTML = `<thead><tr><th class="idcol">Student</th>${qcol}`
               + `<th>Keywords</th><th>Comment</th></tr></thead>`;
   const tb = document.createElement("tbody");
-  EXAM.students.forEach(st => tb.appendChild(makeExamRow(st)));
+  examView().forEach(({st, label}) => tb.appendChild(makeExamRow(st, label)));
   t.appendChild(tb);
   // The ✎ opens Exam Setup focused on this question (Phase 6).
   t.querySelectorAll("button.qadjust").forEach(b =>
@@ -5072,13 +5133,13 @@ function renderExamTable() {
   tableWrap.appendChild(t);
 }
 
-function makeExamRow(st) {
+function makeExamRow(st, label) {
   const tr = document.createElement("tr");
   tr.dataset.key = st.key;
   if (st.key === examSelectedKey) tr.classList.add("selected");
 
   const tdN = document.createElement("td"); tdN.className = "name idcol";
-  tdN.innerHTML = `<span class="sid">${escapeHtml(st.name)}</span>`;
+  tdN.innerHTML = `<span class="sid">${escapeHtml(label != null ? label : st.name)}</span>`;
   tr.appendChild(tdN);
 
   // Only the current question's score column (D3): no running total anywhere.
