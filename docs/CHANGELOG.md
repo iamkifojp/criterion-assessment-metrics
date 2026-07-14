@@ -6,6 +6,32 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — Quick Guide rewrite: manual-matched voice, fuller task pages
+
+**What this changes** — the first-draft Quick Guide text read clipped and
+robotic next to the rest of the shipped docs, and each A4 task page left most
+of its space unused. The guide is rewritten in
+[USER_MANUAL.md](USER_MANUAL.md)'s voice and each page now also covers the
+important related functions and settings.
+
+- **Manual-matched writing.** Second person with the reason behind each
+  instruction ("CAM suggests, you decide"), real UI labels with their emoji
+  glyphs (⚙ Settings, 📁 Browse…, ➕ Add assignment / exam) verified against
+  `app.py`, and en dashes for ranges (A–D, 0–8). Audience unchanged: IT-savvy
+  teachers with no programming background.
+- **"Good to know" per page.** Each task page gains a short section on the
+  nearby functionality the draft skipped: app-vs-data folder separation, the
+  three-window cockpit vocabulary, CSV import / watched-folder ingest,
+  exclude/flag/late, weighting method, single-question re-slicing, anonymous
+  grading, comment clipboard-vs-API modes, the off-by-default
+  Settings → Report-card grades toggles, restore-as-rescue-tool, and a new
+  "Your gradebook is damaged" recovery path on the troubleshooting page.
+- **Layout verified against the page clip.** Task pages hard-clip at 274mm, so
+  the rebuilt HTML was measured at exact print width: every page uses
+  197–208mm of the 263mm budget (55–66mm headroom). Structure is unchanged —
+  seven `##` pages, all seven SVGs, `tests/test_quick_guide.py` still passes —
+  and `docs/CAM Quick Guide.pdf` is rebuilt from the new source.
+
 ## 2026-07-14 — Windows bundle Phase 4: release verification and handoff docs
 
 **What this changes** (Phase 4 of
