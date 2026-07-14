@@ -6,6 +6,29 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — Portable launcher: silent first-run hang fixed (v2026.07.14.1)
+
+**What this changes** — on a laptop that had never run Streamlit, double-clicking
+`Start CAM.vbs` appeared to do nothing. Streamlit 1.58.0 still shows an
+interactive first-run email prompt (`streamlit/runtime/credentials.py`) when no
+`%USERPROFILE%\.streamlit\credentials.toml` exists, and that prompt blocked
+forever inside the launcher's hidden console — the prompt text went to
+`logs\cam.log` and nothing ever reached the screen. Development machines never
+hit this because the credentials file already existed there.
+
+- **Headless launch.** Both launchers now pass `--server.headless true` (plus
+  `--browser.gatherUsageStats false`), which skips the email prompt entirely.
+- **The launcher opens the browser.** Headless mode disables Streamlit's own
+  browser auto-open, so `Start CAM.vbs` polls
+  `http://localhost:8600/_stcore/health` and opens the browser once the server
+  answers. A second double-click while CAM is already running now simply
+  reopens the browser instead of dying silently on the occupied port.
+- **No more invisible failures.** The vbs shows a brief auto-closing
+  "CAM is starting" message, a clear error when `runtime\python.exe` is missing
+  (the ran-it-from-inside-the-zip case), and points to the troubleshooting
+  launcher if the server does not come up within 5 minutes.
+  `READ ME FIRST.txt` now also walks through the SmartScreen "Open" prompt.
+
 ## 2026-07-14 — v2026.07.14 Windows portable release
 
 **What this changes** — CAM now has a public, self-contained 64-bit Windows

@@ -30,7 +30,17 @@ class WindowsBundleTests(unittest.TestCase):
             bat = (bundle / "Start CAM (troubleshooting).bat").read_text()
             self.assertIn("--server.port 8600", vbs)
             self.assertIn("logs\\cam.log", vbs)
+            # Headless skips Streamlit's first-run email prompt, which would
+            # otherwise block invisibly on a machine that never ran Streamlit.
+            self.assertIn("--server.headless true", vbs)
+            # With headless set, the launcher must open the browser itself.
+            self.assertIn("http://localhost:8600", vbs)
+            self.assertIn("_stcore/health", vbs)
+            # Friendly errors for the ran-from-inside-the-zip case.
+            self.assertIn('fso.FileExists(fso.BuildPath(root, "runtime\\python.exe"))', vbs)
+            self.assertIn("MsgBox", vbs)
             self.assertIn("--server.port 8600", bat)
+            self.assertIn("--server.headless true", bat)
             self.assertIn("Extract All", (bundle / "READ ME FIRST.txt").read_text(encoding="utf-8-sig"))
 
     def test_audit_rejects_sensitive_file_at_any_depth(self):

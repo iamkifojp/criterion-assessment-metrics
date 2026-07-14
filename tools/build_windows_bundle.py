@@ -140,23 +140,86 @@ def install_runtime(bundle: Path, python_version: str) -> None:
 
 
 def write_launchers(bundle: Path) -> None:
+    # --server.headless true is load-bearing, not cosmetic: without it, a
+    # machine that has never run Streamlit gets the interactive "Welcome to
+    # Streamlit! Email:" prompt (streamlit/runtime/credentials.py), which
+    # blocks forever inside the hidden console — the classic "Start CAM.vbs
+    # does nothing" failure on a colleague's laptop. Headless skips the prompt
+    # but also disables Streamlit's own browser auto-open, so the VBS polls
+    # the health endpoint and opens the browser itself.
     vbs = '''Option Explicit
-Dim shell, fso, root, logs, command
+Dim shell, fso, root, logs, command, waited
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 root = fso.GetParentFolderName(WScript.ScriptFullName)
-logs = fso.BuildPath(root, "logs")
-If Not fso.FolderExists(logs) Then fso.CreateFolder(logs)
-shell.CurrentDirectory = root
-command = "cmd.exe /d /c """"runtime\\python.exe"" -m streamlit run app.py --server.port 8600 >> ""logs\\cam.log"" 2>&1"""
-shell.Run command, 0, False
+
+If Not fso.FileExists(fso.BuildPath(root, "runtime\\python.exe")) Then
+    MsgBox "CAM's runtime folder is missing, so CAM cannot start." _
+        & vbCrLf & vbCrLf _
+        & "This usually means the downloaded zip was not fully extracted." _
+        & " Right-click the zip, choose Extract All, and double-click" _
+        & " Start CAM.vbs inside the extracted folder.", _
+        vbExclamation, "CAM could not start"
+    WScript.Quit 1
+End If
+
+' A second click while CAM is already running just reopens the browser.
+If Not ServerReady() Then
+    logs = fso.BuildPath(root, "logs")
+    If Not fso.FolderExists(logs) Then fso.CreateFolder(logs)
+    shell.CurrentDirectory = root
+    command = "cmd.exe /d /c """"runtime\\python.exe"" -m streamlit run app.py" _
+        & " --server.port 8600 --server.headless true" _
+        & " --browser.gatherUsageStats false" _
+        & " >> ""logs\\cam.log"" 2>&1"""
+    shell.Run command, 0, False
+End If
+
+' Auto-closing toast so the otherwise silent start is visible.
+shell.Popup "CAM is starting." & vbCrLf _
+    & "Your browser will open when CAM is ready - the first start can" _
+    & " take a few minutes on a new laptop.", 4, "CAM", vbInformation
+
+waited = 0
+Do Until ServerReady()
+    If waited >= 300 Then
+        MsgBox "CAM did not start within 5 minutes." & vbCrLf & vbCrLf _
+            & "Double-click ""Start CAM (troubleshooting).bat"" to see the" _
+            & " error on screen, and check the logs\\cam.log file.", _
+            vbExclamation, "CAM could not start"
+        WScript.Quit 1
+    End If
+    WScript.Sleep 1000
+    waited = waited + 1
+Loop
+shell.Run "http://localhost:8600"
+
+Function ServerReady()
+    On Error Resume Next
+    Dim request
+    ServerReady = False
+    Set request = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    request.SetTimeouts 1000, 1000, 1000, 1000
+    request.Open "GET", "http://localhost:8600/_stcore/health", False
+    request.Send
+    If Err.Number = 0 Then ServerReady = (request.Status = 200)
+End Function
 '''
     bat = r'''@echo off
 setlocal
 cd /d "%~dp0"
+if not exist "runtime\python.exe" (
+    echo CAM's runtime folder is missing - the downloaded zip was probably not
+    echo fully extracted. Right-click the zip, choose Extract All, and run this
+    echo file from the extracted folder.
+    pause
+    exit /b 1
+)
 if not exist logs mkdir logs
-echo CAM troubleshooting output is also saved in logs\cam.log.
-"runtime\python.exe" -m streamlit run app.py --server.port 8600 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath 'logs\cam.log' -Append"
+echo CAM is starting. When the "You can now view" lines appear below, open
+echo http://localhost:8600 in your browser.
+echo Output is also saved in logs\cam.log.
+"runtime\python.exe" -m streamlit run app.py --server.port 8600 --server.headless true --browser.gatherUsageStats false 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath 'logs\cam.log' -Append"
 echo.
 echo CAM stopped. Review the messages above or logs\cam.log.
 pause
@@ -176,11 +239,14 @@ def write_readme(bundle: Path) -> None:
 
 1. Right-click the downloaded zip and choose Extract All.
 2. Open the extracted folder and double-click Start CAM.vbs.
-3. In CAM, pick a data folder such as Documents\\CAM Data.
+3. If Windows asks "Do you want to open this file?", choose Open.
+4. A small "CAM is starting" message appears, then your browser opens CAM
+   when it is ready. The first start can take a few minutes on a new laptop.
+5. In CAM, pick a data folder such as Documents\\CAM Data.
 
-Keep the extracted folder together; do not run CAM from inside the zip. The
-first start can take a little longer. If CAM does not open, double-click
-Start CAM (troubleshooting).bat and check logs\\cam.log.
+Keep the extracted folder together; do not run CAM from inside the zip. If
+CAM reports it could not start, double-click Start CAM (troubleshooting).bat
+to see the error on screen, and check logs\\cam.log.
 
 UPDATING CAM
 Download and extract the new app folder, then use that folder instead of the
