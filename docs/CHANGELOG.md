@@ -6,6 +6,33 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — Windows bundle Phase 3: CAM Quick Guide
+
+**What this changes** (Phase 3 of
+[WINDOWS_BUNDLE_PLAN.md](WINDOWS_BUNDLE_PLAN.md)) — colleagues now receive a
+plain-language, seven-page PDF that covers the core CAM workflow from first
+start through backup and recovery.
+
+- **Task-based guide.** `docs/QUICK_GUIDE.md` gives one page each to getting
+  started, setting up a class, adding assignments and marks, grading scanned
+  exams, building reports, backing up a term and troubleshooting. Instructions
+  use the current button and field labels and keep local data-folder safety
+  visible throughout.
+- **Consistent walkthrough visuals.** Seven original SVG panels in
+  `docs/quick_guide_images/` illustrate the exact action sequence for each task
+  at a fixed, print-friendly size. They stay sharp in the PDF and avoid bundling
+  any real student data or machine-specific paths.
+- **Zero-dependency PDF build.** `tools/build_quick_guide.py` renders the small
+  Markdown subset to styled HTML, resolves local images to file URIs and asks
+  installed Microsoft Edge to print `docs/CAM Quick Guide.pdf`. Each level-two
+  heading becomes one A4 page with a task label and page footer; Edge discovery
+  supports the normal Windows install locations, `EDGE_PATH` and `--edge`.
+- **Bundle and render verification.** Tests enforce the seven-page structure,
+  Markdown rendering and bundle-root PDF copy. The generated PDF was rendered
+  page by page for visual inspection, and a stage-only portable build confirmed
+  the guide is included while credential, token and local-preference filenames
+  remain absent. A narrow `.gitignore` exception tracks only this planned PDF.
+
 ## 2026-07-14 — Windows bundle Phase 2: portable build script
 
 **What this changes** (Phase 2 of

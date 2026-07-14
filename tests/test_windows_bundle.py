@@ -52,6 +52,21 @@ class WindowsBundleTests(unittest.TestCase):
             self.assertFalse((scripts / "streamlit.exe").exists())
             self.assertTrue((scripts / "helper.py").exists())
 
+    def test_quick_guide_is_copied_to_bundle_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            guide = root / "guide.pdf"
+            guide.write_bytes(b"%PDF-1.4\nfictional guide")
+
+            builder.copy_quick_guide(bundle, guide)
+
+            self.assertEqual(
+                (bundle / "CAM Quick Guide.pdf").read_bytes(),
+                guide.read_bytes(),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -74,3 +74,4 @@ acm_database.json.blocked-*
 acm_term_summaries_*.json
 *.docx
 *.pdf
+!docs/CAM Quick Guide.pdf

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">Get started with CAM</title><desc id="desc">Extract the bundle, start CAM, then choose a data folder.</desc>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#4e8891"/></marker></defs>
+  <rect width="1200" height="420" rx="22" fill="#f7f9fa"/>
+  <g font-family="Segoe UI,Arial,sans-serif" fill="#233044">
+    <g transform="translate(45 55)"><rect width="300" height="285" rx="18" fill="#fff" stroke="#d3dce2" stroke-width="3"/><rect x="28" y="35" width="82" height="96" rx="8" fill="#dceaf0"/><path d="M82 35v30h28" fill="none" stroke="#4e8891" stroke-width="5"/><text x="28" y="174" font-size="27" font-weight="700">1. Extract All</text><text x="28" y="212" font-size="19" fill="#607080">Open the extracted folder.</text><text x="28" y="244" font-size="19" fill="#607080">Do not run inside the zip.</text></g>
+    <path d="M365 198h70" stroke="#4e8891" stroke-width="5" marker-end="url(#a)"/>
+    <g transform="translate(450 55)"><rect width="300" height="285" rx="18" fill="#fff" stroke="#d3dce2" stroke-width="3"/><rect x="28" y="35" width="244" height="98" rx="10" fill="#24384a"/><text x="150" y="80" text-anchor="middle" font-size="20" fill="#fff">Start CAM.vbs</text><text x="150" y="109" text-anchor="middle" font-size="15" fill="#bcd0dc">double-click</text><text x="28" y="174" font-size="27" font-weight="700">2. Start CAM</text><text x="28" y="212" font-size="19" fill="#607080">Your browser opens.</text><text x="28" y="244" font-size="19" fill="#607080">The first start may be slower.</text></g>
+    <path d="M770 198h70" stroke="#4e8891" stroke-width="5" marker-end="url(#a)"/>
+    <g transform="translate(855 55)"><rect width="300" height="285" rx="18" fill="#fff" stroke="#d3dce2" stroke-width="3"/><path d="M30 53h94l18 21h128v82H30z" fill="#f1d9a9" stroke="#c79c4b" stroke-width="3"/><text x="150" y="107" text-anchor="middle" font-size="21" font-weight="700">CAM Data</text><text x="28" y="196" font-size="27" font-weight="700">3. Choose data</text><text x="28" y="234" font-size="19" fill="#607080">Start fresh in Documents,</text><text x="28" y="266" font-size="19" fill="#607080">or use Browse...</text></g>
+  </g>
+</svg>
