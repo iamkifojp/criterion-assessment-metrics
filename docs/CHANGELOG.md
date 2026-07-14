@@ -6,6 +6,30 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — Windows bundle Phase 1: native folder pickers
+
+**What this changes** (Phase 1 of
+[WINDOWS_BUNDLE_PLAN.md](WINDOWS_BUNDLE_PLAN.md)) — Windows users can choose
+local folders with the native Select Folder dialog instead of typing every
+path. The editable path boxes remain available for network paths and Google
+Drive folder IDs.
+
+- **Browse buttons at all folder inputs.** Settings' database path, term backup
+  folder, assignment re-linking, class master directory and first-boot setup now
+  have a **📁 Browse…** action on Windows. Form-contained path rows were moved
+  outside their forms while retaining the existing Save/Create semantics.
+- **Subprocess-isolated native dialog.** `engine/folder_dialog.py` hosts the
+  Windows COM/STA work outside Streamlit's script thread, brings the dialog to
+  the foreground and falls back to PowerShell's folder dialog when COM cannot
+  be used. No tkinter dependency is required by the portable runtime; other
+  operating systems continue to show editable path boxes without Browse.
+- **Bundle-safe Start fresh.** On Windows, the first-boot sample gradebook now
+  lives in the shell-resolved `Documents\CAM Data` folder, including redirected
+  OneDrive Documents locations, instead of beside `app.py`. CAM creates the
+  folder and copies the fictional sample database only when no database exists
+  there; existing data is never overwritten. `CAM_DOCUMENTS_OVERRIDE` provides
+  an isolated destination for verification.
+
 ## 2026-07-14 — Docs: exam identity routing, naming panel, section banding
 
 **What this documents** (Phase 7 of
