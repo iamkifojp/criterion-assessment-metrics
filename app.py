@@ -74,8 +74,11 @@ from engine import (
     gojuon_sort_key,
     student_id_from_email,
     DEFAULT_DB_FILENAME,
+    DatabaseSnapshot,
     save_database,
     load_database,
+    capture_database_snapshot,
+    load_database_snapshot,
     db_file_state,
     unit_plan_to_dict,
     unit_plan_from_dict,
@@ -422,8 +425,8 @@ def discover_db_candidates(max_depth: int = 3) -> list:
 EMPTY_DB_MAX_BYTES = 4096
 
 
-def diagnose_db_load(path: str) -> Optional[dict]:
-    """Decide whether the boot hydrate may safely run against ``path``.
+def diagnose_db_load(source: str | DatabaseSnapshot) -> Optional[dict]:
+    """Decide whether boot may hydrate from a path or captured snapshot.
 
     Returns ``None`` when it is safe to proceed with the normal load-or-start-
     empty behaviour, or a ``{"reason": ..., "path": ...}`` dict when the app
@@ -439,18 +442,17 @@ def diagnose_db_load(path: str) -> Optional[dict]:
     is not currently accessible — an unplugged drive, an unmounted cloud folder,
     a disconnected share).
     """
-    state = db_file_state(path)
+    snapshot = (source if isinstance(source, DatabaseSnapshot)
+                else capture_database_snapshot(source))
+    path = snapshot.path
+    state = snapshot.state
     if state == "unreadable":
         return {"reason": "unreadable", "path": path}
     if state == "ok":
-        loaded = load_database(path)
+        loaded = load_database_snapshot(snapshot)
         if loaded and not (loaded["gradebook"].students
                            or loaded["gradebook"].assignments):
-            try:
-                size = os.path.getsize(path)
-            except OSError:
-                size = 0
-            if size > EMPTY_DB_MAX_BYTES:
+            if snapshot.size > EMPTY_DB_MAX_BYTES:
                 return {"reason": "empty-load", "path": path}
         return None
     # state == "absent": an absent file in an existing folder is a legitimate
@@ -781,15 +783,16 @@ def init_state() -> None:
     # runs on the next rerun with the gate cleared.
     if not st.session_state["db_loaded"] and not _needs_first_boot_setup():
         path = db_path()
+        snapshot = capture_database_snapshot(path)
         # Load-guard (Phase 1): never let the demo session run — and then
         # autosave — on top of a real database we merely failed to read. If the
         # configured path is unreadable, empty-but-heavy, or on missing storage,
         # quarantine instead of proceeding; persist() then refuses to write.
-        blocked = diagnose_db_load(path)
+        blocked = diagnose_db_load(snapshot)
         if blocked:
             st.session_state["db_load_blocked"] = blocked
         else:
-            loaded = load_database(path)
+            loaded = load_database_snapshot(snapshot)
             if loaded and (loaded["gradebook"].students or loaded["gradebook"].assignments):
                 st.session_state["gradebook"] = loaded["gradebook"]
                 restore_session(loaded.get("session", {}))

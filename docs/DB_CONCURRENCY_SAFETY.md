@@ -2,9 +2,9 @@
 
 ## Status
 
-Proposed implementation plan. This document describes the work required to
-protect the CAM database from stale writes and cloud-synchronization conflicts.
-It does not indicate that the safeguards have already been implemented.
+Phase 1 (the single-read immutable boot snapshot) is implemented. Phases 2-5
+remain proposed work. In particular, CAM does not yet compare generations before
+a save, so Phase 1 alone does not prevent the stale-writer scenario below.
 
 ## Purpose
 
@@ -245,9 +245,24 @@ No production implementation should occur until this design is reviewed.
 
 ### Phase 1: single-read boot snapshot
 
-Implement the immutable snapshot abstraction and change boot diagnosis,
-validation, mass calculation, and hydration to use it. Preserve current behavior
-apart from eliminating repeated reads of the live cloud file.
+Implemented. `engine.persistence.capture_database_snapshot()` reads the active
+database bytes once and returns a frozen `DatabaseSnapshot` carrying the path,
+state, raw bytes, SHA-256 content hash, captured size/mtime, schema version,
+structural mass, validation codes, and optional read-only identity/generation
+observations. `load_database_snapshot()` hydrates only from those captured bytes;
+the existing `load_database(path)` and `db_file_state(path)` APIs remain
+compatibility wrappers.
+
+At boot, `app.init_state()` captures one snapshot and passes it to both
+`diagnose_db_load()` and hydration. The empty-but-heavy quarantine check uses the
+captured size, so replacing or deleting the live cloud file after capture cannot
+change either the boot decision or the hydrated object graph. The snapshot is a
+boot-local value and is not retained in Streamlit session state.
+
+Phase 1 does not create database identity metadata, advance a generation, reject
+future schemas, add compare-before-write behavior, or change the on-disk format.
+It also leaves `persist()`, atomic replacement, shrink detection, blocked-payload
+parking, backup rotation/pruning, and class-mirror protections unchanged.
 
 Completion criteria:
 
@@ -256,6 +271,10 @@ Completion criteria:
 - an on-disk replacement after capture cannot change the object hydrated from
   that snapshot; and
 - existing isolated persistence tests continue to pass.
+
+All four criteria are covered by `tests/test_database_snapshot.py` and
+`tests/test_app_database_snapshot.py`, including a counted single content read
+and replacement-after-capture cases.
 
 ### Phase 2: stale-writer protection
 

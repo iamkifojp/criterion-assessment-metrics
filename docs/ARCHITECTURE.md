@@ -217,15 +217,21 @@ different data models.**
 persistence layer mirrors every in-memory change straight to disk, so if the
 app booted the demo gradebook while *pointed at* a real (but momentarily
 unreadable) database, the next autosave would overwrite a year of grades. The
-guard closes that hole. At boot, `diagnose_db_load(db_path())` (`app.py`)
-classifies the configured path via `db_file_state()` (`engine/persistence.py`,
-which distinguishes **absent / ok / unreadable** — a distinction the plain
-`load_database` `None` contract hides) and refuses to proceed silently when the
-file **exists but is unreadable/malformed**, when it **parses but yields no
-students/assignments despite carrying real bytes** (`> EMPTY_DB_MAX_BYTES`), or
-when it is **absent and its parent folder/volume is itself missing** (an
-unplugged drive, an unmounted cloud folder, a disconnected share — *not* a first
-run). Any of these sets `st.session_state["db_load_blocked"] = {reason, path}`;
+guard closes that hole. At boot, `capture_database_snapshot(db_path())`
+(`engine/persistence.py`) reads the database content exactly once into a frozen
+`DatabaseSnapshot`: immutable raw bytes plus a SHA-256 hash, captured size/mtime,
+schema version, structural mass, coarse validation results, and optional
+identity/generation observations. `diagnose_db_load(snapshot)` and
+`load_database_snapshot(snapshot)` then classify and hydrate only those captured
+bytes; a cloud replacement after capture cannot change the boot decision or the
+object graph loaded by that boot. The snapshot distinguishes **absent / ok /
+unreadable** — a distinction the compatibility `load_database(path)` `None`
+contract hides — and refuses to proceed silently when the file **exists but is
+unreadable/malformed**, when it **parses but yields no students/assignments
+despite carrying real bytes** (`snapshot.size > EMPTY_DB_MAX_BYTES`), or when it
+is **absent and its parent folder/volume is itself missing** (an unplugged drive,
+an unmounted cloud folder, a disconnected share — *not* a first run). Any of
+these sets `st.session_state["db_load_blocked"] = {reason, path}`;
 `persist()` then refuses every write and a full-width **read-only quarantine**
 banner names the path and the fix (restart after repairing the file/path). Only
 an **absent file inside an existing folder** is treated as a legitimate first
