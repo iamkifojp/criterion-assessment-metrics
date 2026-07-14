@@ -6,6 +6,32 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-15 — Database concurrency safety Phase 1: immutable boot snapshot
+
+**What this changes** — CAM previously read `acm_database.json` separately for
+boot classification, empty-load diagnosis and hydration. A OneDrive or other
+cloud client could replace the file between those reads, so the app could
+validate one generation and hydrate another.
+
+- **One captured generation per boot.** `capture_database_snapshot()` reads the
+  configured database bytes once and records immutable content, a SHA-256 hash,
+  captured size/mtime, schema version, structural mass and coarse validation
+  results. `diagnose_db_load()` and hydration now operate only on that snapshot;
+  replacing the live file after capture cannot change the boot decision or the
+  object graph loaded from it.
+- **Compatibility retained.** Existing `load_database(path)` and
+  `db_file_state(path)` callers keep their contracts as wrappers over the new
+  snapshot API. Version-1 databases remain unchanged on disk; optional identity
+  and generation values are observed only, not created or enforced.
+- **Safety scope remains explicit.** Quarantine, atomic saves, shrink detection,
+  blocked-payload parking, rotating backups and class-mirror protections are
+  unchanged. This phase does **not** prevent stale writes; generation comparison
+  and conflict recovery remain Phase 2 work.
+- **Regression coverage.** Snapshot and app-level tests count the single content
+  read, replace the live file after capture, verify legacy/malformed/absent
+  behavior, and confirm boot hydration invokes no save, backup, parking or mirror
+  write.
+
 ## 2026-07-14 — Portable launcher: silent first-run hang fixed (v2026.07.14.1)
 
 **What this changes** — on a laptop that had never run Streamlit, double-clicking
