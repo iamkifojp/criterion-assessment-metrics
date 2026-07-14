@@ -34,6 +34,14 @@ FORBIDDEN_NAMES = {
     "token.json",
     "local_device_prefs.json",
 }
+REQUIRED_BUNDLE_FILES = {
+    "CAM Quick Guide.pdf",
+    "READ ME FIRST.txt",
+    "Start CAM (troubleshooting).bat",
+    "Start CAM.vbs",
+    "acm_database.json",
+    "app.py",
+}
 
 
 def run(command: list[str | os.PathLike[str]], *, cwd: Path) -> None:
@@ -92,6 +100,13 @@ def enable_site_packages(runtime: Path) -> None:
             changed = True
     if not changed and not any(line.strip() == "import site" for line in lines):
         raise RuntimeError("Could not enable 'import site' in python314._pth")
+    # The embeddable runtime ignores cwd, PYTHONPATH, and the script directory
+    # while a ._pth file is present. Streamlit executes app.py rather than
+    # invoking it as Python's script, so CAM's root package would otherwise be
+    # invisible. The workspace also uses same-folder imports (exam_engine).
+    for relative in ("..", r"..\cam_grading_workspace"):
+        if relative not in lines:
+            lines.insert(1, relative)
     pth.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -146,7 +161,10 @@ echo.
 echo CAM stopped. Review the messages above or logs\cam.log.
 pause
 '''
-    (bundle / "Start CAM.vbs").write_text(vbs, encoding="utf-8-sig")
+    # Windows Script Host treats an UTF-8 BOM as an invalid first character on
+    # supported school Windows builds. Its Unicode script format is UTF-16LE
+    # with a BOM, which ``encoding="utf-16"`` writes portably.
+    (bundle / "Start CAM.vbs").write_text(vbs, encoding="utf-16")
     (bundle / "Start CAM (troubleshooting).bat").write_text(
         bat, encoding="utf-8", newline="\r\n"
     )
@@ -194,15 +212,58 @@ def prune_runtime(bundle: Path) -> None:
             shim.unlink()
 
 
+def _unsafe_payload_paths(paths: list[Path]) -> list[Path]:
+    """Return paths that could contain device secrets or a real gradebook."""
+    unsafe: list[Path] = []
+    for path in paths:
+        name = path.name.casefold()
+        if name in FORBIDDEN_NAMES:
+            unsafe.append(path)
+        elif name.startswith("client_secret_") and name.endswith(".json"):
+            unsafe.append(path)
+        elif ".bak-" in name:
+            unsafe.append(path)
+        elif name == "acm_database.json" and path != Path("acm_database.json"):
+            # The one root-level file comes from git archive HEAD and is the
+            # fictional sample. A second/nested gradebook is never expected.
+            unsafe.append(path)
+    return unsafe
+
+
 def audit_bundle(bundle: Path) -> None:
-    forbidden = [
-        path.relative_to(bundle)
-        for path in bundle.rglob("*")
-        if path.is_file() and path.name.casefold() in FORBIDDEN_NAMES
+    """Reject secrets, backups, and any gradebook except the tracked sample."""
+    relative_files = [
+        path.relative_to(bundle) for path in bundle.rglob("*") if path.is_file()
     ]
-    if forbidden:
-        joined = ", ".join(map(str, forbidden))
-        raise RuntimeError(f"Sensitive files found in bundle: {joined}")
+    unsafe = _unsafe_payload_paths(relative_files)
+    if unsafe:
+        joined = ", ".join(map(str, unsafe))
+        raise RuntimeError(f"Sensitive or unexpected data files found in bundle: {joined}")
+
+
+def audit_zip(archive: Path, *, require_runtime: bool) -> None:
+    """Audit the actual distributable after compression, not only its stage."""
+    with zipfile.ZipFile(archive) as source:
+        files = {
+            Path(name).relative_to("CAM-portable")
+            for name in source.namelist()
+            if not name.endswith("/") and Path(name).parts[:1] == ("CAM-portable",)
+        }
+        foreign = [
+            name for name in source.namelist()
+            if not name.endswith("/") and Path(name).parts[:1] != ("CAM-portable",)
+        ]
+    if foreign:
+        raise RuntimeError(f"Files outside CAM-portable in archive: {', '.join(foreign)}")
+    unsafe = _unsafe_payload_paths(list(files))
+    if unsafe:
+        joined = ", ".join(map(str, unsafe))
+        raise RuntimeError(f"Sensitive or unexpected data files found in zip: {joined}")
+    missing = REQUIRED_BUNDLE_FILES - {os.fspath(path) for path in files}
+    if require_runtime and Path("runtime/python.exe") not in files:
+        missing.add("runtime/python.exe")
+    if missing:
+        raise RuntimeError(f"Required bundle files missing: {', '.join(sorted(missing))}")
 
 
 def make_zip(bundle: Path, output_dir: Path, version: str) -> Path:
@@ -247,6 +308,7 @@ def main() -> int:
         prune_runtime(bundle)
         audit_bundle(bundle)
         archive = make_zip(bundle, args.output_dir.resolve(), args.version)
+        audit_zip(archive, require_runtime=not args.stage_only)
     print(f"Built {archive}")
     return 0
 

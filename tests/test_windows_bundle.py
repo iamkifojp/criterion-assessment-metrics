@@ -14,14 +14,19 @@ class WindowsBundleTests(unittest.TestCase):
             pth = runtime / "python314._pth"
             pth.write_text("python314.zip\n.\n#import site\n", encoding="utf-8")
             builder.enable_site_packages(runtime)
-            self.assertIn("\nimport site\n", pth.read_text(encoding="utf-8"))
+            contents = pth.read_text(encoding="utf-8")
+            self.assertIn("\nimport site\n", contents)
+            self.assertIn("\n..\n", contents)
+            self.assertIn("\n..\\cam_grading_workspace\n", contents)
 
     def test_launchers_and_readme_are_written(self):
         with tempfile.TemporaryDirectory() as temp:
             bundle = Path(temp)
             builder.write_launchers(bundle)
             builder.write_readme(bundle)
-            vbs = (bundle / "Start CAM.vbs").read_text(encoding="utf-8-sig")
+            vbs_path = bundle / "Start CAM.vbs"
+            self.assertTrue(vbs_path.read_bytes().startswith(b"\xff\xfe"))
+            vbs = vbs_path.read_text(encoding="utf-16")
             bat = (bundle / "Start CAM (troubleshooting).bat").read_text()
             self.assertIn("--server.port 8600", vbs)
             self.assertIn("logs\\cam.log", vbs)
@@ -34,8 +39,35 @@ class WindowsBundleTests(unittest.TestCase):
             nested = bundle / "nested"
             nested.mkdir()
             (nested / "Credentials.json").write_text("secret")
-            with self.assertRaisesRegex(RuntimeError, "Sensitive files"):
+            with self.assertRaisesRegex(RuntimeError, "Sensitive or unexpected"):
                 builder.audit_bundle(bundle)
+
+    def test_audit_rejects_nested_gradebook_and_backup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp)
+            (bundle / "acm_database.json").write_text("fictional sample")
+            nested = bundle / "class"
+            nested.mkdir()
+            (nested / "acm_database.json").write_text("unexpected")
+            (bundle / "acm_database.json.bak-term-20260714-120000").write_text(
+                "backup"
+            )
+            with self.assertRaisesRegex(RuntimeError, "class.*acm_database.json"):
+                builder.audit_bundle(bundle)
+
+    def test_final_zip_audit_checks_payload_and_runtime(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            for name in builder.REQUIRED_BUNDLE_FILES:
+                (bundle / name).write_bytes(b"sample")
+            runtime = bundle / "runtime"
+            runtime.mkdir()
+            (runtime / "python.exe").write_bytes(b"runtime")
+            archive = builder.make_zip(bundle, root, "test")
+
+            builder.audit_zip(archive, require_runtime=True)
 
     def test_prune_removes_caches_and_script_shims(self):
         with tempfile.TemporaryDirectory() as temp:
