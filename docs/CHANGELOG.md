@@ -6,6 +6,24 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — v2026.07.14 Windows portable release
+
+**What this changes** — CAM now has a public, self-contained 64-bit Windows
+distribution intended for teachers who do not have Python, Git or administrator
+access. The release ZIP, checksum, installation steps, upgrade guidance and
+feature summary are documented in
+[RELEASE_NOTES_v2026.07.14.md](RELEASE_NOTES_v2026.07.14.md).
+
+- **Release-ready onboarding.** The README now leads Windows users to GitHub
+  Releases and makes the source installation a separate developer path.
+- **Data stays separate.** First start places the fictional sample in a chosen
+  external data folder; updates replace only the extracted app folder and reuse
+  the existing gradebook folder.
+- **Audited artifact.** The builder packages committed files only and rejects
+  credentials, tokens, local preferences, backups and unexpected databases.
+  The published archive is accompanied by a SHA-256 checksum and is scanned
+  with Windows Defender before upload.
+
 ## 2026-07-14 — Quick Guide rewrite: manual-matched voice, fuller task pages
 
 **What this changes** — the first-draft Quick Guide text read clipped and
