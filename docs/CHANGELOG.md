@@ -6,6 +6,31 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — Windows bundle Phase 2: portable build script
+
+**What this changes** (Phase 2 of
+[WINDOWS_BUNDLE_PLAN.md](WINDOWS_BUNDLE_PLAN.md)) — maintainers can build a
+dated, self-contained Windows zip for colleagues who do not have Python or
+administrator access.
+
+- **Safe, reproducible staging.** `tools/build_windows_bundle.py` exports
+  `git archive HEAD` into a temporary directory, removes development-only
+  content and packages only committed files. A recursive final audit rejects
+  credentials, tokens and local-device preferences before creating the zip.
+- **Embedded Python runtime.** The builder downloads and caches the official
+  64-bit Python 3.14 embeddable package, enables `site-packages`, bootstraps pip
+  and installs the repository requirements, including the grading workspace
+  and optional Anthropic/Gemini integrations. Runtime bytecode, caches and
+  unnecessary `Scripts\\*.exe` shims are removed before packaging.
+- **Double-click launch and recovery.** Each bundle receives hidden-window
+  `Start CAM.vbs`, visible `Start CAM (troubleshooting).bat`, persistent
+  `logs\\cam.log`, and a plain-language `READ ME FIRST.txt`. The Phase 3 Quick
+  Guide PDF is included automatically once it exists.
+- **Build verification.** `--stage-only` supports fast, network-free structure
+  checks, and focused tests cover runtime path setup, generated files, pruning
+  and the sensitive-file audit. Build downloads and output zips are ignored by
+  git under `tools/.cache/` and `dist/`.
+
 ## 2026-07-14 — Windows bundle Phase 1: native folder pickers
 
 **What this changes** (Phase 1 of
