@@ -97,6 +97,7 @@ from engine import (
 # picks between; they live in the aggregation module (not re-exported by the
 # package) and this keeps all changes Streamlit-side per the plan.
 from engine.aggregation import METHOD_60_40, METHOD_WEIGHTED_MEDIAN
+from engine.folder_dialog import documents_folder, pick_folder
 from engine import rubrics
 
 # --------------------------------------------------------------------------
@@ -6077,6 +6078,8 @@ def _render_db_switch_panel(pending: dict) -> None:
         # (it is committed only on Load / Replace), so the session keeps
         # pointing where it was. Just clear the decision and close.
         st.session_state["db_switch_pending"] = None
+        st.session_state["settings_db_custom_path"] = (
+            st.session_state["prefs"].get("db_custom_path", ""))
         st.session_state["dlg_settings"] = False
         st.rerun()
 
@@ -6162,13 +6165,20 @@ def _render_term_backup_section(prefs: dict) -> None:
         "is a disaster tool: it replaces that term's data wholesale, behind a "
         "preview, a typed confirmation and an automatic backup.")
 
-    folder = st.text_input(
+    folder_row = st.columns([5, 1], vertical_alignment="bottom")
+    folder = folder_row[0].text_input(
         "Backup folder", value=prefs.get("term_backup_folder", ""),
         placeholder=r"e.g. C:\Users\you\CAM-term-backups   or a USB drive",
         key="tb_folder", autocomplete="off",
         help="Where ⬇ Back up term writes its files. Per-device (like every "
              "path setting); point it anywhere — even a USB stick or a non-cloud "
              "folder — for an off-site copy.")
+    if os.name == "nt" and folder_row[1].button(
+            "📁 Browse…", key="tb_folder_browse", width="stretch"):
+        chosen = pick_folder("Choose a CAM term backup folder", folder or None)
+        if chosen:
+            st.session_state["tb_folder"] = chosen
+            st.rerun()
     bc = st.columns([2, 1], vertical_alignment="bottom")
     cur = current_term()
     bk_term = bc[0].selectbox(
@@ -6218,9 +6228,10 @@ def _render_term_backup_section(prefs: dict) -> None:
 def settings_dialog() -> None:
     """Per-device UI prefs + custom (cloud) database path.
 
-    Inputs are wrapped in a form so dragging sliders does not rerun and close
-    the modal; everything applies on Save. Prefs persist to the device-local
-    ``local_device_prefs.json`` only — never the shared database."""
+    Layout inputs are wrapped in a form so dragging sliders does not rerun and
+    close the modal. The database-path row sits immediately above it so its
+    native Browse button is legal; that value still applies only on Save. Prefs
+    persist to ``local_device_prefs.json`` only — never the shared database."""
     prefs = st.session_state["prefs"]
     # Phase-2 adopt-vs-overwrite decision: when Save repointed the DB path at a
     # location that already holds a database, the form is replaced by the switch
@@ -6231,11 +6242,12 @@ def settings_dialog() -> None:
         return
     st.caption("Saved to this device only (local_device_prefs.json), so each "
                "machine keeps its own layout while sharing one cloud database.")
-    with st.form("settings_form"):
-        st.markdown("**Cloud data sync**")
-        custom = st.text_input(
+    st.markdown("**Cloud data sync**")
+    custom_row = st.columns([5, 1], vertical_alignment="bottom")
+    custom = custom_row[0].text_input(
             "Custom Database Path (folder or .json file)",
             value=prefs.get("db_custom_path", ""),
+            key="settings_db_custom_path",
             autocomplete="off",
             placeholder=r"e.g. C:\Users\you\OneDrive\CAM   or   .../acm_database.json",
             help="Point this at a OneDrive/Google Drive folder for cross-device "
@@ -6244,6 +6256,14 @@ def settings_dialog() -> None:
                  "exports, exam scans, caches and term summaries. 🔄 Sync "
                  "(Window 1) scans those class subfolders for new files.",
         )
+    if os.name == "nt" and custom_row[1].button(
+            "📁 Browse…", key="settings_db_browse", width="stretch"):
+        initial = custom if custom and os.path.isdir(custom) else None
+        chosen = pick_folder("Choose your CAM data folder", initial)
+        if chosen:
+            st.session_state["settings_db_custom_path"] = chosen
+            st.rerun()
+    with st.form("settings_form"):
         st.markdown("**Column width ratios**")
         cw = st.columns(3)
         w1 = cw[0].slider("Window 1", 1, 10, int(prefs.get("col_w1", 4)), key="set_w1")
@@ -7131,10 +7151,17 @@ def show_analytics_dialog(name: str) -> None:
             f"(`{folder_ref}`). Your grades are safe in CAM — this only stops "
             "the workspace re-opening it. Re-link the folder to regrade, or "
             "grade elsewhere and enter marks in Window 3.")
-        newp = st.text_input(
+        relink_row = st.columns([5, 1], vertical_alignment="bottom")
+        newp = relink_row[0].text_input(
             "Re-link folder (existing local path)", key=f"relink_{name}",
             autocomplete="off",
             placeholder=r"e.g. C:\Users\you\OneDrive\Y7 Art\Artist Looking")
+        if os.name == "nt" and relink_row[1].button(
+                "📁 Browse…", key=f"relinkbrowse_{name}", width="stretch"):
+            chosen = pick_folder(f"Re-link the folder for {name}", newp or None)
+            if chosen:
+                st.session_state[f"relink_{name}"] = chosen
+                st.rerun()
         if st.button("🔗 Re-link folder", key=f"relinkbtn_{name}",
                      width="stretch"):
             newp = (newp or "").strip()
@@ -9059,8 +9086,11 @@ def _export_slot(col, kind: str, label: str, builder, fname: str, mime: str,
 # --------------------------------------------------------------------------
 
 def _class_dialog_body(edit: bool) -> None:
-    """Body of the combined Add / Edit class dialog: one form for every class
-    field (name, grade, MYP year, subject, master directory). Edit mode
+    """Body of the combined Add / Edit class dialog.
+
+    The master-directory row sits outside the remaining-fields form so it can
+    host a native Browse button, but all fields still apply together only when
+    Create/Save is clicked. Edit mode
     pre-fills from the ACTIVE class and saves through update_class(), so a
     rename moves every name-keyed store together; it also hosts the 👁 Watch
     scanner and the one-time 🔗 Connect Google Drive sign-in."""
@@ -9087,6 +9117,23 @@ def _class_dialog_body(edit: bool) -> None:
     # Per-mode widget keys: flipping the Edit/Add toggle must always start the
     # other mode's form from its own defaults, never from half-typed values.
     k = "edit" if edit else "add"
+    master_row = st.columns([5, 1], vertical_alignment="bottom")
+    master = master_row[0].text_input(
+        "Master directory (optional — local path or Drive Folder ID)",
+        value=ac.get("master_dir", ""),
+        key=f"clsdlg_master_{k}", autocomplete="off",
+        placeholder=r"e.g. C:\Users\you\OneDrive\Y7 Art   or   1AbCdEfGhIjK...",
+        help="The class's assignment home — its subfolders are scanned into "
+             "Window 1's assignment list automatically when you save a new or "
+             "changed directory (and again on every 🔄 Sync, or via 👁 Watch "
+             "in Edit mode).")
+    if os.name == "nt" and master_row[1].button(
+            "📁 Browse…", key=f"clsdlg_master_browse_{k}", width="stretch"):
+        initial = master if master and os.path.isdir(master) else None
+        chosen = pick_folder("Choose this class's master directory", initial)
+        if chosen:
+            st.session_state[f"clsdlg_master_{k}"] = chosen
+            st.rerun()
     with st.form(f"{k}class_form"):
         name = st.text_input("Class name", value=ac.get("name", ""),
                              key=f"clsdlg_name_{k}", autocomplete="off",
@@ -9106,15 +9153,6 @@ def _class_dialog_body(edit: bool) -> None:
             placeholder="e.g. Visual Arts, Design, Mathematics",
             help="The subject this class is assessed in. It frames the AI "
                  "comment prompts and appears on every exported report.")
-        master = st.text_input(
-            "Master directory (optional — local path or Drive Folder ID)",
-            value=ac.get("master_dir", ""),
-            key=f"clsdlg_master_{k}", autocomplete="off",
-            placeholder=r"e.g. C:\Users\you\OneDrive\Y7 Art   or   1AbCdEfGhIjK...",
-            help="The class's assignment home — its subfolders are scanned "
-                 "into Window 1's assignment list automatically when you "
-                 "save a new or changed directory (and again on every "
-                 "🔄 Sync, or via 👁 Watch in Edit mode).")
         with st.expander("ℹ Master directory — local folder vs Google Drive",
                          expanded=False):
             st.markdown(
@@ -9320,10 +9358,18 @@ def _render_first_boot_setup() -> None:
                "a OneDrive/Drive folder, a USB drive, or a network share. An "
                "existing database there is loaded; an empty folder gets a new one "
                "on first save.")
-    manual = st.text_input(
+    manual_row = st.columns([5, 1], vertical_alignment="bottom")
+    manual = manual_row[0].text_input(
         "Database folder or .json path",
         key="boot_manual_path", autocomplete="off",
         placeholder=r"e.g. D:\CAM   or   \\server\share\CAM\acm_database.json")
+    if os.name == "nt" and manual_row[1].button(
+            "📁 Browse…", key="boot_manual_browse", width="stretch"):
+        initial = manual if manual and os.path.isdir(manual) else None
+        chosen = pick_folder("Choose your CAM data folder", initial)
+        if chosen:
+            st.session_state["boot_manual_path"] = chosen
+            st.rerun()
     if st.button("Use this folder", key="boot_manual_use",
                  disabled=not manual.strip()):
         path = manual.strip()
@@ -9337,12 +9383,34 @@ def _render_first_boot_setup() -> None:
     # ---- Start fresh (explicit sample/demo boot) -----------------------------
     st.markdown("---")
     st.markdown("### 3 · Start fresh")
-    st.caption("Begin with CAM's built-in sample gradebook on this computer "
-               "only. You can point at a cloud folder later in ⚙ Settings.")
+    fresh_folder = (os.path.join(documents_folder(), "CAM Data")
+                    if os.name == "nt" else "")
+    fresh_caption = (f"Begin with CAM's built-in sample gradebook in "
+                     f"`{fresh_folder}`. You can choose a different folder "
+                     "above or change it later in ⚙ Settings."
+                     if fresh_folder else
+                     "Begin with CAM's built-in sample gradebook on this "
+                     "computer only. You can point at a cloud folder later in "
+                     "⚙ Settings.")
+    st.caption(fresh_caption)
     if st.button("Start fresh with sample data", key="boot_fresh"):
-        # Blank db_custom_path -> the sample acm_database.json beside app.py;
-        # setup_done keeps this panel from reappearing next boot.
-        _adopt_db_path("", "Started fresh with the built-in sample gradebook.")
+        if fresh_folder:
+            fresh_db = resolve_db_path(fresh_folder)
+            try:
+                os.makedirs(fresh_folder, exist_ok=True)
+                # Preserve the old Start-fresh semantics without ever replacing
+                # a database already at the Documents destination.
+                if not os.path.exists(fresh_db):
+                    shutil.copy2(os.path.join(BASE_DIR, DEFAULT_DB_FILENAME),
+                                 fresh_db)
+            except OSError as exc:
+                st.error(f"CAM could not create the data folder: {exc}")
+            else:
+                _adopt_db_path(
+                    fresh_folder,
+                    f"Started fresh with sample data in {fresh_folder}.")
+        else:
+            _adopt_db_path("", "Started fresh with the built-in sample gradebook.")
 
 
 def _render_db_quarantine_banner() -> None:
