@@ -49,6 +49,7 @@ from .collation import gojuon_sort_key
 from .criterion_d import CriterionDInitializer
 from .persistence import (
     DEFAULT_DB_FILENAME,
+    DatabaseSnapshot,
     serialize_gradebook,
     deserialize_gradebook,
     score_to_dict,
@@ -61,6 +62,8 @@ from .persistence import (
     unit_plan_from_dict,
     save_database,
     load_database,
+    capture_database_snapshot,
+    load_database_snapshot,
     db_file_state,
     term_summary_path,
     save_term_summary,
@@ -139,6 +142,7 @@ __all__ = [
     "trend_for_series",
     "format_trend_sentence",
     "DEFAULT_DB_FILENAME",
+    "DatabaseSnapshot",
     "serialize_gradebook",
     "deserialize_gradebook",
     "score_to_dict",
@@ -151,6 +155,8 @@ __all__ = [
     "unit_plan_from_dict",
     "save_database",
     "load_database",
+    "capture_database_snapshot",
+    "load_database_snapshot",
     "db_file_state",
     "term_summary_path",
     "save_term_summary",

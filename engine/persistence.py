@@ -24,11 +24,13 @@ JSON-safe dict the caller hands in and gets back verbatim.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from .models import (
     Assignment,
@@ -45,6 +47,32 @@ SCHEMA_VERSION = 1
 
 # Default filename, resolved next to the project root by the caller.
 DEFAULT_DB_FILENAME = "acm_database.json"
+
+
+@dataclass(frozen=True)
+class DatabaseSnapshot:
+    """Immutable capture of one database file generation.
+
+    ``raw_bytes`` is the only content source used by snapshot deserialization;
+    callers can therefore continue diagnosing and hydrating the captured
+    generation even if a cloud client replaces the live file afterward.
+
+    Identity and generation are optional read-only observations in Phase 1.
+    Version-1 databases do not carry them, and this module does not create,
+    validate, compare, or persist them yet.
+    """
+
+    path: str
+    state: str
+    raw_bytes: Optional[bytes]
+    content_hash: Optional[str]
+    size: int
+    mtime_ns: Optional[int]
+    schema_version: Any
+    database_id: Any
+    generation: Any
+    mass: Optional[Tuple[int, int]]
+    validation_errors: Tuple[str, ...]
 
 
 # --------------------------------------------------------------------------
@@ -328,20 +356,112 @@ def save_database(path: str, gradebook: Gradebook,
     return path
 
 
-def load_database(path: str) -> Optional[Dict[str, Any]]:
-    """Load a saved database file.
+def _raw_payload_mass(payload: Dict[str, Any]) -> Tuple[int, int]:
+    """Return the existing shrink-tripwire mass dimensions from raw JSON."""
+    gradebook = payload.get("gradebook", {}) or {}
+    if not isinstance(gradebook, dict):
+        gradebook = {}
+    students = gradebook.get("students", []) or []
+    assignments = gradebook.get("assignments", []) or []
+    n_assignments = len(assignments) if isinstance(assignments, list) else 0
+    n_scored = sum(
+        1 for student in students
+        if isinstance(student, dict) and student.get("scores")
+    ) if isinstance(students, list) else 0
 
-    Returns a dict ``{"gradebook": Gradebook, "session": {...},
-    "saved_at": str}`` or ``None`` when the file is absent or unreadable.
-    A malformed file returns ``None`` instead of raising, so a corrupt save
-    degrades to "start empty" rather than crashing the app.
+    session = payload.get("session", {}) or {}
+    rosters = session.get("rosters", {}) if isinstance(session, dict) else {}
+    n_roster = sum(
+        len(entries) for entries in rosters.values()
+        if isinstance(entries, list)
+    ) if isinstance(rosters, dict) else 0
+    return n_assignments, n_assignments + n_roster + n_scored
+
+
+def _empty_snapshot(path: str, state: str, error: str = "") -> DatabaseSnapshot:
+    """Build an absent/read-error snapshot without captured content."""
+    return DatabaseSnapshot(
+        path=path,
+        state=state,
+        raw_bytes=None,
+        content_hash=None,
+        size=0,
+        mtime_ns=None,
+        schema_version=0,
+        database_id=None,
+        generation=None,
+        mass=None,
+        validation_errors=(error,) if error else (),
+    )
+
+
+def capture_database_snapshot(path: str) -> DatabaseSnapshot:
+    """Read ``path`` once and capture all boot-time database information.
+
+    The returned object never consults the live path again. Validation errors
+    are deliberately coarse codes so diagnostics do not expose student data or
+    raw parser messages.
     """
     if not path or not os.path.exists(path):
+        return _empty_snapshot(path, "absent")
+
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+            stat = os.fstat(fh.fileno())
+    except OSError:
+        return _empty_snapshot(path, "unreadable", "read-error")
+
+    digest = hashlib.sha256(raw).hexdigest()
+    mtime_ns = getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))
+    common = {
+        "path": path,
+        "raw_bytes": raw,
+        "content_hash": digest,
+        "size": len(raw),
+        "mtime_ns": mtime_ns,
+    }
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return DatabaseSnapshot(
+            state="unreadable", schema_version=0, database_id=None,
+            generation=None, mass=None,
+            validation_errors=("invalid-utf8",), **common)
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return DatabaseSnapshot(
+            state="unreadable", schema_version=0, database_id=None,
+            generation=None, mass=None,
+            validation_errors=("invalid-json",), **common)
+    if not isinstance(payload, dict):
+        return DatabaseSnapshot(
+            state="unreadable", schema_version=0, database_id=None,
+            generation=None, mass=None,
+            validation_errors=("root-not-object",), **common)
+
+    return DatabaseSnapshot(
+        state="ok",
+        schema_version=payload.get("version", 0),
+        database_id=payload.get("database_id"),
+        generation=payload.get("generation"),
+        mass=_raw_payload_mass(payload),
+        validation_errors=(),
+        **common,
+    )
+
+
+def load_database_snapshot(snapshot: DatabaseSnapshot
+                           ) -> Optional[Dict[str, Any]]:
+    """Deserialize a database solely from ``snapshot``'s captured bytes."""
+    if snapshot.state != "ok" or snapshot.raw_bytes is None:
         return None
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            payload = json.load(fh)
-    except (OSError, ValueError):
+        payload = json.loads(snapshot.raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
         return None
     gb = deserialize_gradebook(payload.get("gradebook", {}))
     return {
@@ -350,6 +470,15 @@ def load_database(path: str) -> Optional[Dict[str, Any]]:
         "saved_at": payload.get("saved_at", ""),
         "version": payload.get("version", 0),
     }
+
+
+def load_database(path: str) -> Optional[Dict[str, Any]]:
+    """Load a saved database file through a single immutable snapshot.
+
+    The public return contract is unchanged: absent or unreadable files return
+    ``None``; valid files return the hydrated gradebook and session mapping.
+    """
+    return load_database_snapshot(capture_database_snapshot(path))
 
 
 def db_file_state(path: str) -> str:
@@ -371,16 +500,7 @@ def db_file_state(path: str) -> str:
     load-guard — while leaving the ``None`` contract of ``load_database``
     untouched for everyone else.
     """
-    if not path or not os.path.exists(path):
-        return "absent"
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            payload = json.load(fh)
-    except (OSError, ValueError):
-        return "unreadable"
-    if not isinstance(payload, dict):
-        return "unreadable"
-    return "ok"
+    return capture_database_snapshot(path).state
 
 
 # --------------------------------------------------------------------------
