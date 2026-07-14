@@ -6,6 +6,37 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-14 — Windows bundle Phase 4: release verification and handoff docs
+
+**What this changes** (Phase 4 of
+[WINDOWS_BUNDLE_PLAN.md](WINDOWS_BUNDLE_PLAN.md)) — the portable artifact now
+receives a final release audit, and colleague instructions are clearly separated
+from source/developer setup.
+
+- **Final-zip safety audit.** The builder reopens the completed zip and verifies
+  its single `CAM-portable` root, launchers, Quick Guide, app, fictional sample
+  database and (for full builds) embedded runtime. It rejects credentials,
+  tokens, device preferences, client-secret files, backups, and every nested or
+  additional `acm_database.json`; only the root sample exported from committed
+  `HEAD` is allowed.
+- **Launcher compatibility fix.** Real extraction testing found Windows Script
+  Host rejected the hidden VBS launcher's UTF-8 byte-order mark as an invalid
+  first character. The builder now writes WSH's supported UTF-16LE Unicode
+  script format, with a regression check for its BOM.
+- **Embedded import-path fix.** A real browser-session render found the
+  embeddable runtime's `python314._pth` excluded both the bundle root and the
+  grading workspace from `sys.path`: Streamlit's server became healthy, but
+  executing `app.py` then failed to import `engine`. The builder now adds both
+  application paths explicitly while retaining embedded-runtime isolation.
+- **Sandboxable first-start verification.** The existing
+  `CAM_DOCUMENTS_OVERRIDE` hook keeps Start fresh out of the developer's real
+  Documents folder. Release verification uses that hook with a temporary folder
+  and never adopts a database discovered elsewhere.
+- **Colleague/developer handoff.** `SETUP.md` now leads Windows colleagues to
+  the extract-and-double-click bundle flow and keeps source setup in a separate
+  maintainer section. `USER_MANUAL.md` points to the bundled, task-based Quick
+  Guide.
+
 ## 2026-07-14 — Windows bundle Phase 3: CAM Quick Guide
 
 **What this changes** (Phase 3 of

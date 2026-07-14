@@ -1,8 +1,35 @@
 # Setup guide
 
 This guide gets Criterion Assessment Metrics (CAM) running on your machine and
-connected to your own data. It assumes you are comfortable running a couple of
-commands in a terminal, but not much more.
+connected to your own data.
+
+## For colleagues on Windows: use the portable bundle
+
+Use the provided `CAM-portable-vYYYY.MM.DD.zip` if you received CAM from your
+school or CAM maintainer. It needs no administrator access, Python installation,
+Git, or terminal:
+
+1. Right-click the zip and choose **Extract All**. Do not run it inside the zip.
+2. Open the extracted `CAM-portable` folder and double-click **Start CAM.vbs**.
+3. On first start, choose **Start fresh with sample data** or use **Browse...**
+   to select your existing CAM data folder.
+
+Start fresh creates the fictional sample gradebook in `Documents\CAM Data`;
+the app folder and your data folder remain separate. For the illustrated daily
+workflow and troubleshooting, open `CAM Quick Guide.pdf` in the bundle. If CAM
+does not start, run **Start CAM (troubleshooting).bat** and inspect
+`logs\cam.log`.
+
+When updating, extract the new bundle into a new app folder and select the same
+data folder on first start. Never replace or delete your data folder.
+
+## For developers and maintainers: run from source
+
+The remaining sections are the source setup. They assume you are comfortable
+running a couple of commands in a terminal. Maintainers build the colleague zip
+with `py tools\build_windows_bundle.py`; the dated artifact is written under
+`dist\`. The builder stages only `git archive HEAD`, so commit intended release
+changes before building and keep real student data outside the repository.
 
 - [1. Install Python](#1-install-python)
 - [2. Get the code](#2-get-the-code)

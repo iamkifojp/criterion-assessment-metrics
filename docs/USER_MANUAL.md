@@ -4,6 +4,11 @@ A short, illustrated tour of Criterion Assessment Metrics (CAM) for the teacher
 using it day to day. If you haven't installed it yet, start with the
 [Setup guide](SETUP.md).
 
+For the short, print-friendly walkthrough shipped with the Windows portable
+bundle, use the [CAM Quick Guide](QUICK_GUIDE.md). It covers first start, class
+setup, marks, exam grading, reports, backups and the two troubleshooting
+launchers. This manual provides the fuller explanation behind those tasks.
+
 > Everything shown below runs on the bundled **fictional sample class** — the
 > students, grades and comments are invented.
 
