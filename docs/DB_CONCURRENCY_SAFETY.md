@@ -2,12 +2,13 @@
 
 ## Status
 
-Phases 1-3 are implemented. CAM now retains the exact database generation
+Phases 1-4 are implemented. CAM now retains the exact database generation
 loaded by each session, rejects a save when the shared file has changed, binds
 each device/database path to the established database identity, and quarantines
-missing, identity-mismatched, or cloud-conflicted database files. Phases 4-5
-remain proposed work; dirty-only persistence, session snapshots, and strict
-per-record validation are not yet implemented.
+missing, identity-mismatched, or cloud-conflicted database files. It also skips
+unchanged shared-database writes and requires a verified session safety snapshot
+before the first changing save to each database identity. Phase 5 remains
+proposed work; strict per-record validation is not yet implemented.
 
 ## Purpose
 
@@ -350,8 +351,23 @@ in isolated test environments.
 
 ### Phase 4: dirty persistence and session snapshots
 
-Track persistent mutations and avoid saves during unchanged application reruns.
-Create and verify the session safety snapshot before the first changing save.
+Implemented. CAM fingerprints the logical gradebook and durable session payload
+without volatile save timestamps or concurrency metadata. `persist()` compares
+that fingerprint and the normalized database path with the last successful
+shared save/load, so unchanged Streamlit reruns skip the checked database writer
+and do not advance its generation. Mirror reconciliation remains independent so
+missing or stale class mirrors can still be repaired without rewriting the
+primary database. Failed, blocked, and recovery-file saves leave the session
+dirty; only a verified shared save updates the clean baseline.
+
+Before the first changing save to each path/database identity in an application
+session, the checked writer creates a collision-proof `bak-session` copy inside
+the existing local write lock. The copy contains the exact observed pre-save
+bytes and must pass read-back hash, byte, and hydration checks before the atomic
+replacement may proceed. An authorized absent target has nothing to copy, while
+an explicit database replacement's mandatory verified `bak-replaced` copy
+satisfies the same gate. Session snapshots and all existing backups are retained
+without pruning.
 
 Completion criteria:
 
@@ -360,6 +376,11 @@ Completion criteria:
 - failure to create or verify the required snapshot blocks the changing save;
 - snapshot names cannot collide during rapid consecutive sessions; and
 - no existing backup is deleted or pruned.
+
+All criteria are covered by `tests/test_database_dirty_persistence.py` and
+`tests/test_app_database_dirty_persistence.py`, with regression coverage in the
+Phase 1-3 snapshot/concurrency/cloud-safety, mirror, healing, and term-restore
+modules. The complete 254-test suite passes in isolated test environments.
 
 ### Phase 5: validation, documentation, and final review
 

@@ -330,6 +330,14 @@ at the same path, or the sync client creates a likely conflicted copy, CAM enter
   verified `conflict-recovery` file. If that recovery copy cannot be verified,
   leave the CAM session open and retry recovery before reloading or closing it.
 
+CAM saves only when gradebook content or durable settings actually change.
+Ordinary screen reruns do not advance the database revision; pressing **Save
+now** with nothing new reports **No changes to save**. Before the first changing
+save to each database used in an app session, CAM also creates a verified
+`acm_database.json.bak-session-*` copy beside the database. These automatic
+session snapshots preserve the exact pre-save database, use collision-proof
+names, and are never automatically deleted.
+
 ## Backing up and restoring a term
 
 Under **⚙ Settings → 🗄 Term backup & restore** you can take a deliberate,

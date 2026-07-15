@@ -795,7 +795,33 @@ For legacy v1, identity and generation are null but `content_hash` is required;
 the first save compares that exact hash, creates a verified
 `.bak-pre-concurrency-upgrade-*` copy, and writes v2 at generation 1.
 
-### D.2 Conflict-recovery envelope
+### D.2 Dirty-persistence metadata and session snapshots
+
+Dirty tracking is application-session state only; it does not add fields to the
+database envelope or `local_device_prefs.json`:
+
+| Session key | Type | Meaning |
+|-------------|------|---------|
+| `db_saved_fingerprint` | SHA-256 hex string \| null | Canonical hash of the last successfully loaded/saved logical `gradebook` + `session` content. Volatile envelope metadata is excluded. |
+| `db_saved_path` | string | `normcase(abspath(path))` paired with that fingerprint. A path change is dirty even when content matches. |
+| `db_dirty` | boolean | Whether current logical content/path differs from the clean baseline. Failed, blocked, and recovery-file saves leave it true. |
+| `db_snapshot_protected_keys` | set of strings | Session-only `<normalized path>|<database identity>` keys whose first changing save has already been protected. Legacy v1 uses its content hash; an absent target uses its state until creation. |
+
+`persistent_content_fingerprint()` canonicalizes the serialized gradebook and
+durable session with sorted JSON object keys. It excludes `version`, `saved_at`,
+`database_id`, `generation`, and `recovery`, so a metadata-only generation change
+cannot masquerade as a teacher-data mutation.
+
+When `require_session_snapshot=True`, `save_database_checked()` creates
+`acm_database.json.bak-session-<UTC timestamp with microseconds>-<random suffix>`
+inside the write lock after sibling, token, and shrink checks but before any
+primary replacement. The sidecar is exclusively created from the captured
+pre-save bytes, then read back and required to match byte-for-byte and by
+SHA-256 and to hydrate successfully. It is never rotated or pruned. An absent
+target produces no snapshot because no shared generation exists yet. A verified
+`.bak-replaced-*` copy is the equivalent protection for explicit replacement.
+
+### D.3 Conflict-recovery envelope
 
 A rejected stale session is serialized as a standalone schema-v2 database named
 `acm_database.json.conflict-recovery-<UTC timestamp>-<random suffix>.json`. It has
@@ -823,7 +849,7 @@ automatically merge or restore it. `kind` is `concurrency-conflict` for a stale
 writer and `cloud-conflict-sibling` when a likely synchronization sibling blocked
 the save; the remaining provenance fields keep the same shape.
 
-### D.3 Device-local database expectations
+### D.4 Device-local database expectations
 
 `local_device_prefs.json` carries a map that is deliberately outside the shared
 database:
@@ -846,7 +872,7 @@ performs the verified v2 upgrade. Switching paths adds or refreshes an entry and
 does not remove bindings for other paths. These preferences contain no student
 data and are not part of the database concurrency token.
 
-### D.4 Cloud-conflict sibling names
+### D.5 Cloud-conflict sibling names
 
 `find_database_conflict_siblings(path)` lists regular JSON files in the primary's
 directory whose stem begins with the primary stem followed by a space, bracket,

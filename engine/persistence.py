@@ -99,6 +99,7 @@ class DatabaseSaveResult:
     path: str
     token: DatabaseWriteToken
     pre_upgrade_backup: str = ""
+    session_snapshot: str = ""
 
 
 @dataclass(frozen=True)
@@ -357,6 +358,26 @@ def serialize_gradebook(gradebook: Gradebook) -> Dict[str, Any]:
         })
     assignments = [_assignment_to_dict(a) for a in gradebook.assignments]
     return {"students": students, "assignments": assignments}
+
+
+def persistent_content_fingerprint(
+        gradebook: Gradebook,
+        session: Optional[Dict[str, Any]] = None) -> str:
+    """Hash the logical database content without volatile file metadata.
+
+    The fingerprint deliberately excludes the schema version, save timestamp,
+    database identity, generation, and recovery metadata.  It is therefore
+    stable across an otherwise unchanged checked save and can be retained by a
+    front end to distinguish persistent mutations from ordinary UI reruns.
+    """
+    logical = {
+        "gradebook": serialize_gradebook(gradebook),
+        "session": session or {},
+    }
+    canonical = json.dumps(
+        logical, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def deserialize_gradebook(data: Dict[str, Any]) -> Gradebook:
@@ -718,6 +739,17 @@ def _verified_snapshot_copy(path: str, snapshot: DatabaseSnapshot) -> str:
     return path
 
 
+def _verified_session_snapshot(path: str,
+                               snapshot: DatabaseSnapshot) -> str:
+    """Create and hydrate-check one collision-proof session safety copy."""
+    backup = _verified_snapshot_copy(_backup_name(path, "session"), snapshot)
+    copied = capture_database_snapshot(backup)
+    if load_database_snapshot(copied) is None:
+        raise DatabaseWriteVerificationError(
+            "The session safety snapshot could not be validated.")
+    return backup
+
+
 def _backup_name(path: str, purpose: str) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{path}.bak-{purpose}-{stamp}-{uuid.uuid4().hex[:8]}"
@@ -750,6 +782,7 @@ def save_database_checked(path: str, gradebook: Gradebook,
                           session: Optional[Dict[str, Any]],
                           expected: DatabaseWriteToken, *,
                           allow_shrink: bool = False,
+                          require_session_snapshot: bool = False,
                           shrink_min_assignments: int = 10,
                           shrink_keep_ratio: float = 0.33,
                           lock_timeout: float = 5.0) -> DatabaseSaveResult:
@@ -771,6 +804,10 @@ def save_database_checked(path: str, gradebook: Gradebook,
                     < shrink_keep_ratio * observed.mass[1]):
             raise DatabaseShrinkError(
                 "Save blocked because it would erase most database records.")
+
+        session_snapshot = ""
+        if require_session_snapshot and observed.state == "ok":
+            session_snapshot = _verified_session_snapshot(path, observed)
 
         pre_upgrade = ""
         if observed.state == "ok" and observed.schema_version == 1:
@@ -798,7 +835,8 @@ def save_database_checked(path: str, gradebook: Gradebook,
                 "The database write could not be verified after saving.")
         return DatabaseSaveResult(
             path=path, token=database_write_token(written),
-            pre_upgrade_backup=pre_upgrade)
+            pre_upgrade_backup=pre_upgrade,
+            session_snapshot=session_snapshot)
 
 
 def replace_database_checked(path: str, gradebook: Gradebook,
@@ -830,7 +868,9 @@ def replace_database_checked(path: str, gradebook: Gradebook,
                 or written.content_hash != intended_hash):
             raise DatabaseWriteVerificationError(
                 "The replacement database could not be verified.")
-        return DatabaseSaveResult(path, database_write_token(written), backup)
+        return DatabaseSaveResult(
+            path=path, token=database_write_token(written),
+            pre_upgrade_backup=backup, session_snapshot=backup)
 
 
 def write_conflict_recovery(path: str, gradebook: Gradebook,
