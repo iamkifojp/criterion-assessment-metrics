@@ -6,6 +6,34 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-15 — Database concurrency safety Phase 3: missing and conflicted cloud files
+
+**What this changes** — an established OneDrive/Drive folder could temporarily
+lose its primary file while the folder itself remained present, and CAM still
+treated that as a legitimate first run. Cloud-generated conflicted copies were
+also invisible to boot and save logic.
+
+- **Path-keyed device bindings.** `local_device_prefs.json` now records
+  `pending-create` versus `established` database expectations, including the
+  schema-v2 UUID. Successful boot/adoption and checked saves refresh the binding;
+  legacy v1 acquires its UUID after the verified upgrade save.
+- **Fail-safe boot quarantine.** Missing established files, unexpected UUIDs,
+  and likely cloud-conflict siblings block hydration-dependent writes and class
+  mirror healing. A synchronized file can be retried; a deliberate UUID change
+  requires typing `USE THIS DATABASE` and updates only local preferences.
+- **Conservative sibling handling.** Common cloud conflict filename variants are
+  detected without opening or modifying them. Documented CAM backups, recovery
+  files, blocked payloads, lock/safety markers, and temporary files are excluded.
+- **Pre-write enforcement and recovery.** Both checked write paths scan again
+  inside the local lock before backups or replacement. A newly appeared sibling
+  leaves the shared bytes unchanged and preserves pending work in a verified
+  recovery database; failed recovery keeps work in memory and withholds reload.
+- **Regression coverage.** New engine/app tests cover classification, sidecar
+  exclusions, missing/reappearing databases, legacy promotion, UUID mismatch,
+  typed rebind, pre-write sibling races, recovery failure, mirror suppression,
+  and path-keyed expectations. The complete 243-test suite passes in isolated
+  environments without launching CAM against saved device preferences.
+
 ## 2026-07-15 — Database concurrency safety Phase 2: stale writers blocked
 
 **What this changes** — two CAM sessions could previously load the same valid

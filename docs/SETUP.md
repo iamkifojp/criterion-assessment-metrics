@@ -130,7 +130,8 @@ backed up and available on every device you teach from.
 
 CAM decides where to read/write using a small, **device-local** preferences file
 called `local_device_prefs.json` (this file is git-ignored and stays on your
-machine). The key that matters is `db_custom_path`:
+machine). `db_custom_path` selects the active location, while CAM-managed
+`database_expectations` remembers which database identity each path belongs to:
 
 | `db_custom_path` value | What CAM does |
 |---|---|
@@ -153,7 +154,9 @@ You can set it two ways:
 Once set, CAM creates `acm_database.json` in that folder and keeps every class's
 data (grade exports, exam scans, caches, finalized term summaries) in per-class
 subfolders beside it. Because the folder is cloud-synced, all your devices share
-one database.
+one database. Do not hand-edit `database_expectations`; use CAM's setup, retry,
+or confirmed **USE THIS DATABASE** flow so a temporarily missing cloud file is
+never mistaken for permission to create an empty replacement.
 
 ### Adding a second computer
 
@@ -253,8 +256,18 @@ folder that OneDrive/Drive already syncs to disk.
 - **`streamlit: command not found`** — use `py -m streamlit run app.py` instead
   of a bare `streamlit`.
 - **The app shows no students** — check **⚙ Settings**: if `db_custom_path`
-  points at an empty folder, CAM starts a fresh empty database there. Clear it to
-  fall back to the sample, or ingest a CSV.
+  was explicitly pointed at a new empty folder, CAM starts a fresh empty database
+  there. An established location whose database disappears instead enters
+  read-only quarantine; reconnect the drive or let cloud sync restore the file,
+  then click **Retry database check**.
+- **CAM reports a cloud-conflict sibling** — stop other CAM sessions, let cloud
+  synchronization finish, and review every path shown. CAM does not choose,
+  merge, rename, or delete the files. Remove or resolve the cloud conflict using
+  your sync provider, then click **Retry database check**.
+- **CAM reports a different database identity** — verify the path and the shown
+  assignment/student/class counts. Only if this is intentionally the database
+  the device should use, type `USE THIS DATABASE`; this changes the local binding
+  without modifying the database file.
 - **Grading workspace won't start** — make sure `pip install -r requirements.txt`
   completed; it pulls in the workspace's own dependencies (e.g. PyMuPDF).
 - **Reset the demo** — `py tools/generate_sample_data.py` rewrites the sample

@@ -315,6 +315,21 @@ never stores real student data inside the program folder. To change the
 location, open **⚙ Settings → Custom database location**
 ([details](SETUP.md#5-point-cam-at-your-own-data)).
 
+CAM remembers the identity of every database location used on this device. If an
+established cloud database temporarily disappears, a different database appears
+at the same path, or the sync client creates a likely conflicted copy, CAM enters
+**read-only quarantine** instead of creating or overwriting anything.
+
+- For a missing database or conflict sibling, close other CAM sessions, allow
+  synchronization to finish, review the paths shown, and press **Retry database
+  check**. CAM never merges, renames, selects, or deletes conflict copies.
+- For a different database identity, verify the displayed counts and type
+  `USE THIS DATABASE` only when the replacement is intentional. This updates the
+  current device's binding without writing to the database.
+- If a conflict is discovered while saving, CAM preserves pending work in a
+  verified `conflict-recovery` file. If that recovery copy cannot be verified,
+  leave the CAM session open and retry recovery before reloading or closing it.
+
 ## Backing up and restoring a term
 
 Under **⚙ Settings → 🗄 Term backup & restore** you can take a deliberate,

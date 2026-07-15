@@ -120,6 +120,18 @@ class DatabaseConcurrencyError(RuntimeError):
         self.reason = reason
 
 
+class DatabaseCloudConflictError(RuntimeError):
+    """A likely cloud-conflict copy exists beside the shared database."""
+
+    def __init__(self, path: str, observed: DatabaseSnapshot,
+                 siblings: Tuple[str, ...]):
+        super().__init__(
+            "Likely cloud-conflict database copies require review before saving.")
+        self.path = os.path.abspath(path)
+        self.observed = observed
+        self.siblings = siblings
+
+
 class DatabaseLockTimeout(RuntimeError):
     """Another local CAM process held the database write lock too long."""
 
@@ -538,6 +550,59 @@ def database_write_token(snapshot: DatabaseSnapshot) -> DatabaseWriteToken:
     )
 
 
+def find_database_conflict_siblings(path: str) -> Tuple[str, ...]:
+    """Return likely cloud-conflict copies beside ``path`` without opening them.
+
+    Cloud clients commonly insert a device/conflict label before the final
+    ``.json`` extension. CAM's own sidecars instead append a documented suffix
+    to the complete primary filename; those files are explicitly excluded.
+    """
+    absolute = os.path.abspath(path)
+    directory = os.path.dirname(absolute) or "."
+    primary = os.path.basename(absolute)
+    stem, extension = os.path.splitext(primary)
+    primary_lower = primary.lower()
+    stem_lower = stem.lower()
+    extension_lower = extension.lower()
+    if extension_lower != ".json" or not os.path.isdir(directory):
+        return ()
+
+    owned_prefixes = (
+        primary_lower + ".bak-",
+        primary_lower + ".conflict-recovery-",
+        primary_lower + ".blocked-",
+        primary_lower + ".cam-write.lock",
+        primary_lower + ".wiped-",
+        primary_lower + ".safety-",
+    )
+    found = set()
+    try:
+        entries = os.scandir(directory)
+    except OSError:
+        return ()
+    with entries:
+        for entry in entries:
+            name_lower = entry.name.lower()
+            if name_lower == primary_lower:
+                continue
+            if any(name_lower.startswith(prefix) for prefix in owned_prefixes):
+                continue
+            if not name_lower.endswith(extension_lower):
+                continue
+            candidate_stem = name_lower[:-len(extension_lower)]
+            remainder = candidate_stem[len(stem_lower):]
+            if (not candidate_stem.startswith(stem_lower) or not remainder
+                    or remainder[0] not in " ([{-_"):
+                continue
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+            found.add(os.path.abspath(entry.path))
+    return tuple(sorted(found, key=lambda item: (os.path.normcase(item), item)))
+
+
 def _valid_v2_snapshot(snapshot: DatabaseSnapshot) -> bool:
     if snapshot.state != "ok" or snapshot.schema_version != SCHEMA_VERSION:
         return False
@@ -692,6 +757,9 @@ def save_database_checked(path: str, gradebook: Gradebook,
     session = session or {}
     with database_write_lock(path, lock_timeout):
         observed = capture_database_snapshot(path)
+        siblings = find_database_conflict_siblings(path)
+        if siblings:
+            raise DatabaseCloudConflictError(path, observed, siblings)
         matches, reason = _tokens_match(expected, observed)
         if not matches:
             raise DatabaseConcurrencyError(expected, observed, reason)
@@ -739,6 +807,9 @@ def replace_database_checked(path: str, gradebook: Gradebook,
     """Explicitly replace a reviewed target after a mandatory verified backup."""
     with database_write_lock(path, lock_timeout):
         observed = capture_database_snapshot(path)
+        siblings = find_database_conflict_siblings(path)
+        if siblings:
+            raise DatabaseCloudConflictError(path, observed, siblings)
         if observed.state not in ("ok", "absent"):
             raise DatabaseWriteVerificationError(
                 "The database selected for replacement is not readable.")
@@ -765,13 +836,15 @@ def replace_database_checked(path: str, gradebook: Gradebook,
 def write_conflict_recovery(path: str, gradebook: Gradebook,
                             session: Optional[Dict[str, Any]],
                             expected: DatabaseWriteToken,
-                            observed: DatabaseSnapshot) -> ConflictRecoveryResult:
+                            observed: DatabaseSnapshot, *,
+                            reason: str = "concurrency-conflict"
+                            ) -> ConflictRecoveryResult:
     """Preserve pending state in a unique, self-contained, verified database."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     recovery_path = (f"{path}.conflict-recovery-{stamp}-"
                      f"{uuid.uuid4().hex[:8]}.json")
     recovery = {
-        "kind": "concurrency-conflict",
+        "kind": reason,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_database_id": expected.database_id,
         "expected_generation": expected.generation,
