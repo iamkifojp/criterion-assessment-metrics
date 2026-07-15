@@ -104,6 +104,7 @@ from engine import (
     assignment_from_dict,
     exam_result_to_dict,
     exam_result_from_dict,
+    persistent_content_fingerprint,
 )
 # METHOD_60_40 / METHOD_WEIGHTED_MEDIAN are the two methods the auto default
 # picks between; they live in the aggregation module (not re-exported by the
@@ -812,6 +813,10 @@ def init_state() -> None:
         "archived": set(),       # soft-deleted assignment names
         "db_loaded": False,      # one-shot guard for boot-time DB load
         "db_write_token": None,  # raw-byte-free identity/generation/hash CAS token
+        "db_saved_fingerprint": None,  # logical content at last shared save/load
+        "db_saved_path": "",   # normalized path paired with that fingerprint
+        "db_dirty": False,      # cleared only by a successful shared DB save
+        "db_snapshot_protected_keys": set(),  # session-only path/identity keys
         "db_load_blocked": None,  # Phase-1 quarantine: {reason,path} when the
                                   # configured DB is unreadable/unavailable and
                                   # persist() must refuse to overwrite it.
@@ -912,6 +917,20 @@ def init_state() -> None:
             if loaded and (loaded["gradebook"].students or loaded["gradebook"].assignments):
                 st.session_state["gradebook"] = loaded["gradebook"]
                 restore_session(loaded.get("session", {}))
+            # The clean baseline represents the logical content captured from
+            # disk, before mirror healing.  Normalization/migration differences
+            # and healed teacher input therefore remain detectable mutations.
+            if loaded:
+                baseline = persistent_content_fingerprint(
+                    loaded["gradebook"], loaded.get("session", {}))
+            else:
+                # An authorized absent target is not yet a saved database.  A
+                # direct save request (or the first real mutation) must create
+                # it rather than treating the in-memory defaults as persisted.
+                baseline = None
+            st.session_state["db_saved_fingerprint"] = baseline
+            st.session_state["db_saved_path"] = _normalized_db_path(path)
+            st.session_state["db_dirty"] = False
             # Cloud-mirror invariant 1 (heal before mirror): restore the durable
             # per-class twins into any blank session slot BEFORE the first mirror
             # write, so a DB that lost its teacher input (the 2026-07-10 incident)
@@ -930,6 +949,20 @@ def init_state() -> None:
 
 def gb() -> Gradebook:
     return st.session_state["gradebook"]
+
+
+def _normalized_db_path(path: str) -> str:
+    """Stable per-device key for dirty and session-snapshot tracking."""
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _database_session_key(path: str, token: DatabaseWriteToken) -> str:
+    """Identify one database identity without retaining raw student data."""
+    identity = str(token.database_id or "")
+    if not identity:
+        identity = (f"legacy:{token.content_hash}" if token.content_hash
+                    else f"state:{token.state}")
+    return f"{_normalized_db_path(path)}|{identity}"
 
 
 # --------------------------------------------------------------------------
@@ -1118,35 +1151,66 @@ def persist(show: bool = False, allow_shrink: bool = False) -> None:
     backed-up Phase-2 Replace. Every other caller (autosave included) leaves it
     False so a catastrophic mass-loss write is refused.
     """
+    ss = st.session_state
+    try:
+        path = db_path()
+        payload = build_session_payload()
+        outgoing_fingerprint = persistent_content_fingerprint(gb(), payload)
+        normalized_path = _normalized_db_path(path)
+    except Exception as exc:
+        # Preserve persist()'s never-raise dashboard contract even when an
+        # unexpected in-memory value cannot be canonically serialized.
+        ss["db_dirty"] = True
+        ss["save_status"] = ("error", f"Save failed: {exc}")
+        return
+    dirty = (ss.get("db_saved_path") != normalized_path
+             or ss.get("db_saved_fingerprint") != outgoing_fingerprint)
+    ss["db_dirty"] = dirty
+
     # Phase-1 quarantine: the configured database could not be read at boot, so
     # the in-memory state is demo/quarantine state. Writing it would clobber the
     # real (merely unreadable) file — exactly wipe mechanism 2. Refuse; the
     # full-width banner already explains the situation and the fix. A shrink
     # tripwire that fired earlier this session sets the same flag (below).
-    if st.session_state.get("db_load_blocked"):
+    if ss.get("db_load_blocked"):
         if show:
-            st.session_state["save_status"] = (
+            ss["save_status"] = (
                 "error", "Save blocked: the database is in read-only "
                 "quarantine (see the banner at the top). Fix the file or path "
                 "and restart CAM.")
         return
+
+    # Dirty-only persistence: an ordinary Streamlit rerun must not advance the
+    # generation or rotate backups.  Mirror reconciliation remains independent
+    # so a missing/stale class twin can still be repaired without a DB rewrite.
+    if not dirty:
+        if show:
+            ss["save_status"] = ("ok", "No changes to save.")
+        _mirror_classes_to_cloud()
+        return
     try:
-        path = db_path()
-        payload = build_session_payload()
-        expected = st.session_state.get("db_write_token")
+        expected = ss.get("db_write_token")
         if not isinstance(expected, DatabaseWriteToken):
             raise RuntimeError(
                 "Save blocked because this session has no database revision "
                 "token. Restart CAM before saving.")
+        protected = ss.setdefault("db_snapshot_protected_keys", set())
+        expected_key = _database_session_key(path, expected)
         result = save_database_checked(
             path, gb(), payload, expected, allow_shrink=allow_shrink,
+            require_session_snapshot=expected_key not in protected,
             shrink_min_assignments=SHRINK_MIN_ASSIGNMENTS,
             shrink_keep_ratio=SHRINK_KEEP_RATIO)
-        st.session_state["db_write_token"] = result.token
+        ss["db_write_token"] = result.token
+        protected.add(expected_key)
+        protected.add(_database_session_key(path, result.token))
+        ss["db_saved_fingerprint"] = outgoing_fingerprint
+        ss["db_saved_path"] = normalized_path
+        ss["db_dirty"] = False
         _set_database_expectation(
             path, "established", result.token.database_id)
         if show:
-            st.session_state["save_status"] = ("ok", f"Saved to {path}.")
+            ss["save_status"] = ("ok", f"Saved to {path}.")
     except DatabaseCloudConflictError as exc:
         recovery_path = ""
         recovery_error = ""
@@ -6257,6 +6321,13 @@ def _render_db_switch_panel(pending: dict) -> None:
                 path, "established", result.token.database_id)
             save_prefs(prefs)
             st.session_state["db_write_token"] = result.token
+            st.session_state.setdefault(
+                "db_snapshot_protected_keys", set()).add(
+                    _database_session_key(path, result.token))
+            st.session_state["db_saved_fingerprint"] = (
+                persistent_content_fingerprint(gb(), build_session_payload()))
+            st.session_state["db_saved_path"] = _normalized_db_path(path)
+            st.session_state["db_dirty"] = False
             note = f"Overwrote {path} with the current session."
             if result.pre_upgrade_backup:
                 note += (" Previous database backed up to "

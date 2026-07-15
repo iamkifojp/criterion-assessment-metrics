@@ -214,7 +214,7 @@ different data models.**
   inclusion toggles, trend charts, report cards.
 
 **⚠ Invariant: the boot load-guard never runs demo state onto a real DB.** The
-persistence layer mirrors every in-memory change straight to disk, so if the
+persistence layer automatically saves persistent mutations, so if the
 app booted the demo gradebook while *pointed at* a real (but momentarily
 unreadable) database, the next autosave would overwrite a year of grades. The
 guard closes that hole. At boot, `capture_database_snapshot(db_path())`
@@ -271,8 +271,9 @@ UUID, integer generation, and SHA-256 content hash. Every live database write
 routes through `save_database_checked()` (`engine/persistence.py`). A persistent
 `acm_database.json.cam-write.lock` uses OS-managed locking to serialize local
 processes; while holding it, the transaction captures the live file once and
-performs the token comparison, shrink check, backups, atomic replacement, and
-read-back verification. A successful schema-v2 write preserves the UUID,
+performs conflict-sibling detection, token comparison, shrink check, required
+session snapshot, backups, atomic replacement, and read-back verification. A
+successful schema-v2 write preserves the UUID,
 increments the generation exactly once, and returns the verified next token.
 The lock is only local coordination — the persisted UUID/generation/hash is the
 cross-device check because cloud services do not provide immediate lock
@@ -303,6 +304,26 @@ The recovery database has its own UUID/generation and a `recovery` provenance
 object; CAM never claims or attempts an automatic merge. If recovery-file
 verification fails, the in-memory state remains visible and the banner warns
 the teacher not to close CAM while offering a retry.
+
+**⚠ Invariant: unchanged Streamlit reruns do not rewrite the shared database.**
+`persistent_content_fingerprint()` hashes the serialized `Gradebook` and durable
+session payload using canonical JSON while excluding `saved_at`, schema version,
+database UUID, generation, and recovery metadata. Streamlit retains the last
+successfully loaded/saved fingerprint and normalized path in session-only state.
+`persist()` calls `save_database_checked()` only when the logical fingerprint or
+path differs; otherwise it leaves the generation and automatic backups untouched
+and runs only the independently fingerprinted class-mirror reconciliation. A
+failed, blocked, or recovery-file save remains dirty. Only a verified shared
+save updates the clean baseline.
+
+Before the first changing save to each normalized path/database identity in one
+application session, the checked transaction writes the exact observed bytes to
+`acm_database.json.bak-session-<UTC timestamp>-<random suffix>` using exclusive
+creation. It captures the copy again and requires identical bytes/hash plus
+successful hydration before the primary write may continue. Failure blocks the
+save without changing the primary. An absent authorized target has nothing to
+snapshot; explicit replacement's verified `.bak-replaced-*` copy satisfies the
+same gate. Session snapshots and existing backups are never pruned.
 
 **⚠ Invariant: repointing the database path adopts an existing DB, never
 overwrites it.** In **⚙ Settings**, Save writes the device prefs but only calls
@@ -348,7 +369,7 @@ not. The deliberate, typed-confirmed Danger-zone **Wipe entire database**
 `persist(allow_shrink=True)`; it still requires the session's concurrency token.
 The separate Phase-2 **Replace** flow is checkbox-gated and bypasses ordinary
 shrink comparison only after creating its verified `.bak-replaced-*` copy.
-Independently, the **first** `persist()` of each
+Independently, the **first changing** `persist()` of each
 calendar day snapshots the existing on-disk DB to `acm_database.json.bak-auto-
 <YYYYMMDD>` *before* it is overwritten. The backup is written from the checked
 snapshot and read-back verified; existing `.bak-*` files are not pruned by this
@@ -686,6 +707,7 @@ works without them.
 |------------|-------|---------|
 | `acm_database.json` | Streamlit | Schema-v2 serialized `Gradebook` + session state, stable database UUID and monotonic generation; legacy v1 upgrades on its first verified save. |
 | `acm_database.json.cam-write.lock` | Streamlit | Persistent sidecar used for OS-managed local write serialization; not authoritative between cloud devices. |
+| `acm_database.json.bak-session-*` | Streamlit | Exact, read-back-verified pre-save bytes captured before the first changing save to a database identity in each app session; collision-proof and never pruned. |
 | `acm_database.json.conflict-recovery-*.json` | Streamlit | Verified standalone copy of a stale session or cloud-sibling-blocked save plus non-student recovery provenance; never auto-merged. |
 | `grading_cache.json` | Flask | Multi-folder marking mirror (see DATA_DICTIONARY). |
 | `grades_<folderId>.json` | Flask | Per-assignment full `STATE` snapshot. |
