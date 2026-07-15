@@ -7,7 +7,9 @@ Field-level source of truth for CAM's most schema-sensitive artefacts:
    (`cam_grading_workspace/app.py`) and the **`cam_grades_<folderId>.json`**
    handoff file CAM publishes for it (§B.6), and
 3. the **report-card grade state** persisted in `acm_database.json`'s session
-   payload (Effort/English use + the two derived School grades).
+   payload (Effort/English use + the two derived School grades), and
+4. the **`acm_database.json` envelope and concurrency metadata** owned by
+   `engine/persistence.py`.
 
 All claims below are verified against the code and the live sample files. Where
 the on-disk data shows **schema drift** (older vs. newer shapes coexisting in one
@@ -750,9 +752,82 @@ layer** applied over **purge-replace** ingest.
 
 ---
 
+## Part D — `acm_database.json` envelope and concurrency metadata
+
+`engine/persistence.py` owns the whole-database envelope. The current shared
+database shape is schema version 2:
+
+```jsonc
+{
+  "version": 2,
+  "saved_at": "2026-07-15T12:34:56.789012",
+  "database_id": "4e16d740-2d95-4a32-a2ff-70c3784587e4",
+  "generation": 17,
+  "gradebook": {
+    "students": [],
+    "assignments": []
+  },
+  "session": {}
+}
+```
+
+| Field | Type | Required in v2 | Meaning |
+|-------|------|----------------|---------|
+| `version` | integer | yes | Envelope schema. Current value is `2`; legacy databases use `1`. |
+| `saved_at` | ISO-8601 string | yes | Diagnostic wall-clock time of serialization; never used as a concurrency token. |
+| `database_id` | UUID string | yes | Stable identity of one logical shared database. Preserved across normal saves and term restores. Explicit replacement creates a new identity. |
+| `generation` | positive integer | yes | Monotonic revision, starting at `1` and incremented exactly once by each verified shared save. |
+| `gradebook` | object | yes | Durable student, assignment, score, and exam-result graph produced by `serialize_gradebook()`. |
+| `session` | object | yes | Teacher-side state produced by `build_session_payload()`; individual fields such as report-card state are documented in Part C. |
+
+### D.1 Session write token
+
+`DatabaseWriteToken` is an in-memory, frozen value and is **not** serialized into
+the database or device preferences. It contains `path`, `state`,
+`schema_version`, `database_id`, `generation`, and `content_hash`. It deliberately
+does not contain raw database bytes. A checked save requires the live path/state,
+identity, generation, and SHA-256 hash to match this token; modification without
+a generation advance is therefore also rejected.
+
+For a genuinely absent path, the token records `state = "absent"` and null
+identity/generation/hash. Creation succeeds only while the path remains absent.
+For legacy v1, identity and generation are null but `content_hash` is required;
+the first save compares that exact hash, creates a verified
+`.bak-pre-concurrency-upgrade-*` copy, and writes v2 at generation 1.
+
+### D.2 Conflict-recovery envelope
+
+A rejected stale session is serialized as a standalone schema-v2 database named
+`acm_database.json.conflict-recovery-<UTC timestamp>-<random suffix>.json`. It has
+its **own** UUID and generation 1, so it cannot masquerade as a committed revision
+of the shared database. It additionally carries:
+
+```jsonc
+"recovery": {
+  "kind": "concurrency-conflict",
+  "created_at": "2026-07-15T03:34:56.789012+00:00",
+  "source_database_id": "<UUID or null for legacy v1>",
+  "expected_generation": 16,
+  "expected_content_hash": "<SHA-256 hex>",
+  "observed_database_id": "<UUID or null>",
+  "observed_generation": 17,
+  "observed_content_hash": "<SHA-256 hex or null>",
+  "observed_state": "ok"
+}
+```
+
+These fields contain only revision provenance, never student names, IDs, scores,
+or comments. The recovery file is reported to the teacher only after atomic
+creation, SHA-256 read-back verification, and successful hydration. CAM does not
+automatically merge or restore it.
+
+---
+
 ## Change discipline
 
 When the CSV export or the cache schema changes, update this file **in the same
 change** and keep the migration shims (`_normalize_grades`,
 `_normalize_checklist`, the `Due Date`→`Assessed Date` fallback) working — old
-files in the field are expected to keep loading.
+files in the field are expected to keep loading. Changes to the shared database
+envelope must likewise update Part D, retain the documented legacy-load path,
+and preserve checked-write, backup, and recovery invariants.

@@ -6,6 +6,33 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-15 — Database concurrency safety Phase 2: stale writers blocked
+
+**What this changes** — two CAM sessions could previously load the same valid
+database and let the later save silently replace newer work. Structural shrink
+detection could not catch a stale copy with comparable or greater record counts.
+
+- **Persistent database revisions.** Schema version 2 adds a stable database UUID
+  and a generation advanced exactly once by each verified shared save. Legacy
+  version-1 files remain unchanged until their first save, which requires an
+  exact content-hash match and a verified pre-upgrade backup.
+- **Compare-before-write transaction.** CAM retains the identity, generation and
+  SHA-256 hash loaded by each session. A local inter-process lock encloses the
+  fresh snapshot, comparison, shrink check, backup, atomic replacement and
+  read-back verification; intentional shrink bypasses never bypass concurrency.
+- **Recoverable conflicts.** A stale save leaves the shared bytes untouched,
+  writes the pending session to a unique verified conflict-recovery database,
+  skips mirror writes and enters a teacher-facing read-only state. Failed
+  recovery-file creation keeps the in-memory session open with an explicit retry.
+- **Safe path changes and replacement.** New empty destinations receive their own
+  absent-file token, unreadable destinations are refused, and confirmed database
+  replacement creates a verified backup and a fresh database identity.
+- **Regression coverage.** Engine and app integration tests exercise two-session
+  races, legacy upgrades, same-generation tampering, missing/unreadable files,
+  larger stale payloads, lock timeout, shrink preservation and recovery failures.
+  The complete 229-test suite passes without launching CAM or using saved device
+  preferences.
+
 ## 2026-07-15 — Database concurrency safety Phase 1: immutable boot snapshot
 
 **What this changes** — CAM previously read `acm_database.json` separately for

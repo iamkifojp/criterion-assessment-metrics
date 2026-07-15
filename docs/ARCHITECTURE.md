@@ -221,7 +221,8 @@ guard closes that hole. At boot, `capture_database_snapshot(db_path())`
 (`engine/persistence.py`) reads the database content exactly once into a frozen
 `DatabaseSnapshot`: immutable raw bytes plus a SHA-256 hash, captured size/mtime,
 schema version, structural mass, coarse validation results, and optional
-identity/generation observations. `diagnose_db_load(snapshot)` and
+identity/generation observations (present on schema v2, absent on legacy v1).
+`diagnose_db_load(snapshot)` and
 `load_database_snapshot(snapshot)` then classify and hydrate only those captured
 bytes; a cloud replacement after capture cannot change the boot decision or the
 object graph loaded by that boot. The snapshot distinguishes **absent / ok /
@@ -238,6 +239,38 @@ an **absent file inside an existing folder** is treated as a legitimate first
 run (start empty, create on first save). This is wipe-mechanism 2 in
 [CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
 
+**⚠ Invariant: a session saves only the exact database generation it loaded or
+last saved.** After boot, Streamlit retains a frozen, raw-byte-free
+`DatabaseWriteToken` containing the database path/state, schema version, stable
+UUID, integer generation, and SHA-256 content hash. Every live database write
+routes through `save_database_checked()` (`engine/persistence.py`). A persistent
+`acm_database.json.cam-write.lock` uses OS-managed locking to serialize local
+processes; while holding it, the transaction captures the live file once and
+performs the token comparison, shrink check, backups, atomic replacement, and
+read-back verification. A successful schema-v2 write preserves the UUID,
+increments the generation exactly once, and returns the verified next token.
+The lock is only local coordination — the persisted UUID/generation/hash is the
+cross-device check because cloud services do not provide immediate lock
+propagation.
+
+A legacy schema-v1 database is loaded without modification and represented by
+its exact content hash. Its first checked save may upgrade it to v2 only if that
+hash still matches; CAM first creates and verifies a collision-proof
+`acm_database.json.bak-pre-concurrency-upgrade-<UTC timestamp>-<suffix>` copy,
+then writes a new UUID at generation 1. A genuinely absent database similarly
+must remain absent before its generation-1 creation, so two sessions cannot both
+win first creation.
+
+Any identity, generation, hash, state, or metadata mismatch raises a concurrency
+conflict before backup rotation or shared-file replacement. `persist()` writes
+the pending in-memory state to a unique, self-contained, read-back-verified
+`acm_database.json.conflict-recovery-<UTC timestamp>-<suffix>.json`, leaves the
+shared bytes unchanged, skips class mirrors, and enters read-only quarantine.
+The recovery database has its own UUID/generation and a `recovery` provenance
+object; CAM never claims or attempts an automatic merge. If recovery-file
+verification fails, the in-memory state remains visible and the banner warns
+the teacher not to close CAM while offering a retry.
+
 **⚠ Invariant: repointing the database path adopts an existing DB, never
 overwrites it.** In **⚙ Settings**, Save writes the device prefs but only calls
 `persist()` when it is safe to: for an **unchanged** path (a layout-only Save) or
@@ -247,9 +280,10 @@ form is replaced by an adopt-vs-overwrite panel (`_render_db_switch_panel`,
 gated by `st.session_state["db_switch_pending"]`) showing the target file's
 assignment/roster/class counts (`_db_file_counts`). **Load** (the default)
 clears `db_loaded` and re-runs the boot hydrate so the session *becomes* the
-existing database — nothing on disk is written; **Replace** is explicit,
-checkbox-gated, and snapshots the target to
-`acm_database.json.bak-replaced-<ts>` (`_backup_replaced_db`) before persisting.
+existing database — nothing on disk is written; **Replace** is explicit and
+checkbox-gated. `replace_database_checked()` holds the same write lock, snapshots
+and verifies the target as `acm_database.json.bak-replaced-<UTC timestamp>-<suffix>`,
+then writes the replacement with a new logical database UUID at generation 1.
 **The new `db_custom_path` pref is committed only on Load / Replace** — while
 the panel is pending, and if it is dismissed with Cancel or **ESC**, the active
 pref stays on the old location (`resolve_db_path()` is a pure resolver so the
@@ -265,10 +299,10 @@ clobber a real database.
 tripwire) and keeps rotating daily backups.** The last line of defence behind the
 two wipe-mechanism guards above: whatever future code path produces a
 mass-reducing write, it cannot destroy the only copy. Before each save,
-`persist()` (`app.py`) compares a cheap structural **mass** —
-`assignments + roster entries + scored students`, read from the file already on
-disk via `_ondisk_mass()` (raw JSON, no engine objects, so it is light enough to
-run on every autosave) — against the outgoing session (`_outgoing_mass()`). When
+`save_database_checked()` compares a cheap structural **mass** —
+`assignments + roster entries + scored students` — from the same immutable
+on-disk snapshot used by the concurrency check against the outgoing session.
+There is no second live-file read between concurrency and shrink decisions. When
 the on-disk DB has real substance (`≥ SHRINK_MIN_ASSIGNMENTS`, currently 10) and
 the outgoing mass would fall below `SHRINK_KEEP_RATIO` (0.33) of it, the write is
 **refused**: the outgoing payload is parked as `acm_database.json.blocked-<ts>`
@@ -276,15 +310,17 @@ for inspection and the same `db_load_blocked` read-only quarantine banner is
 raised (reason `"shrink-blocked"`). The threshold is deliberately generous —
 deleting one class of several still clears it (`delete_class()` uses a plain
 `persist()` and passes), while flattening every class to the demo gradebook does
-not. Two **deliberate, typed-confirmed** reductions bypass it with
-`persist(allow_shrink=True)`: the Danger-zone **Wipe entire database**
-(`wipe_database_full()`) and the Phase-2 **Replace** (already checkbox-gated and
-`.bak-replaced-` backed-up). Independently, the **first** `persist()` of each
+not. The deliberate, typed-confirmed Danger-zone **Wipe entire database**
+(`wipe_database_full()`) bypasses only this threshold through
+`persist(allow_shrink=True)`; it still requires the session's concurrency token.
+The separate Phase-2 **Replace** flow is checkbox-gated and bypasses ordinary
+shrink comparison only after creating its verified `.bak-replaced-*` copy.
+Independently, the **first** `persist()` of each
 calendar day snapshots the existing on-disk DB to `acm_database.json.bak-auto-
-<YYYYMMDD>` *before* it is overwritten (`_rotate_daily_backup()`), pruned to the
-newest `AUTO_BACKUP_KEEP` (7) — so any future incident is at most a one-day loss
-even without OneDrive version history. Pruning only ever removes `.bak-auto-*`;
-manual `.bak-replaced-*` / `.bak-<purpose>-*` snapshots are never touched. This is
+<YYYYMMDD>` *before* it is overwritten. The backup is written from the checked
+snapshot and read-back verified; existing `.bak-*` files are not pruned by this
+transaction. This provides a recent rollback point even without OneDrive version
+history. This is
 Phase 3 in
 [CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
 
@@ -615,7 +651,9 @@ works without them.
 
 | File / dir | Owner | Purpose |
 |------------|-------|---------|
-| `acm_database.json` | Streamlit | Serialized `Gradebook` (the analytical DB). |
+| `acm_database.json` | Streamlit | Schema-v2 serialized `Gradebook` + session state, stable database UUID and monotonic generation; legacy v1 upgrades on its first verified save. |
+| `acm_database.json.cam-write.lock` | Streamlit | Persistent sidecar used for OS-managed local write serialization; not authoritative between cloud devices. |
+| `acm_database.json.conflict-recovery-*.json` | Streamlit | Verified standalone copy of a stale session's pending state plus non-student recovery provenance; never auto-merged. |
 | `grading_cache.json` | Flask | Multi-folder marking mirror (see DATA_DICTIONARY). |
 | `grades_<folderId>.json` | Flask | Per-assignment full `STATE` snapshot. |
 | `gcg_exams.json` | Flask/exam_engine | Exam definitions, keyed by class. |
