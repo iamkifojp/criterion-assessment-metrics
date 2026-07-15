@@ -329,6 +329,11 @@ at the same path, or the sync client creates a likely conflicted copy, CAM enter
 - If a conflict is discovered while saving, CAM preserves pending work in a
   verified `conflict-recovery` file. If that recovery copy cannot be verified,
   leave the CAM session open and retry recovery before reloading or closing it.
+- If CAM reports an unsupported database version or failed structural
+  validation, it has loaded no partial gradebook and changed no shared bytes.
+  Restore a known-good `bak-session`, `bak-auto`, or cloud version, or use the
+  newer CAM release that created the schema. The displayed paths identify only
+  record locations; they never show student data.
 
 CAM saves only when gradebook content or durable settings actually change.
 Ordinary screen reruns do not advance the database revision; pressing **Save

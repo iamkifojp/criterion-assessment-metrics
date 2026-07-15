@@ -35,7 +35,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .models import (
     Assignment,
@@ -78,6 +78,27 @@ class DatabaseSnapshot:
     generation: Any
     mass: Optional[Tuple[int, int]]
     validation_errors: Tuple[str, ...]
+    validation_issues: Tuple["DatabaseValidationIssue", ...] = ()
+
+
+@dataclass(frozen=True)
+class DatabaseValidationIssue:
+    """Student-data-free description of one structural database defect."""
+
+    path: str
+    code: str
+
+
+class DatabaseValidationError(ValueError):
+    """A database payload cannot be hydrated or safely written."""
+
+    def __init__(self, issues: Tuple[DatabaseValidationIssue, ...]):
+        self.issues = issues
+        summary = ", ".join(
+            f"{issue.path}:{issue.code}" for issue in issues[:3])
+        if len(issues) > 3:
+            summary += f", plus {len(issues) - 3} more"
+        super().__init__(summary or "database-validation-failed")
 
 
 @dataclass(frozen=True)
@@ -143,6 +164,593 @@ class DatabaseShrinkError(RuntimeError):
 
 class DatabaseWriteVerificationError(RuntimeError):
     """A file write could not be read back as the exact intended payload."""
+
+
+# --------------------------------------------------------------------------
+# Strict whole-database validation
+# --------------------------------------------------------------------------
+
+_MAX_VALIDATION_ISSUES = 100
+_STRING_FIELDS = {
+    "name", "gender", "source", "assignment", "comment", "note",
+    "source_file", "class_name", "term", "folder_ref",
+}
+_BOOL_SCORE_FIELDS = {"is_valid", "include_in_report", "late"}
+_BOOL_ASSIGNMENT_FIELDS = {"grading_complete", "is_exam"}
+
+
+def _add_issue(issues: List[DatabaseValidationIssue], path: str,
+               code: str) -> None:
+    if len(issues) < _MAX_VALIDATION_ISSUES:
+        issues.append(DatabaseValidationIssue(path, code))
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _validate_string_list(value: Any, path: str,
+                          issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, list):
+        _add_issue(issues, path, "expected-array")
+        return
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            _add_issue(issues, f"{path}[{index}]", "expected-string")
+
+
+def _validate_string_map(value: Any, path: str,
+                         issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    for key, item in value.items():
+        if not isinstance(key, str):
+            _add_issue(issues, path, "expected-string-key")
+        if not isinstance(item, str):
+            _add_issue(issues, f"{path}.*", "expected-string")
+
+
+def _validate_score(value: Any, path: str,
+                    issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    criterion = value.get("criterion")
+    if not isinstance(criterion, str) or criterion not in {"A", "B", "C", "D"}:
+        _add_issue(issues, f"{path}.criterion", "invalid-criterion")
+    band = value.get("value")
+    if not _is_int(band):
+        _add_issue(issues, f"{path}.value", "expected-integer")
+    elif not 0 <= band <= 8:
+        _add_issue(issues, f"{path}.value", "band-out-of-range")
+    timestamp = value.get("timestamp")
+    if not isinstance(timestamp, str):
+        _add_issue(issues, f"{path}.timestamp", "expected-iso-datetime")
+    else:
+        try:
+            datetime.fromisoformat(timestamp)
+        except ValueError:
+            _add_issue(issues, f"{path}.timestamp", "expected-iso-datetime")
+    for field in _STRING_FIELDS & value.keys():
+        if not isinstance(value[field], str):
+            _add_issue(issues, f"{path}.{field}", "expected-string")
+    if "keywords" in value:
+        _validate_string_list(value["keywords"], f"{path}.keywords", issues)
+    for field in _BOOL_SCORE_FIELDS & value.keys():
+        if not isinstance(value[field], bool):
+            _add_issue(issues, f"{path}.{field}", "expected-boolean")
+
+
+def _validate_exam_result(value: Any, path: str,
+                          issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    if not isinstance(value.get("assignment"), str):
+        _add_issue(issues, f"{path}.assignment", "expected-string")
+    for field in ("total", "max_total"):
+        if field in value and not _is_int(value[field]):
+            _add_issue(issues, f"{path}.{field}", "expected-integer")
+    if "comment" in value and not isinstance(value["comment"], str):
+        _add_issue(issues, f"{path}.comment", "expected-string")
+    questions = value.get("questions", {})
+    if not isinstance(questions, dict):
+        _add_issue(issues, f"{path}.questions", "expected-object")
+    else:
+        for key, mark in questions.items():
+            if not isinstance(key, str):
+                _add_issue(issues, f"{path}.questions", "expected-string-key")
+            if not _is_int(mark):
+                _add_issue(issues, f"{path}.questions.*", "expected-integer")
+    chosen = value.get("chosen", {})
+    if not isinstance(chosen, dict):
+        _add_issue(issues, f"{path}.chosen", "expected-object")
+    else:
+        for key, labels in chosen.items():
+            if not isinstance(key, str):
+                _add_issue(issues, f"{path}.chosen", "expected-string-key")
+            _validate_string_list(labels, f"{path}.chosen.*", issues)
+    bands = value.get("section_bands", {})
+    if not isinstance(bands, dict):
+        _add_issue(issues, f"{path}.section_bands", "expected-object")
+    else:
+        for key, band in bands.items():
+            if not isinstance(key, str):
+                _add_issue(issues, f"{path}.section_bands", "expected-string-key")
+            if not _is_int(band):
+                _add_issue(issues, f"{path}.section_bands.*", "expected-integer")
+            elif not 0 <= band <= 8:
+                _add_issue(issues, f"{path}.section_bands.*", "band-out-of-range")
+
+
+def _validate_sections(value: Any, path: str,
+                       issues: List[DatabaseValidationIssue]) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        _add_issue(issues, path, "expected-array-or-null")
+        return
+    for index, section in enumerate(value):
+        section_path = f"{path}[{index}]"
+        if not isinstance(section, dict):
+            _add_issue(issues, section_path, "expected-object")
+            continue
+        if not isinstance(section.get("name"), str):
+            _add_issue(issues, f"{section_path}.name", "expected-string")
+        required = section.get("required")
+        if required is not None and not _is_int(required):
+            _add_issue(issues, f"{section_path}.required", "expected-integer-or-null")
+        questions = section.get("questions")
+        if not isinstance(questions, list):
+            _add_issue(issues, f"{section_path}.questions", "expected-array")
+            continue
+        for q_index, question in enumerate(questions):
+            question_path = f"{section_path}.questions[{q_index}]"
+            if not isinstance(question, dict):
+                _add_issue(issues, question_path, "expected-object")
+                continue
+            if not isinstance(question.get("label"), str):
+                _add_issue(issues, f"{question_path}.label", "expected-string")
+            if not _is_int(question.get("max")):
+                _add_issue(issues, f"{question_path}.max", "expected-integer")
+
+
+def _validate_assignment(value: Any, path: str,
+                         issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    if not isinstance(value.get("name"), str):
+        _add_issue(issues, f"{path}.name", "expected-string")
+    if "criteria" in value:
+        _validate_string_list(value["criteria"], f"{path}.criteria", issues)
+        if isinstance(value["criteria"], list):
+            for index, criterion in enumerate(value["criteria"]):
+                if isinstance(criterion, str) and criterion not in {"A", "B", "C", "D"}:
+                    _add_issue(issues, f"{path}.criteria[{index}]", "invalid-criterion")
+    for field in _STRING_FIELDS & value.keys():
+        if not isinstance(value[field], str):
+            _add_issue(issues, f"{path}.{field}", "expected-string")
+    ingested = value.get("ingested_at")
+    if ingested is not None:
+        if not isinstance(ingested, str):
+            _add_issue(issues, f"{path}.ingested_at", "expected-iso-datetime-or-null")
+        else:
+            try:
+                datetime.fromisoformat(ingested)
+            except ValueError:
+                _add_issue(issues, f"{path}.ingested_at", "expected-iso-datetime-or-null")
+    for field in ("score_count", "max_total"):
+        if field in value and not _is_int(value[field]):
+            _add_issue(issues, f"{path}.{field}", "expected-integer")
+    for field in _BOOL_ASSIGNMENT_FIELDS & value.keys():
+        if not isinstance(value[field], bool):
+            _add_issue(issues, f"{path}.{field}", "expected-boolean")
+    if "question_labels" in value:
+        _validate_string_list(value["question_labels"],
+                              f"{path}.question_labels", issues)
+    if "sections" in value:
+        _validate_sections(value["sections"], f"{path}.sections", issues)
+
+
+def _validate_student(value: Any, path: str,
+                      issues: List[DatabaseValidationIssue]) -> Optional[str]:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return None
+    student_id = value.get("student_id")
+    if not isinstance(student_id, str):
+        _add_issue(issues, f"{path}.student_id", "expected-string")
+        student_id = None
+    for field in ("name", "gender"):
+        if field in value and not isinstance(value[field], str):
+            _add_issue(issues, f"{path}.{field}", "expected-string")
+    scores = value.get("scores", [])
+    if not isinstance(scores, list):
+        _add_issue(issues, f"{path}.scores", "expected-array")
+    else:
+        for index, score in enumerate(scores):
+            _validate_score(score, f"{path}.scores[{index}]", issues)
+    results = value.get("exam_results", [])
+    if not isinstance(results, list):
+        _add_issue(issues, f"{path}.exam_results", "expected-array")
+    else:
+        seen = set()
+        for index, result in enumerate(results):
+            result_path = f"{path}.exam_results[{index}]"
+            _validate_exam_result(result, result_path, issues)
+            if isinstance(result, dict) and isinstance(result.get("assignment"), str):
+                identity = result["assignment"]
+                if identity in seen:
+                    _add_issue(issues, f"{result_path}.assignment", "duplicate-exam-result")
+                seen.add(identity)
+    return student_id
+
+
+def _validate_roster_store(value: Any, path: str,
+                           issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    for class_name, rows in value.items():
+        if not isinstance(class_name, str):
+            _add_issue(issues, path, "expected-string-key")
+        if not isinstance(rows, list):
+            _add_issue(issues, f"{path}.*", "expected-array")
+            continue
+        for index, row in enumerate(rows):
+            row_path = f"{path}.*[{index}]"
+            if not isinstance(row, dict):
+                _add_issue(issues, row_path, "expected-object")
+                continue
+            if not isinstance(row.get("key"), str):
+                _add_issue(issues, f"{row_path}.key", "expected-string")
+            for field in ("name", "email", "gender"):
+                if field in row and not isinstance(row[field], str):
+                    _add_issue(issues, f"{row_path}.{field}", "expected-string")
+
+
+def _validate_nested_string_map(value: Any, path: str,
+                                issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    for key, mapping in value.items():
+        if not isinstance(key, str):
+            _add_issue(issues, path, "expected-string-key")
+        _validate_string_map(mapping, f"{path}.*", issues)
+
+
+def _validate_bool_map(value: Any, path: str,
+                       issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    for key, item in value.items():
+        if not isinstance(key, str):
+            _add_issue(issues, path, "expected-string-key")
+        if not isinstance(item, bool):
+            _add_issue(issues, f"{path}.*", "expected-boolean")
+
+
+def _validate_nested_map(value: Any, path: str,
+                         issues: List[DatabaseValidationIssue],
+                         leaf_validator) -> None:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    for key, mapping in value.items():
+        if not isinstance(key, str):
+            _add_issue(issues, path, "expected-string-key")
+        if not isinstance(mapping, dict):
+            _add_issue(issues, f"{path}.*", "expected-object")
+            continue
+        for inner_key, item in mapping.items():
+            if not isinstance(inner_key, str):
+                _add_issue(issues, f"{path}.*", "expected-string-key")
+            leaf_validator(item, f"{path}.*.*", issues)
+
+
+def _expect_bool(value: Any, path: str,
+                 issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, bool):
+        _add_issue(issues, path, "expected-boolean")
+
+
+def _expect_string(value: Any, path: str,
+                   issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, str):
+        _add_issue(issues, path, "expected-string")
+
+
+def _expect_effort(value: Any, path: str,
+                   issues: List[DatabaseValidationIssue]) -> None:
+    if not _is_int(value):
+        _add_issue(issues, path, "expected-integer")
+    elif not 0 <= value <= 5:
+        _add_issue(issues, path, "effort-out-of-range")
+
+
+def _validate_final_override(value: Any, path: str,
+                             issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    for student_id, by_criterion in value.items():
+        if not isinstance(student_id, str):
+            _add_issue(issues, path, "expected-string-key")
+        if not isinstance(by_criterion, dict):
+            _add_issue(issues, f"{path}.*", "expected-object")
+            continue
+        for criterion, band in by_criterion.items():
+            if not isinstance(criterion, str) or criterion not in {"A", "B", "C", "D"}:
+                _add_issue(issues, f"{path}.*.*", "invalid-criterion")
+            if not _is_int(band):
+                _add_issue(issues, f"{path}.*.*", "expected-integer")
+            elif not 0 <= band <= 8:
+                _add_issue(issues, f"{path}.*.*", "band-out-of-range")
+
+
+def _validate_unmatched_works(value: Any, path: str,
+                              issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    for class_name, assignments in value.items():
+        if not isinstance(class_name, str):
+            _add_issue(issues, path, "expected-string-key")
+        if not isinstance(assignments, dict):
+            _add_issue(issues, f"{path}.*", "expected-object")
+            continue
+        for assignment, rows in assignments.items():
+            if not isinstance(assignment, str):
+                _add_issue(issues, f"{path}.*", "expected-string-key")
+            if not isinstance(rows, list):
+                _add_issue(issues, f"{path}.*.*", "expected-array")
+                continue
+            for index, row in enumerate(rows):
+                row_path = f"{path}.*.*[{index}]"
+                if not isinstance(row, dict):
+                    _add_issue(issues, row_path, "expected-object")
+                    continue
+                for field in ("csv_key", "comment", "files", "timestamp"):
+                    if field in row and not isinstance(row[field], str):
+                        _add_issue(issues, f"{row_path}.{field}", "expected-string")
+                for field in ("late", "is_exam"):
+                    if field in row and not isinstance(row[field], bool):
+                        _add_issue(issues, f"{row_path}.{field}", "expected-boolean")
+                if "keywords" in row:
+                    _validate_string_list(row["keywords"],
+                                          f"{row_path}.keywords", issues)
+                if "grades" in row:
+                    grades = row["grades"]
+                    if not isinstance(grades, list):
+                        _add_issue(issues, f"{row_path}.grades", "expected-array")
+                    else:
+                        for grade_index, pair in enumerate(grades):
+                            pair_path = f"{row_path}.grades[{grade_index}]"
+                            if not isinstance(pair, list) or len(pair) != 2:
+                                _add_issue(issues, pair_path, "expected-pair")
+                            elif (not isinstance(pair[0], str)
+                                  or pair[0] not in {"A", "B", "C", "D"}
+                                  or not _is_int(pair[1])
+                                  or not 0 <= pair[1] <= 8):
+                                _add_issue(issues, pair_path, "invalid-criterion-band")
+                if "questions" in row:
+                    questions = row["questions"]
+                    if not isinstance(questions, dict):
+                        _add_issue(issues, f"{row_path}.questions", "expected-object")
+                    else:
+                        for label, mark in questions.items():
+                            if not isinstance(label, str):
+                                _add_issue(issues, f"{row_path}.questions",
+                                           "expected-string-key")
+                            if not _is_int(mark):
+                                _add_issue(issues, f"{row_path}.questions.*",
+                                           "expected-integer")
+                for field in ("total", "max_total"):
+                    if field in row and not _is_int(row[field]):
+                        _add_issue(issues, f"{row_path}.{field}", "expected-integer")
+
+
+def _validate_session(session: Any, path: str,
+                      issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(session, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    for field in ("rosters", "archived_students"):
+        if field in session:
+            _validate_roster_store(session[field], f"{path}.{field}", issues)
+    for field in ("teacher_remarks", "llm_response"):
+        if field in session:
+            _validate_string_map(session[field], f"{path}.{field}", issues)
+    if "comments_by_term" in session:
+        _validate_nested_string_map(session["comments_by_term"],
+                                    f"{path}.comments_by_term", issues)
+    if "work_aliases" in session:
+        _validate_nested_string_map(session["work_aliases"],
+                                    f"{path}.work_aliases", issues)
+    if "unmatched_works" in session:
+        _validate_unmatched_works(session["unmatched_works"],
+                                  f"{path}.unmatched_works", issues)
+    for field in ("late_flags", "excused_flags"):
+        mapping = session.get(field)
+        if mapping is None:
+            continue
+        if not isinstance(mapping, dict):
+            _add_issue(issues, f"{path}.{field}", "expected-object")
+        else:
+            for key, item in mapping.items():
+                if not isinstance(key, str):
+                    _add_issue(issues, f"{path}.{field}", "expected-string-key")
+                if not isinstance(item, bool):
+                    _add_issue(issues, f"{path}.{field}.*", "expected-boolean")
+    if "late_flags_cleanup_v1" in session and not isinstance(
+            session["late_flags_cleanup_v1"], bool):
+        _add_issue(issues, f"{path}.late_flags_cleanup_v1", "expected-boolean")
+    if "final_override" in session:
+        _validate_final_override(session["final_override"],
+                                 f"{path}.final_override", issues)
+    for field in ("active",):
+        if field in session:
+            _validate_bool_map(session[field], f"{path}.{field}", issues)
+    if "active_by_term" in session:
+        _validate_nested_map(session["active_by_term"],
+                             f"{path}.active_by_term", issues, _expect_bool)
+    if "effort_by_term" in session:
+        _validate_nested_map(session["effort_by_term"],
+                             f"{path}.effort_by_term", issues, _expect_effort)
+    if "calc_method_by_term" in session:
+        _validate_nested_map(session["calc_method_by_term"],
+                             f"{path}.calc_method_by_term", issues, _expect_string)
+    if "date_override" in session:
+        dates = session["date_override"]
+        if not isinstance(dates, dict):
+            _add_issue(issues, f"{path}.date_override", "expected-object")
+        else:
+            for key, value in dates.items():
+                if not isinstance(key, str):
+                    _add_issue(issues, f"{path}.date_override", "expected-string-key")
+                if not isinstance(value, str):
+                    _add_issue(issues, f"{path}.date_override.*", "expected-iso-date")
+                else:
+                    try:
+                        datetime.fromisoformat(value)
+                    except ValueError:
+                        _add_issue(issues, f"{path}.date_override.*", "expected-iso-date")
+    if "archived" in session:
+        _validate_string_list(session["archived"], f"{path}.archived", issues)
+    if "classes" in session:
+        classes = session["classes"]
+        if not isinstance(classes, list):
+            _add_issue(issues, f"{path}.classes", "expected-array")
+        else:
+            for index, item in enumerate(classes):
+                item_path = f"{path}.classes[{index}]"
+                if not isinstance(item, dict):
+                    _add_issue(issues, item_path, "expected-object")
+                    continue
+                for field in ("name", "grade", "myp_year"):
+                    if field in item and not isinstance(item[field], str):
+                        _add_issue(issues, f"{item_path}.{field}", "expected-string")
+    for field in ("active_class", "active_term"):
+        if field in session and not isinstance(session[field], str):
+            _add_issue(issues, f"{path}.{field}", "expected-string")
+    if "ingested_files" in session:
+        registry = session["ingested_files"]
+        if not isinstance(registry, dict):
+            _add_issue(issues, f"{path}.ingested_files", "expected-object")
+        else:
+            for key, record in registry.items():
+                if not isinstance(key, str):
+                    _add_issue(issues, f"{path}.ingested_files", "expected-string-key")
+                if not isinstance(record, dict):
+                    _add_issue(issues, f"{path}.ingested_files.*", "expected-object")
+    unit_plans = session.get("unit_plans")
+    if unit_plans is not None:
+        if not isinstance(unit_plans, dict):
+            _add_issue(issues, f"{path}.unit_plans", "expected-object")
+        else:
+            for plan in unit_plans.values():
+                if not isinstance(plan, dict):
+                    _add_issue(issues, f"{path}.unit_plans.*", "expected-object")
+                    continue
+                if "target_criteria" in plan:
+                    _validate_string_map(plan["target_criteria"],
+                                         f"{path}.unit_plans.*.target_criteria", issues)
+                if "key_concepts" in plan:
+                    _validate_string_list(plan["key_concepts"],
+                                          f"{path}.unit_plans.*.key_concepts", issues)
+                for field in ("unit_title", "statement_of_inquiry", "source_file"):
+                    if field in plan and not isinstance(plan[field], str):
+                        _add_issue(issues, f"{path}.unit_plans.*.{field}",
+                                   "expected-string")
+                if ("myp_year" in plan and plan["myp_year"] is not None
+                        and not isinstance(plan["myp_year"], str)):
+                    _add_issue(issues, f"{path}.unit_plans.*.myp_year",
+                               "expected-string-or-null")
+
+
+def validate_database_payload(payload: Any) -> Tuple[DatabaseValidationIssue, ...]:
+    """Validate one decoded database without including record values in errors."""
+    issues: List[DatabaseValidationIssue] = []
+    if not isinstance(payload, dict):
+        return (DatabaseValidationIssue("$", "root-not-object"),)
+    version = payload.get("version")
+    if not _is_int(version):
+        _add_issue(issues, "version", "invalid-schema-version")
+    elif version not in (1, SCHEMA_VERSION):
+        _add_issue(issues, "version", "unsupported-schema-version")
+    if version == SCHEMA_VERSION:
+        database_id = payload.get("database_id")
+        valid_database_id = isinstance(database_id, str)
+        if valid_database_id:
+            try:
+                uuid.UUID(database_id)
+            except (ValueError, TypeError, AttributeError):
+                valid_database_id = False
+        if not valid_database_id:
+            _add_issue(issues, "database_id", "invalid-database-id")
+        generation = payload.get("generation")
+        if not _is_int(generation) or generation < 1:
+            _add_issue(issues, "generation", "invalid-generation")
+        if "saved_at" not in payload:
+            _add_issue(issues, "saved_at", "missing-required-field")
+    if "saved_at" in payload:
+        saved_at = payload["saved_at"]
+        if not isinstance(saved_at, str):
+            _add_issue(issues, "saved_at", "expected-iso-datetime")
+        else:
+            try:
+                datetime.fromisoformat(saved_at)
+            except ValueError:
+                _add_issue(issues, "saved_at", "expected-iso-datetime")
+    gradebook = payload.get("gradebook")
+    if not isinstance(gradebook, dict):
+        _add_issue(issues, "gradebook", "expected-object")
+    else:
+        students = gradebook.get("students")
+        if not isinstance(students, list):
+            _add_issue(issues, "gradebook.students", "expected-array")
+        else:
+            seen_students = set()
+            for index, student in enumerate(students):
+                student_path = f"gradebook.students[{index}]"
+                identity = _validate_student(student, student_path, issues)
+                if identity is not None:
+                    if identity in seen_students:
+                        _add_issue(issues, f"{student_path}.student_id",
+                                   "duplicate-student-id")
+                    seen_students.add(identity)
+        assignments = gradebook.get("assignments")
+        if not isinstance(assignments, list):
+            _add_issue(issues, "gradebook.assignments", "expected-array")
+        else:
+            for index, assignment in enumerate(assignments):
+                _validate_assignment(
+                    assignment, f"gradebook.assignments[{index}]", issues)
+    _validate_session(payload.get("session"), "session", issues)
+    if "recovery" in payload:
+        recovery = payload["recovery"]
+        if not isinstance(recovery, dict):
+            _add_issue(issues, "recovery", "expected-object")
+        else:
+            for field in ("kind", "created_at", "observed_state"):
+                if field in recovery and not isinstance(recovery[field], str):
+                    _add_issue(issues, f"recovery.{field}", "expected-string")
+            for field in ("source_database_id", "observed_database_id",
+                          "expected_content_hash", "observed_content_hash"):
+                if (field in recovery and recovery[field] is not None
+                        and not isinstance(recovery[field], str)):
+                    _add_issue(issues, f"recovery.{field}",
+                               "expected-string-or-null")
+            for field in ("expected_generation", "observed_generation"):
+                if (field in recovery and recovery[field] is not None
+                        and not _is_int(recovery[field])):
+                    _add_issue(issues, f"recovery.{field}",
+                               "expected-integer-or-null")
+    return tuple(issues)
 
 
 # --------------------------------------------------------------------------
@@ -384,28 +992,22 @@ def deserialize_gradebook(data: Dict[str, Any]) -> Gradebook:
     """Rebuild a :class:`Gradebook` from a dict produced by
     :func:`serialize_gradebook`. Score buckets are repopulated through
     ``Student.add_score`` so they stay chronologically sorted."""
+    issues = validate_database_payload(
+        {"version": 1, "gradebook": data, "session": {}})
+    if issues:
+        raise DatabaseValidationError(issues)
     gb = Gradebook()
-    for sd in data.get("students", []):
+    for sd in data["students"]:
         student = Student(student_id=str(sd["student_id"]), name=sd.get("name", ""),
                           gender=sd.get("gender", ""))
         gb.students[student.student_id] = student
         for raw in sd.get("scores", []):
-            try:
-                student.add_score(_score_from_dict(raw))
-            except (KeyError, ValueError, TypeError):
-                # Skip a single corrupt score rather than lose the whole file.
-                continue
+            student.add_score(_score_from_dict(raw))
         for raw in sd.get("exam_results", []):
-            try:
-                result = _exam_result_from_dict(raw)
-                student.exam_results[result.assignment] = result
-            except (KeyError, ValueError, TypeError):
-                continue
-    for raw in data.get("assignments", []):
-        try:
-            gb.register_assignment(_assignment_from_dict(raw))
-        except (KeyError, ValueError, TypeError):
-            continue
+            result = _exam_result_from_dict(raw)
+            student.exam_results[result.assignment] = result
+    for raw in data["assignments"]:
+        gb.register_assignment(_assignment_from_dict(raw))
     return gb
 
 
@@ -459,7 +1061,11 @@ def save_database(path: str, gradebook: Gradebook,
     over the target, so a crash mid-write can never corrupt an existing save.
     Returns the path written.
     """
-    _atomic_write_bytes(path, _payload_bytes(build_payload(gradebook, session)))
+    payload = build_payload(gradebook, session)
+    issues = validate_database_payload(payload)
+    if issues:
+        raise DatabaseValidationError(issues)
+    _atomic_write_bytes(path, _payload_bytes(payload))
     return path
 
 
@@ -548,13 +1154,15 @@ def capture_database_snapshot(path: str) -> DatabaseSnapshot:
             generation=None, mass=None,
             validation_errors=("root-not-object",), **common)
 
+    issues = validate_database_payload(payload)
     return DatabaseSnapshot(
-        state="ok",
+        state="invalid" if issues else "ok",
         schema_version=payload.get("version", 0),
         database_id=payload.get("database_id"),
         generation=payload.get("generation"),
-        mass=_raw_payload_mass(payload),
-        validation_errors=(),
+        mass=None if issues else _raw_payload_mass(payload),
+        validation_errors=tuple(issue.code for issue in issues),
+        validation_issues=issues,
         **common,
     )
 
@@ -625,7 +1233,8 @@ def find_database_conflict_siblings(path: str) -> Tuple[str, ...]:
 
 
 def _valid_v2_snapshot(snapshot: DatabaseSnapshot) -> bool:
-    if snapshot.state != "ok" or snapshot.schema_version != SCHEMA_VERSION:
+    if (snapshot.state != "ok" or snapshot.validation_issues
+            or snapshot.schema_version != SCHEMA_VERSION):
         return False
     try:
         uuid.UUID(str(snapshot.database_id))
@@ -644,6 +1253,8 @@ def _tokens_match(expected: DatabaseWriteToken,
     if expected.state == "absent":
         return (observed.state == "absent",
                 "database-created-by-another-session")
+    if observed.state == "invalid":
+        return False, "invalid-concurrency-metadata"
     if expected.state != "ok" or observed.state != "ok":
         return False, "database-missing-or-unreadable"
     if expected.schema_version == 1:
@@ -797,6 +1408,19 @@ def save_database_checked(path: str, gradebook: Gradebook,
         if not matches:
             raise DatabaseConcurrencyError(expected, observed, reason)
 
+        if observed.state == "ok" and observed.schema_version == SCHEMA_VERSION:
+            database_id = str(observed.database_id)
+            generation = int(observed.generation) + 1
+        else:
+            database_id = str(uuid.uuid4())
+            generation = 1
+        payload = build_payload(
+            gradebook, session, database_id=database_id, generation=generation)
+        issues = validate_database_payload(payload)
+        if issues:
+            raise DatabaseValidationError(issues)
+        raw = _payload_bytes(payload)
+
         if (not allow_shrink and observed.mass is not None
                 and observed.mass[0] >= shrink_min_assignments
                 and observed.mass[1] > 0
@@ -815,15 +1439,6 @@ def save_database_checked(path: str, gradebook: Gradebook,
                 _backup_name(path, "pre-concurrency-upgrade"), observed)
 
         _rotate_daily_backup_from_snapshot(path, observed)
-        if observed.state == "ok" and observed.schema_version == SCHEMA_VERSION:
-            database_id = str(observed.database_id)
-            generation = int(observed.generation) + 1
-        else:
-            database_id = str(uuid.uuid4())
-            generation = 1
-        payload = build_payload(
-            gradebook, session, database_id=database_id, generation=generation)
-        raw = _payload_bytes(payload)
         intended_hash = hashlib.sha256(raw).hexdigest()
         _atomic_write_bytes(path, raw)
         written = capture_database_snapshot(path)
@@ -851,14 +1466,17 @@ def replace_database_checked(path: str, gradebook: Gradebook,
         if observed.state not in ("ok", "absent"):
             raise DatabaseWriteVerificationError(
                 "The database selected for replacement is not readable.")
+        database_id = str(uuid.uuid4())
+        payload = build_payload(gradebook, session, database_id=database_id,
+                                generation=1)
+        issues = validate_database_payload(payload)
+        if issues:
+            raise DatabaseValidationError(issues)
+        raw = _payload_bytes(payload)
         backup = ""
         if observed.state == "ok":
             backup = _verified_snapshot_copy(
                 _backup_name(path, "replaced"), observed)
-        database_id = str(uuid.uuid4())
-        payload = build_payload(gradebook, session, database_id=database_id,
-                                generation=1)
-        raw = _payload_bytes(payload)
         intended_hash = hashlib.sha256(raw).hexdigest()
         _atomic_write_bytes(path, raw)
         written = capture_database_snapshot(path)
@@ -896,6 +1514,9 @@ def write_conflict_recovery(path: str, gradebook: Gradebook,
     }
     payload = build_payload(gradebook, session, database_id=str(uuid.uuid4()),
                             generation=1, recovery=recovery)
+    issues = validate_database_payload(payload)
+    if issues:
+        raise DatabaseValidationError(issues)
     raw = _payload_bytes(payload)
     _write_sidecar_exclusive(recovery_path, raw)
     captured = capture_database_snapshot(recovery_path)
@@ -912,7 +1533,8 @@ def write_conflict_recovery(path: str, gradebook: Gradebook,
 def load_database_snapshot(snapshot: DatabaseSnapshot
                            ) -> Optional[Dict[str, Any]]:
     """Deserialize a database solely from ``snapshot``'s captured bytes."""
-    if snapshot.state != "ok" or snapshot.raw_bytes is None:
+    if (snapshot.state != "ok" or snapshot.raw_bytes is None
+            or snapshot.validation_issues):
         return None
     try:
         payload = json.loads(snapshot.raw_bytes.decode("utf-8"))
@@ -920,7 +1542,10 @@ def load_database_snapshot(snapshot: DatabaseSnapshot
         return None
     if not isinstance(payload, dict):
         return None
-    gb = deserialize_gradebook(payload.get("gradebook", {}))
+    issues = validate_database_payload(payload)
+    if issues:
+        return None
+    gb = deserialize_gradebook(payload["gradebook"])
     return {
         "gradebook": gb,
         "session": payload.get("session", {}),
@@ -947,10 +1572,12 @@ def db_file_state(path: str) -> str:
     - ``"unreadable"`` — a file is present but cannot be opened or parsed as a
       JSON object (a malformed save, a transient lock, or a cloud
       Files-On-Demand placeholder that has not finished downloading).
-    - ``"ok"``         — a file is present and parses as a JSON object.
+    - ``"invalid"``    — readable JSON with an unsupported schema or malformed
+      database record; it must not be partially hydrated.
+    - ``"ok"``         — a supported, strictly validated database.
 
-    ``load_database`` deliberately collapses "absent" and "unreadable" into a
-    single ``None`` return, which makes it impossible for a caller to tell "no
+    ``load_database`` deliberately collapses "absent", "unreadable", and
+    "invalid" into a single ``None`` return, which makes it impossible for a caller to tell "no
     database here yet" (a legitimate first run) from "a database is here but we
     could not read it" (do **not** overwrite it with demo state). This helper
     restores that distinction for callers that need it — chiefly the boot

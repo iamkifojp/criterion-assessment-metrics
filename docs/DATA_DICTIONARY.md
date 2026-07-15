@@ -780,7 +780,31 @@ database shape is schema version 2:
 | `gradebook` | object | yes | Durable student, assignment, score, and exam-result graph produced by `serialize_gradebook()`. |
 | `session` | object | yes | Teacher-side state produced by `build_session_payload()`; individual fields such as report-card state are documented in Part C. |
 
-### D.1 Session write token
+### D.1 Strict validation contract
+
+`capture_database_snapshot()` classifies a path as `absent`, `unreadable`,
+`invalid`, or `ok`. `invalid` means the bytes are valid JSON but the database
+uses an unsupported version or fails structural validation. Such a snapshot is
+never partially hydrated or treated as a fresh database.
+
+`validate_database_payload()` accepts schemas 1 and 2 only. Schema 2 requires a
+UUID `database_id` and positive, non-boolean integer `generation`. Gradebook
+students, scores, exam results and assignments are validated recursively,
+including A-D criterion values, 0-8 bands, ISO timestamps, booleans, arrays and
+nested exam sections. Duplicate student IDs and duplicate exam-result assignment
+keys within one student are invalid because the object model would otherwise
+overwrite one. Loss-critical session stores—rosters, comments, remarks,
+overrides, flags, per-term maps, unit plans, aliases and unmatched work—also use
+their canonical shapes. Documented optional legacy fields may be absent and
+unknown additive fields are allowed.
+
+Each `DatabaseValidationIssue` contains a structural `path` and stable `code`.
+Paths use array indices and wildcard map segments, for example
+`gradebook.students[3].scores[2].value` or
+`session.comments_by_term.*.*`. Neither paths nor codes contain student IDs,
+names, assignment names, comments, map keys, or rejected values.
+
+### D.2 Session write token
 
 `DatabaseWriteToken` is an in-memory, frozen value and is **not** serialized into
 the database or device preferences. It contains `path`, `state`,
@@ -795,7 +819,7 @@ For legacy v1, identity and generation are null but `content_hash` is required;
 the first save compares that exact hash, creates a verified
 `.bak-pre-concurrency-upgrade-*` copy, and writes v2 at generation 1.
 
-### D.2 Dirty-persistence metadata and session snapshots
+### D.3 Dirty-persistence metadata and session snapshots
 
 Dirty tracking is application-session state only; it does not add fields to the
 database envelope or `local_device_prefs.json`:
@@ -821,7 +845,7 @@ SHA-256 and to hydrate successfully. It is never rotated or pruned. An absent
 target produces no snapshot because no shared generation exists yet. A verified
 `.bak-replaced-*` copy is the equivalent protection for explicit replacement.
 
-### D.3 Conflict-recovery envelope
+### D.4 Conflict-recovery envelope
 
 A rejected stale session is serialized as a standalone schema-v2 database named
 `acm_database.json.conflict-recovery-<UTC timestamp>-<random suffix>.json`. It has
