@@ -2,9 +2,11 @@
 
 ## Status
 
-Phase 1 (the single-read immutable boot snapshot) is implemented. Phases 2-5
-remain proposed work. In particular, CAM does not yet compare generations before
-a save, so Phase 1 alone does not prevent the stale-writer scenario below.
+Phases 1 and 2 are implemented. CAM now retains the exact database generation
+loaded by each session and rejects a save when the shared file has changed.
+Phases 3-5 remain proposed work; cloud-conflict sibling detection, dirty-only
+persistence, session snapshots, and strict per-record validation are not yet
+implemented.
 
 ## Purpose
 
@@ -278,9 +280,18 @@ and replacement-after-capture cases.
 
 ### Phase 2: stale-writer protection
 
-Implement database identity/generation handling and the compare-before-write
-protocol. Add safe conflict-recovery output and the teacher-facing conflict
-state.
+Implemented. Version-2 databases carry a stable UUID and integer generation.
+Every live `persist()` retains a raw-byte-free write token and performs the
+generation, identity, and SHA-256 comparison inside a local inter-process lock
+before shrink checks, backups, and atomic replacement. Legacy version-1 files
+are upgraded only after an exact-hash comparison and a verified
+`bak-pre-concurrency-upgrade` copy.
+
+Conflicting saves leave the shared file unchanged, serialize the pending session
+to a unique read-back-verified `conflict-recovery` database, skip class mirrors,
+and enter a teacher-facing read-only state. Explicit database replacement remains
+available only through its confirmed flow and creates a verified pre-replacement
+backup plus a new database identity.
 
 Completion criteria:
 
@@ -291,6 +302,12 @@ Completion criteria:
 - B's pending version is preserved in a verified recovery file;
 - a same-sized or larger stale database is still rejected; and
 - the shrink tripwire remains active.
+
+All criteria are covered by `tests/test_database_concurrency.py` and
+`tests/test_app_database_concurrency.py`, including legacy upgrade, absent-file
+races, same-generation hash tampering, equal/larger stale payloads, lock timeout,
+recovery verification failure, mirror ordering, and explicit replacement. The
+complete 229-test suite passes in isolated test environments.
 
 ### Phase 3: missing and conflicted cloud files
 

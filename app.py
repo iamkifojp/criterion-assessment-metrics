@@ -75,7 +75,14 @@ from engine import (
     student_id_from_email,
     DEFAULT_DB_FILENAME,
     DatabaseSnapshot,
+    DatabaseWriteToken,
+    DatabaseConcurrencyError,
+    DatabaseShrinkError,
     save_database,
+    save_database_checked,
+    replace_database_checked,
+    write_conflict_recovery,
+    database_write_token,
     load_database,
     capture_database_snapshot,
     load_database_snapshot,
@@ -699,6 +706,7 @@ def init_state() -> None:
         "staging": {},           # sig -> staged-file record (uncommitted)
         "archived": set(),       # soft-deleted assignment names
         "db_loaded": False,      # one-shot guard for boot-time DB load
+        "db_write_token": None,  # raw-byte-free identity/generation/hash CAS token
         "db_load_blocked": None,  # Phase-1 quarantine: {reason,path} when the
                                   # configured DB is unreadable/unavailable and
                                   # persist() must refuse to overwrite it.
@@ -784,6 +792,7 @@ def init_state() -> None:
     if not st.session_state["db_loaded"] and not _needs_first_boot_setup():
         path = db_path()
         snapshot = capture_database_snapshot(path)
+        st.session_state["db_write_token"] = database_write_token(snapshot)
         # Load-guard (Phase 1): never let the demo session run — and then
         # autosave — on top of a real database we merely failed to read. If the
         # configured path is unreadable, empty-but-heavy, or on missing storage,
@@ -1017,26 +1026,50 @@ def persist(show: bool = False, allow_shrink: bool = False) -> None:
     try:
         path = db_path()
         payload = build_session_payload()
-        # Phase-3 shrink tripwire: refuse a catastrophic mass-loss overwrite —
-        # a demo/quarantine session must never flatten a rich database on disk.
-        # Park the outgoing payload for inspection and raise the same read-only
-        # quarantine banner Phase 1 uses. Deliberate wipes set allow_shrink.
-        if not allow_shrink and _shrink_would_lose(path, gb(), payload):
-            parked = _park_blocked_payload(path, gb(), payload)
-            st.session_state["db_load_blocked"] = {
-                "reason": "shrink-blocked", "path": path, "parked": parked}
-            note = ("Save blocked: this would have erased most of the database "
-                    "on disk (see the banner at the top).")
-            if parked:
-                note += f" Your unsaved session was parked at {parked}."
-            st.session_state["save_status"] = ("error", note)
-            return
-        # Rotating daily backup: snapshot the existing on-disk DB the first time
-        # we persist on a new calendar day, before save_database overwrites it.
-        _rotate_daily_backup(path)
-        save_database(path, gb(), payload)
+        expected = st.session_state.get("db_write_token")
+        if not isinstance(expected, DatabaseWriteToken):
+            raise RuntimeError(
+                "Save blocked because this session has no database revision "
+                "token. Restart CAM before saving.")
+        result = save_database_checked(
+            path, gb(), payload, expected, allow_shrink=allow_shrink,
+            shrink_min_assignments=SHRINK_MIN_ASSIGNMENTS,
+            shrink_keep_ratio=SHRINK_KEEP_RATIO)
+        st.session_state["db_write_token"] = result.token
         if show:
             st.session_state["save_status"] = ("ok", f"Saved to {path}.")
+    except DatabaseConcurrencyError as exc:
+        recovery_path = ""
+        recovery_error = ""
+        try:
+            recovery = write_conflict_recovery(
+                path, gb(), payload, exc.expected, exc.observed)
+            recovery_path = recovery.path
+        except Exception as recovery_exc:
+            recovery_error = str(recovery_exc)
+        st.session_state["db_load_blocked"] = {
+            "reason": "concurrency-conflict", "path": path,
+            "recovery": recovery_path, "recovery_error": recovery_error}
+        if recovery_path:
+            note = ("Save blocked because another CAM session saved a different "
+                    f"database version. Your pending work is preserved at "
+                    f"{recovery_path}.")
+        else:
+            note = ("Save blocked because another CAM session saved a different "
+                    "database version. CAM could not verify a recovery file; "
+                    "do not close this session.")
+        st.session_state["save_status"] = ("error", note)
+        return
+    except DatabaseShrinkError:
+        parked = _park_blocked_payload(path, gb(), payload)
+        st.session_state["db_load_blocked"] = {
+            "reason": "shrink-blocked", "path": path, "parked": parked}
+        note = ("Save blocked: this would have erased most of the database "
+                "on disk (see the banner at the top).")
+        if parked:
+            note += f" Your unsaved session was parked at {parked}."
+        st.session_state["save_status"] = ("error", note)
+        return
     except Exception as exc:  # disk full / permissions / etc.
         st.session_state["save_status"] = ("error", f"Save failed: {exc}")
         return
@@ -6044,6 +6077,7 @@ def _render_db_switch_panel(pending: dict) -> None:
         save_prefs(prefs)
         st.session_state["db_loaded"] = False
         st.session_state["db_load_blocked"] = None
+        st.session_state["db_write_token"] = None
         st.session_state["db_switch_pending"] = None
         st.session_state["save_status"] = (
             "ok", f"Loaded the existing database at {path}.")
@@ -6059,18 +6093,21 @@ def _render_db_switch_panel(pending: dict) -> None:
         key="dbsw_overwrite_cfm")
     if st.button("♻ Replace it with the current session", disabled=not overwrite_ok,
                  width="stretch", key="dbsw_overwrite"):
-        backup = _backup_replaced_db(path)
-        prefs = st.session_state["prefs"]
-        prefs["db_custom_path"] = new_custom  # commit the path, then write to it
-        save_prefs(prefs)
-        # Explicit, checkbox-confirmed, already-backed-up overwrite: bypass the
-        # Phase-3 shrink tripwire (a demo -> rich Replace is exactly the shrink
-        # it would otherwise refuse). _backup_replaced_db above is the safety net.
-        persist(allow_shrink=True)  # write the current session to the new path
-        if st.session_state.get("save_status", ("", ""))[0] != "error":
+        try:
+            result = replace_database_checked(
+                path, gb(), build_session_payload())
+        except Exception as exc:
+            st.session_state["save_status"] = (
+                "error", f"Database replacement failed: {exc}")
+        else:
+            prefs = st.session_state["prefs"]
+            prefs["db_custom_path"] = new_custom
+            save_prefs(prefs)
+            st.session_state["db_write_token"] = result.token
             note = f"Overwrote {path} with the current session."
-            if backup:
-                note += f" Previous database backed up to {backup}."
+            if result.pre_upgrade_backup:
+                note += (" Previous database backed up to "
+                         f"{result.pre_upgrade_backup}.")
             st.session_state["save_status"] = ("ok", note)
         st.session_state["db_switch_pending"] = None
         st.session_state["dlg_settings"] = False
@@ -6303,7 +6340,8 @@ def settings_dialog() -> None:
         # the teacher chooses, so an ESC-dismissed panel can never leave the
         # session pointed at (and about to autosave over) the existing DB.
         new_path = resolve_db_path(new_custom)
-        if path_changed and db_file_state(new_path) == "ok":
+        new_state = db_file_state(new_path) if path_changed else "ok"
+        if path_changed and new_state == "ok":
             prefs["db_custom_path"] = old_custom  # keep pointing at the old path
             save_prefs(prefs)
             st.session_state["db_switch_pending"] = {
@@ -6313,8 +6351,28 @@ def settings_dialog() -> None:
             }
             _render_db_switch_panel(st.session_state["db_switch_pending"])
             return
+        if path_changed and new_state == "unreadable":
+            prefs["db_custom_path"] = old_custom
+            save_prefs(prefs)
+            st.session_state["save_status"] = (
+                "error", "Database path not changed: a file exists at the new "
+                "location but CAM cannot read it. Wait for synchronization or "
+                "choose another location.")
+            return
         # Unchanged path (layout-only Save) or a new location with no database
         # there: commit the path pref and persist as today (saves / creates).
+        if path_changed:
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(new_path)),
+                            exist_ok=True)
+            except OSError as exc:
+                prefs["db_custom_path"] = old_custom
+                save_prefs(prefs)
+                st.session_state["save_status"] = (
+                    "error", f"Database path not changed: {exc}")
+                return
+            st.session_state["db_write_token"] = database_write_token(
+                capture_database_snapshot(new_path))
         prefs["db_custom_path"] = new_custom
         save_prefs(prefs)
         persist()  # write the database to the (possibly new) path immediately
@@ -9301,6 +9359,7 @@ def _adopt_db_path(new_custom: str, note: str) -> None:
     save_prefs(prefs)
     st.session_state["db_loaded"] = False
     st.session_state["db_load_blocked"] = None
+    st.session_state["db_write_token"] = None
     st.session_state["db_switch_pending"] = None
     st.session_state.pop("_boot_candidates", None)
     st.session_state["save_status"] = ("ok", note)
@@ -9428,7 +9487,26 @@ def _render_db_quarantine_banner() -> None:
         return
     path = blocked.get("path", "")
     reason = blocked.get("reason", "")
-    if reason == "shrink-blocked":
+    if reason == "concurrency-conflict":
+        recovery = blocked.get("recovery", "")
+        if recovery:
+            recovery_note = (
+                f" Your pending version was saved and verified at "
+                f"**`{recovery}`**.")
+        else:
+            recovery_note = (
+                " CAM could not create and verify a recovery file. **Do not "
+                "close this CAM session**; your pending work currently exists "
+                "only in memory.")
+        detail = (
+            f"Another CAM tab or device saved a different version of "
+            f"**`{path}`** after this session loaded it. CAM left the shared "
+            "database unchanged and did not merge the two versions."
+            + recovery_note + " Close other CAM sessions, allow cloud "
+            "synchronization to finish, then restart CAM to load the shared "
+            "version. Review the shared and recovery versions before choosing "
+            "any recovery action.")
+    elif reason == "shrink-blocked":
         parked = blocked.get("parked", "")
         parked_note = (f" Your unsaved session was set aside at **`{parked}`** "
                        "for inspection." if parked else "")
@@ -9449,13 +9527,41 @@ def _render_db_quarantine_banner() -> None:
         detail = (f"Your database file **`{path}`** exists but could not be "
                   "read — it may be malformed, temporarily locked, or a cloud "
                   "file that has not finished downloading.")
+    if reason == "concurrency-conflict":
+        footer = (
+            "**Nothing else will be saved by this session.** Its rejected save "
+            "did not overwrite the shared database. Follow the recovery steps "
+            "above, then restart CAM.")
+    else:
+        footer = (
+            "**Nothing will be saved** while this banner is showing, so your "
+            "real data on disk has **not** been changed. Fix the file or the "
+            "path, then restart CAM. (Do not use Settings to point somewhere "
+            "else and save — that would write this demo session out.)")
     st.error(
         f"🛑 **Database not loaded — CAM is in read-only quarantine.**\n\n"
-        f"{detail}\n\n"
-        "**Nothing will be saved** while this banner is showing, so your real "
-        "data on disk has **not** been changed. Fix the file or the path, then "
-        "restart CAM. (Do not use Settings to point somewhere else and save — "
-        "that would write this demo session out.)")
+        f"{detail}\n\n{footer}")
+    if reason == "concurrency-conflict" and not blocked.get("recovery"):
+        if st.button("Retry saving the conflict recovery file",
+                     key="retry_conflict_recovery"):
+            expected = st.session_state.get("db_write_token")
+            try:
+                if not isinstance(expected, DatabaseWriteToken):
+                    raise RuntimeError("The session revision token is missing.")
+                observed = capture_database_snapshot(path)
+                recovery = write_conflict_recovery(
+                    path, gb(), build_session_payload(), expected, observed)
+            except Exception as exc:
+                blocked["recovery_error"] = str(exc)
+                st.session_state["save_status"] = (
+                    "error", "Recovery retry failed. Do not close CAM; "
+                    "your pending work is still only in memory.")
+            else:
+                blocked["recovery"] = recovery.path
+                blocked["recovery_error"] = ""
+                st.session_state["save_status"] = (
+                    "ok", f"Pending work preserved at {recovery.path}.")
+                st.rerun()
 
 
 def _render_top_bar() -> None:

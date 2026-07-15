@@ -10,8 +10,10 @@ and every mutation is mirrored straight back to it.
 The persisted payload has two halves:
 
     {
-      "version": 1,
+      "version": 2,
       "saved_at": "<iso timestamp>",
+      "database_id": "<stable UUID>",
+      "generation": 1,
       "gradebook": { students[], assignments[] },   # the durable evidence
       "session":   { teacher-side overrides & UI state }
     }
@@ -28,8 +30,11 @@ import hashlib
 import json
 import os
 import tempfile
+import time
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from .models import (
@@ -43,7 +48,7 @@ from .models import (
 )
 
 # The schema version lets future loaders migrate older files gracefully.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Default filename, resolved next to the project root by the caller.
 DEFAULT_DB_FILENAME = "acm_database.json"
@@ -57,9 +62,9 @@ class DatabaseSnapshot:
     callers can therefore continue diagnosing and hydrating the captured
     generation even if a cloud client replaces the live file afterward.
 
-    Identity and generation are optional read-only observations in Phase 1.
-    Version-1 databases do not carry them, and this module does not create,
-    validate, compare, or persist them yet.
+    Identity and generation are absent only for legacy version-1 databases.
+    Checked writes upgrade those databases after an exact-hash comparison and
+    a verified pre-upgrade backup.
     """
 
     path: str
@@ -73,6 +78,58 @@ class DatabaseSnapshot:
     generation: Any
     mass: Optional[Tuple[int, int]]
     validation_errors: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DatabaseWriteToken:
+    """Small, raw-data-free token retained by one application session."""
+
+    path: str
+    state: str
+    schema_version: Any
+    database_id: Any
+    generation: Any
+    content_hash: Optional[str]
+
+
+@dataclass(frozen=True)
+class DatabaseSaveResult:
+    """Result of a verified shared-database write."""
+
+    path: str
+    token: DatabaseWriteToken
+    pre_upgrade_backup: str = ""
+
+
+@dataclass(frozen=True)
+class ConflictRecoveryResult:
+    """A read-back-verified file containing one session's pending state."""
+
+    path: str
+    token: DatabaseWriteToken
+
+
+class DatabaseConcurrencyError(RuntimeError):
+    """The shared database no longer matches the session's expected token."""
+
+    def __init__(self, expected: DatabaseWriteToken,
+                 observed: DatabaseSnapshot, reason: str):
+        super().__init__(reason)
+        self.expected = expected
+        self.observed = observed
+        self.reason = reason
+
+
+class DatabaseLockTimeout(RuntimeError):
+    """Another local CAM process held the database write lock too long."""
+
+
+class DatabaseShrinkError(RuntimeError):
+    """The existing structural shrink tripwire refused a checked save."""
+
+
+class DatabaseWriteVerificationError(RuntimeError):
+    """A file write could not be read back as the exact intended payload."""
 
 
 # --------------------------------------------------------------------------
@@ -323,15 +380,42 @@ def deserialize_gradebook(data: Dict[str, Any]) -> Gradebook:
 # Whole-database file I/O
 # --------------------------------------------------------------------------
 
-def build_payload(gradebook: Gradebook, session: Optional[Dict[str, Any]] = None
+def build_payload(gradebook: Gradebook, session: Optional[Dict[str, Any]] = None,
+                  *, database_id: Optional[str] = None,
+                  generation: Optional[int] = None,
+                  recovery: Optional[Dict[str, Any]] = None
                   ) -> Dict[str, Any]:
     """Assemble the full on-disk payload (gradebook + opaque session dict)."""
-    return {
+    payload = {
         "version": SCHEMA_VERSION,
         "saved_at": datetime.now().isoformat(),
+        "database_id": database_id or str(uuid.uuid4()),
+        "generation": generation if generation is not None else 1,
         "gradebook": serialize_gradebook(gradebook),
         "session": session or {},
     }
+    if recovery is not None:
+        payload["recovery"] = recovery
+    return payload
+
+
+def _payload_bytes(payload: Dict[str, Any]) -> bytes:
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _atomic_write_bytes(path: str, raw: bytes) -> None:
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(raw)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def save_database(path: str, gradebook: Gradebook,
@@ -342,17 +426,7 @@ def save_database(path: str, gradebook: Gradebook,
     over the target, so a crash mid-write can never corrupt an existing save.
     Returns the path written.
     """
-    payload = build_payload(gradebook, session)
-    directory = os.path.dirname(os.path.abspath(path)) or "."
-    os.makedirs(directory, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(suffix=".tmp", dir=directory)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+    _atomic_write_bytes(path, _payload_bytes(build_payload(gradebook, session)))
     return path
 
 
@@ -450,6 +524,276 @@ def capture_database_snapshot(path: str) -> DatabaseSnapshot:
         validation_errors=(),
         **common,
     )
+
+
+def database_write_token(snapshot: DatabaseSnapshot) -> DatabaseWriteToken:
+    """Drop raw bytes and diagnostics from a snapshot for session retention."""
+    return DatabaseWriteToken(
+        path=os.path.abspath(snapshot.path),
+        state=snapshot.state,
+        schema_version=snapshot.schema_version,
+        database_id=snapshot.database_id,
+        generation=snapshot.generation,
+        content_hash=snapshot.content_hash,
+    )
+
+
+def _valid_v2_snapshot(snapshot: DatabaseSnapshot) -> bool:
+    if snapshot.state != "ok" or snapshot.schema_version != SCHEMA_VERSION:
+        return False
+    try:
+        uuid.UUID(str(snapshot.database_id))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return (isinstance(snapshot.generation, int)
+            and not isinstance(snapshot.generation, bool)
+            and snapshot.generation >= 1
+            and bool(snapshot.content_hash))
+
+
+def _tokens_match(expected: DatabaseWriteToken,
+                  observed: DatabaseSnapshot) -> Tuple[bool, str]:
+    if os.path.abspath(observed.path) != os.path.abspath(expected.path):
+        return False, "database-path-changed"
+    if expected.state == "absent":
+        return (observed.state == "absent",
+                "database-created-by-another-session")
+    if expected.state != "ok" or observed.state != "ok":
+        return False, "database-missing-or-unreadable"
+    if expected.schema_version == 1:
+        ok = (expected.database_id is None and expected.generation is None
+              and observed.schema_version == 1
+              and observed.database_id is None and observed.generation is None
+              and observed.content_hash == expected.content_hash)
+        return ok, "legacy-database-changed"
+    if expected.schema_version != SCHEMA_VERSION or not _valid_v2_snapshot(observed):
+        return False, "invalid-concurrency-metadata"
+    if observed.database_id != expected.database_id:
+        return False, "database-identity-changed"
+    if observed.generation != expected.generation:
+        return False, "database-generation-changed"
+    if observed.content_hash != expected.content_hash:
+        return False, "database-content-changed-without-generation"
+    return True, ""
+
+
+def _lock_file(file_obj, blocking: bool) -> None:
+    if os.name == "nt":
+        import msvcrt
+        file_obj.seek(0)
+        mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
+        msvcrt.locking(file_obj.fileno(), mode, 1)
+    else:
+        import fcntl
+        mode = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+        fcntl.flock(file_obj.fileno(), mode)
+
+
+def _unlock_file(file_obj) -> None:
+    if os.name == "nt":
+        import msvcrt
+        file_obj.seek(0)
+        msvcrt.locking(file_obj.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(file_obj.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def database_write_lock(path: str, timeout: float = 5.0):
+    """Serialize local writers without treating the cloud-visible lock as CAS."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    if not os.path.isdir(directory):
+        raise OSError(f"Database folder is unavailable: {directory}")
+    lock_path = path + ".cam-write.lock"
+    with open(lock_path, "a+b") as lock_file:
+        if os.path.getsize(lock_path) == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                _lock_file(lock_file, blocking=False)
+                break
+            except (OSError, BlockingIOError):
+                if time.monotonic() >= deadline:
+                    raise DatabaseLockTimeout(
+                        "Another local CAM save is still in progress; retry.")
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            _unlock_file(lock_file)
+
+
+def _write_sidecar_exclusive(path: str, raw: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(raw)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except Exception:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
+
+
+def _verified_snapshot_copy(path: str, snapshot: DatabaseSnapshot) -> str:
+    if snapshot.raw_bytes is None or snapshot.content_hash is None:
+        raise DatabaseWriteVerificationError("No database bytes to back up.")
+    _write_sidecar_exclusive(path, snapshot.raw_bytes)
+    copied = capture_database_snapshot(path)
+    if (copied.state != "ok"
+            or copied.content_hash != snapshot.content_hash
+            or copied.raw_bytes != snapshot.raw_bytes):
+        raise DatabaseWriteVerificationError("Database backup verification failed.")
+    return path
+
+
+def _backup_name(path: str, purpose: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{path}.bak-{purpose}-{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def _rotate_daily_backup_from_snapshot(path: str,
+                                       snapshot: DatabaseSnapshot) -> None:
+    if snapshot.state != "ok" or snapshot.raw_bytes is None:
+        return
+    backup = f"{path}.bak-auto-{datetime.now().strftime('%Y%m%d')}"
+    if os.path.exists(backup):
+        return
+    try:
+        _verified_snapshot_copy(backup, snapshot)
+    except (OSError, DatabaseWriteVerificationError):
+        pass
+
+
+def _outgoing_mass(gradebook: Gradebook, session: Dict[str, Any]) -> int:
+    assignments = len(gradebook.assignments)
+    scored = sum(1 for student in gradebook.students.values()
+                 if any(student.scores.get(c) for c in student.scores))
+    rosters = session.get("rosters", {}) if isinstance(session, dict) else {}
+    roster_count = sum(len(rows) for rows in rosters.values()
+                       if isinstance(rows, list)) if isinstance(rosters, dict) else 0
+    return assignments + scored + roster_count
+
+
+def save_database_checked(path: str, gradebook: Gradebook,
+                          session: Optional[Dict[str, Any]],
+                          expected: DatabaseWriteToken, *,
+                          allow_shrink: bool = False,
+                          shrink_min_assignments: int = 10,
+                          shrink_keep_ratio: float = 0.33,
+                          lock_timeout: float = 5.0) -> DatabaseSaveResult:
+    """Compare, protect, atomically replace, and verify one shared database."""
+    session = session or {}
+    with database_write_lock(path, lock_timeout):
+        observed = capture_database_snapshot(path)
+        matches, reason = _tokens_match(expected, observed)
+        if not matches:
+            raise DatabaseConcurrencyError(expected, observed, reason)
+
+        if (not allow_shrink and observed.mass is not None
+                and observed.mass[0] >= shrink_min_assignments
+                and observed.mass[1] > 0
+                and _outgoing_mass(gradebook, session)
+                    < shrink_keep_ratio * observed.mass[1]):
+            raise DatabaseShrinkError(
+                "Save blocked because it would erase most database records.")
+
+        pre_upgrade = ""
+        if observed.state == "ok" and observed.schema_version == 1:
+            pre_upgrade = _verified_snapshot_copy(
+                _backup_name(path, "pre-concurrency-upgrade"), observed)
+
+        _rotate_daily_backup_from_snapshot(path, observed)
+        if observed.state == "ok" and observed.schema_version == SCHEMA_VERSION:
+            database_id = str(observed.database_id)
+            generation = int(observed.generation) + 1
+        else:
+            database_id = str(uuid.uuid4())
+            generation = 1
+        payload = build_payload(
+            gradebook, session, database_id=database_id, generation=generation)
+        raw = _payload_bytes(payload)
+        intended_hash = hashlib.sha256(raw).hexdigest()
+        _atomic_write_bytes(path, raw)
+        written = capture_database_snapshot(path)
+        if (not _valid_v2_snapshot(written)
+                or written.database_id != database_id
+                or written.generation != generation
+                or written.content_hash != intended_hash):
+            raise DatabaseWriteVerificationError(
+                "The database write could not be verified after saving.")
+        return DatabaseSaveResult(
+            path=path, token=database_write_token(written),
+            pre_upgrade_backup=pre_upgrade)
+
+
+def replace_database_checked(path: str, gradebook: Gradebook,
+                             session: Optional[Dict[str, Any]], *,
+                             lock_timeout: float = 5.0) -> DatabaseSaveResult:
+    """Explicitly replace a reviewed target after a mandatory verified backup."""
+    with database_write_lock(path, lock_timeout):
+        observed = capture_database_snapshot(path)
+        if observed.state not in ("ok", "absent"):
+            raise DatabaseWriteVerificationError(
+                "The database selected for replacement is not readable.")
+        backup = ""
+        if observed.state == "ok":
+            backup = _verified_snapshot_copy(
+                _backup_name(path, "replaced"), observed)
+        database_id = str(uuid.uuid4())
+        payload = build_payload(gradebook, session, database_id=database_id,
+                                generation=1)
+        raw = _payload_bytes(payload)
+        intended_hash = hashlib.sha256(raw).hexdigest()
+        _atomic_write_bytes(path, raw)
+        written = capture_database_snapshot(path)
+        if (not _valid_v2_snapshot(written)
+                or written.database_id != database_id
+                or written.generation != 1
+                or written.content_hash != intended_hash):
+            raise DatabaseWriteVerificationError(
+                "The replacement database could not be verified.")
+        return DatabaseSaveResult(path, database_write_token(written), backup)
+
+
+def write_conflict_recovery(path: str, gradebook: Gradebook,
+                            session: Optional[Dict[str, Any]],
+                            expected: DatabaseWriteToken,
+                            observed: DatabaseSnapshot) -> ConflictRecoveryResult:
+    """Preserve pending state in a unique, self-contained, verified database."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    recovery_path = (f"{path}.conflict-recovery-{stamp}-"
+                     f"{uuid.uuid4().hex[:8]}.json")
+    recovery = {
+        "kind": "concurrency-conflict",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_database_id": expected.database_id,
+        "expected_generation": expected.generation,
+        "expected_content_hash": expected.content_hash,
+        "observed_database_id": observed.database_id,
+        "observed_generation": observed.generation,
+        "observed_content_hash": observed.content_hash,
+        "observed_state": observed.state,
+    }
+    payload = build_payload(gradebook, session, database_id=str(uuid.uuid4()),
+                            generation=1, recovery=recovery)
+    raw = _payload_bytes(payload)
+    _write_sidecar_exclusive(recovery_path, raw)
+    captured = capture_database_snapshot(recovery_path)
+    loaded = load_database_snapshot(captured)
+    if (not _valid_v2_snapshot(captured)
+            or captured.content_hash != hashlib.sha256(raw).hexdigest()
+            or loaded is None):
+        raise DatabaseWriteVerificationError(
+            "The conflict recovery file could not be verified.")
+    return ConflictRecoveryResult(recovery_path,
+                                  database_write_token(captured))
 
 
 def load_database_snapshot(snapshot: DatabaseSnapshot
