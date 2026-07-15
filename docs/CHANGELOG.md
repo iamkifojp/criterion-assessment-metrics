@@ -6,6 +6,27 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-07-15 — Database concurrency safety Phase 5: strict validation
+
+**What this changes** — readable JSON could contain one malformed score, exam
+result, assignment, or session record; the old loader silently skipped or
+coerced it and a later autosave could replace the file with a reduced database.
+
+- **All-or-nothing hydration.** Schemas 1 and 2, concurrency metadata, the full
+  gradebook graph, and loss-critical teacher state are validated before object
+  construction. Unsupported or malformed databases enter read-only quarantine.
+- **Safe structural diagnostics.** Errors expose bounded path/code pairs only,
+  never student IDs, names, assignment names, comments, or rejected values.
+- **Write-path enforcement.** Checked writes validate observed and outgoing
+  payloads inside the existing safety transaction. Invalid shared bytes remain
+  unchanged; valid pending state is preserved in a verified recovery database.
+- **Compatibility.** Optional legacy fields and unknown additive fields remain
+  accepted, v1 keeps its verified upgrade path, and the on-disk schema stays v2.
+- **Regression coverage.** New engine/app validation modules cover future
+  versions, malformed nested records, duplicate lossy identities, immutable
+  snapshot decisions, privacy-safe UI, blocked writes, and recovery. All 267
+  isolated tests pass without launching CAM or using saved preferences.
+
 ## 2026-07-15 — Database concurrency safety Phase 3: missing and conflicted cloud files
 
 **What this changes** — an established OneDrive/Drive folder could temporarily

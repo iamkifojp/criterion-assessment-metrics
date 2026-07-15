@@ -2,13 +2,14 @@
 
 ## Status
 
-Phases 1-4 are implemented. CAM now retains the exact database generation
+Phases 1-5 are implemented. CAM now retains the exact database generation
 loaded by each session, rejects a save when the shared file has changed, binds
 each device/database path to the established database identity, and quarantines
 missing, identity-mismatched, or cloud-conflicted database files. It also skips
 unchanged shared-database writes and requires a verified session safety snapshot
-before the first changing save to each database identity. Phase 5 remains
-proposed work; strict per-record validation is not yet implemented.
+before the first changing save to each database identity. Supported schema
+versions and loss-critical records are validated before hydration and writing;
+future or malformed databases are never partially loaded.
 
 ## Purpose
 
@@ -384,17 +385,43 @@ modules. The complete 254-test suite passes in isolated test environments.
 
 ### Phase 5: validation, documentation, and final review
 
-Implement strict version and record validation, then update:
+Implemented. `validate_database_payload()` now validates versions 1 and 2,
+schema-v2 UUID/generation metadata, the complete gradebook graph, and
+loss-critical teacher state before hydration or writing. Known fields require
+canonical non-lossy types; documented optional legacy fields may be absent and
+unknown additive fields remain tolerated. Duplicate student IDs and duplicate
+per-student exam-result identities are rejected because hydration would
+otherwise overwrite one record.
 
-- `docs/ARCHITECTURE.md`;
-- `docs/DATA_DICTIONARY.md`;
-- this plan if the reviewed implementation differs; and
-- relevant user or recovery documentation.
+`DatabaseSnapshot` now distinguishes readable-but-`invalid` content from absent,
+unreadable, and valid content. Validation issues contain only stable codes and
+structural paths such as `gradebook.students[3].scores[2].value`; they never
+contain student IDs, names, assignment names, comments, or rejected values.
+Malformed or future-version files enter dedicated read-only quarantine states,
+skip hydration and mirror healing, and cannot be adopted as empty destinations.
 
-Review the complete change specifically for stale writes, time-of-check versus
-time-of-use errors, accidental first-run initialization, partial database
-acceptance, failed backup paths, Windows/OneDrive filename behavior, and student
-data exposure.
+Checked saves repeat validation on the captured on-disk generation inside the
+write lock. An invalid observed generation remains byte-identical while valid
+pending session state is preserved through the verified recovery-file path.
+Outgoing primary, replacement, blocked-payload, and conflict-recovery databases
+are validated before writing, and every safety copy continues to require strict
+read-back hydration. Legacy v1 still follows the exact-hash and verified
+pre-upgrade-backup path; no schema bump or automatic migration was added.
+
+Completion criteria:
+
+- malformed neighboring records prevent all hydration rather than being skipped;
+- unsupported versions and malformed records enter explicit quarantine;
+- boot validation and hydration remain bound to the same captured bytes;
+- invalid observed or outgoing state cannot change the shared database;
+- recovery and diagnostic messages do not expose student data; and
+- all Phase 1-4 protections and isolated tests remain active.
+
+All criteria are covered by `tests/test_database_validation.py` and
+`tests/test_app_database_validation.py`, with regression coverage across the
+existing snapshot, concurrency, cloud-safety, dirty-persistence, mirror,
+healing, and restore modules. The complete 267-test suite passes in isolated
+temporary environments without launching CAM or loading saved preferences.
 
 ## Test plan
 

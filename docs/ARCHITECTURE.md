@@ -241,6 +241,28 @@ a legitimate first run (start empty, create on first save). Once the path is
 still exists. This is wipe-mechanism 2 in
 [CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
 
+**⚠ Invariant: database hydration is all-or-nothing.** The same immutable bytes
+captured at boot are decoded and passed through
+`validate_database_payload()` before `load_database_snapshot()` constructs any
+engine object. The validator recognizes only schemas 1 and 2; a future version,
+invalid v2 UUID/generation, malformed student, score, exam result, assignment,
+roster, comment, override, unit plan, identity-routing record, or other
+loss-critical teacher state marks the snapshot `invalid`. The loader returns no
+partial `Gradebook`, mirror healing does not start, and the app enters either
+`unsupported-schema` or `database-validation-failed` quarantine. Known fields
+require canonical types, documented optional legacy fields may be absent, and
+unknown additive fields are tolerated. Diagnostics are capped structural
+path/code pairs and never include record values or identifying map keys.
+
+Checked writes validate the captured live generation while holding the existing
+local write lock, before shrink checks, backups, or replacement. They also
+validate the complete outgoing payload before creating a session/upgrade/
+replacement backup. If another process or sync client replaces the live file
+with invalid or future-schema bytes, the primary remains unchanged and valid
+pending state follows the same verified conflict-recovery flow. Read-back
+verification of primaries, recovery databases, and safety copies uses this same
+strict loader.
+
 **⚠ Invariant: an established device/path binding cannot silently become a
 different or empty database.** Device-local `database_expectations` in
 `local_device_prefs.json` is keyed by normalized absolute database path. Each

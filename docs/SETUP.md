@@ -268,6 +268,10 @@ folder that OneDrive/Drive already syncs to disk.
   assignment/student/class counts. Only if this is intentionally the database
   the device should use, type `USE THIS DATABASE`; this changes the local binding
   without modifying the database file.
+- **CAM reports an unsupported version or validation failure** — CAM has not
+  loaded a reduced gradebook and will not overwrite the file. Restore a known-
+  good CAM backup or cloud version. If the file came from a newer CAM release,
+  open it with that release rather than forcing adoption in an older one.
 - **Grading workspace won't start** — make sure `pip install -r requirements.txt`
   completed; it pulls in the workspace's own dependencies (e.g. PyMuPDF).
 - **Reset the demo** — `py tools/generate_sample_data.py` rewrites the sample

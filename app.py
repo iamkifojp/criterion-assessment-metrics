@@ -75,6 +75,7 @@ from engine import (
     student_id_from_email,
     DEFAULT_DB_FILENAME,
     DatabaseSnapshot,
+    DatabaseValidationError,
     DatabaseWriteToken,
     DatabaseConcurrencyError,
     DatabaseCloudConflictError,
@@ -510,6 +511,14 @@ def diagnose_db_load(source: str | DatabaseSnapshot) -> Optional[dict]:
     state = snapshot.state
     if state == "unreadable":
         return {"reason": "unreadable", "path": path}
+    if state == "invalid":
+        issues = [{"path": issue.path, "code": issue.code}
+                  for issue in snapshot.validation_issues]
+        reason = ("unsupported-schema" if any(
+            issue.code == "unsupported-schema-version"
+            for issue in snapshot.validation_issues)
+                  else "database-validation-failed")
+        return {"reason": reason, "path": path, "issues": issues}
     if state == "ok":
         loaded = load_database_snapshot(snapshot)
         if loaded and not (loaded["gradebook"].students
@@ -1237,24 +1246,46 @@ def persist(show: bool = False, allow_shrink: bool = False) -> None:
     except DatabaseConcurrencyError as exc:
         recovery_path = ""
         recovery_error = ""
+        invalid_observed = exc.observed.state == "invalid"
+        quarantine_reason = "concurrency-conflict"
+        if invalid_observed:
+            quarantine_reason = ("unsupported-schema" if any(
+                issue.code == "unsupported-schema-version"
+                for issue in exc.observed.validation_issues)
+                                 else "database-validation-failed")
         try:
             recovery = write_conflict_recovery(
-                path, gb(), payload, exc.expected, exc.observed)
+                path, gb(), payload, exc.expected, exc.observed,
+                reason=quarantine_reason)
             recovery_path = recovery.path
         except Exception as recovery_exc:
             recovery_error = str(recovery_exc)
         st.session_state["db_load_blocked"] = {
-            "reason": "concurrency-conflict", "path": path,
-            "recovery": recovery_path, "recovery_error": recovery_error}
+            "reason": quarantine_reason, "path": path,
+            "recovery": recovery_path, "recovery_error": recovery_error,
+            "issues": [{"path": issue.path, "code": issue.code}
+                       for issue in exc.observed.validation_issues]}
         if recovery_path:
-            note = ("Save blocked because another CAM session saved a different "
-                    f"database version. Your pending work is preserved at "
-                    f"{recovery_path}.")
+            if invalid_observed:
+                note = ("Save blocked because the shared database failed "
+                        "validation. Your pending work is preserved at "
+                        f"{recovery_path}.")
+            else:
+                note = ("Save blocked because another CAM session saved a "
+                        "different database version. Your pending work is "
+                        f"preserved at {recovery_path}.")
         else:
             note = ("Save blocked because another CAM session saved a different "
                     "database version. CAM could not verify a recovery file; "
                     "do not close this session.")
         st.session_state["save_status"] = ("error", note)
+        return
+    except DatabaseValidationError as exc:
+        paths = ", ".join(issue.path for issue in exc.issues[:3])
+        suffix = f" ({paths})" if paths else ""
+        st.session_state["save_status"] = (
+            "error", "Save blocked because the pending database payload "
+            f"failed structural validation{suffix}. No shared file was changed.")
         return
     except DatabaseShrinkError:
         parked = _park_blocked_payload(path, gb(), payload)
@@ -6575,13 +6606,13 @@ def settings_dialog() -> None:
             }
             _render_db_switch_panel(st.session_state["db_switch_pending"])
             return
-        if path_changed and new_state == "unreadable":
+        if path_changed and new_state in ("unreadable", "invalid"):
             prefs["db_custom_path"] = old_custom
             save_prefs(prefs)
             st.session_state["save_status"] = (
                 "error", "Database path not changed: a file exists at the new "
-                "location but CAM cannot read it. Wait for synchronization or "
-                "choose another location.")
+                "location but CAM cannot safely load it. Wait for synchronization, "
+                "restore a valid backup, or choose another location.")
             return
         # Unchanged path (layout-only Save) or a new location with no database
         # there: commit the path pref and persist as today (saves / creates).
@@ -9580,9 +9611,10 @@ def _adopt_db_path(new_custom: str, note: str) -> None:
     path)."""
     path = resolve_db_path(new_custom)
     snapshot = capture_database_snapshot(path)
-    if snapshot.state == "unreadable":
+    if snapshot.state in ("unreadable", "invalid"):
         st.error("CAM found a database file at that location but could not "
-                 "read it. Wait for synchronization or choose another path.")
+                 "safely load it. Wait for synchronization, restore a valid "
+                 "backup, or choose another path.")
         return
     siblings = find_database_conflict_siblings(path)
     prefs = st.session_state["prefs"]
@@ -9787,6 +9819,39 @@ def _render_db_quarantine_banner() -> None:
             f"Found database: {counts.get('assignments', 0)} assignment(s), "
             f"{counts.get('students', 0)} student(s), "
             f"{counts.get('classes', 0)} class(es).")
+    elif reason in ("unsupported-schema", "database-validation-failed"):
+        issues = blocked.get("issues", [])
+        visible = issues[:10]
+        issue_lines = "\n".join(
+            f"- `{item.get('path', '$')}` — `{item.get('code', 'invalid')}`"
+            for item in visible)
+        if len(issues) > len(visible):
+            issue_lines += f"\n- …and {len(issues) - len(visible)} more issue(s)"
+        recovery = blocked.get("recovery", "")
+        if recovery:
+            recovery_note = (
+                f" Pending work from this session was saved and verified at "
+                f"**`{recovery}`**.")
+        elif blocked.get("recovery_error"):
+            recovery_note = (
+                " CAM could not create and verify a recovery file. **Do not "
+                "close this CAM session.**")
+        else:
+            recovery_note = ""
+        if reason == "unsupported-schema":
+            lead = (
+                "This database declares a schema version this CAM release "
+                "does not support. It may have been written by a newer release.")
+        else:
+            lead = (
+                "This database is readable JSON, but one or more records do "
+                "not match CAM's safe database structure.")
+        detail = (
+            f"{lead} CAM did not load a partial gradebook and did not modify "
+            f"**`{path}`**.{recovery_note}\n\n"
+            f"Safe structural diagnostics:\n{issue_lines or '- Validation failed.'}"
+            "\n\nRestore a known-good CAM backup or cloud version, or open "
+            "the database with the CAM release that created it, then restart CAM.")
     elif reason == "shrink-blocked":
         parked = blocked.get("parked", "")
         parked_note = (f" Your unsaved session was set aside at **`{parked}`** "
@@ -9808,7 +9873,9 @@ def _render_db_quarantine_banner() -> None:
         detail = (f"Your database file **`{path}`** exists but could not be "
                   "read — it may be malformed, temporarily locked, or a cloud "
                   "file that has not finished downloading.")
-    if reason in ("concurrency-conflict", "cloud-conflict-sibling"):
+    if (reason in ("concurrency-conflict", "cloud-conflict-sibling")
+            or (reason in ("unsupported-schema", "database-validation-failed")
+                and (blocked.get("recovery") or blocked.get("recovery_error")))):
         footer = (
             "**Nothing else will be saved by this session.** Its rejected save "
             "did not overwrite the shared database. Follow the recovery steps "
@@ -9827,7 +9894,8 @@ def _render_db_quarantine_banner() -> None:
     st.error(
         f"🛑 **Database not loaded — CAM is in read-only quarantine.**\n\n"
         f"{detail}\n\n{footer}")
-    if reason in ("concurrency-conflict", "cloud-conflict-sibling") \
+    if reason in ("concurrency-conflict", "cloud-conflict-sibling",
+                  "unsupported-schema", "database-validation-failed") \
             and blocked.get("recovery_error") and not blocked.get("recovery"):
         if st.button("Retry saving the conflict recovery file",
                      key="retry_conflict_recovery"):
