@@ -77,12 +77,14 @@ from engine import (
     DatabaseSnapshot,
     DatabaseWriteToken,
     DatabaseConcurrencyError,
+    DatabaseCloudConflictError,
     DatabaseShrinkError,
     save_database,
     save_database_checked,
     replace_database_checked,
     write_conflict_recovery,
     database_write_token,
+    find_database_conflict_siblings,
     load_database,
     capture_database_snapshot,
     load_database_snapshot,
@@ -217,6 +219,9 @@ PREFS_FILENAME = "local_device_prefs.json"
 PREFS_PATH = os.path.join(BASE_DIR, PREFS_FILENAME)
 DEFAULT_PREFS = {
     "db_custom_path": "",   # blank -> acm_database.json beside app.py
+    # Phase-3 device-local bindings. Keys are normalized absolute DB paths;
+    # values are {state: pending-create|established, database_id: str}.
+    "database_expectations": {},
     # Folder the explicit end-of-term backups are written to. Per-device (like
     # every path pref) — the teacher may point it at a USB stick or a non-cloud
     # folder for an off-site copy. Blank until they choose one in ⚙ Settings.
@@ -254,6 +259,55 @@ def save_prefs(prefs: dict) -> None:
             json.dump(prefs, fh, ensure_ascii=False, indent=2)
     except OSError:
         pass
+
+
+def _expectation_key(path: str) -> str:
+    """Stable device-local key for one concrete database location."""
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _database_expectation(path: str) -> dict:
+    prefs = st.session_state.get("prefs", DEFAULT_PREFS)
+    entries = prefs.get("database_expectations", {})
+    if not isinstance(entries, dict):
+        return {}
+    entry = entries.get(_expectation_key(path), {})
+    return entry if isinstance(entry, dict) else {}
+
+
+def _set_database_expectation(path: str, state: str,
+                              database_id: object = "") -> None:
+    """Persist a path-keyed pending/established database expectation."""
+    if state not in ("pending-create", "established"):
+        raise ValueError("Invalid database expectation state.")
+    prefs = st.session_state["prefs"]
+    current = prefs.get("database_expectations", {})
+    entries = dict(current) if isinstance(current, dict) else {}
+    entries[_expectation_key(path)] = {
+        "state": state,
+        "database_id": str(database_id or ""),
+    }
+    prefs["database_expectations"] = entries
+    save_prefs(prefs)
+
+
+def _snapshot_counts(snapshot: DatabaseSnapshot) -> dict:
+    """Non-identifying structural counts derived only from captured bytes."""
+    try:
+        payload = json.loads((snapshot.raw_bytes or b"").decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return {"assignments": 0, "students": 0, "classes": 0}
+    gradebook = payload.get("gradebook", {}) if isinstance(payload, dict) else {}
+    session = payload.get("session", {}) if isinstance(payload, dict) else {}
+    students = gradebook.get("students", []) if isinstance(gradebook, dict) else []
+    assignments = (gradebook.get("assignments", [])
+                   if isinstance(gradebook, dict) else [])
+    classes = session.get("classes", []) if isinstance(session, dict) else []
+    return {
+        "assignments": len(assignments) if isinstance(assignments, list) else 0,
+        "students": len(students) if isinstance(students, list) else 0,
+        "classes": len(classes) if isinstance(classes, list) else 0,
+    }
 
 
 def resolve_db_path(custom: str) -> str:
@@ -470,6 +524,57 @@ def diagnose_db_load(source: str | DatabaseSnapshot) -> Optional[dict]:
     if os.path.isdir(parent):
         return None
     return {"reason": "storage-missing", "path": path}
+
+
+def diagnose_expected_database(
+        snapshot: DatabaseSnapshot,
+        siblings: Optional[tuple] = None) -> Optional[dict]:
+    """Apply Phase-3 device binding and cloud-sibling boot guards."""
+    path = snapshot.path
+    siblings = (find_database_conflict_siblings(path)
+                if siblings is None else tuple(siblings))
+    if siblings:
+        return {"reason": "cloud-conflict-sibling", "path": path,
+                "siblings": list(siblings), "recovery": ""}
+
+    expected = _database_expectation(path)
+    expected_state = expected.get("state", "")
+    expected_id = str(expected.get("database_id", "") or "")
+
+    if snapshot.state == "absent":
+        if expected_state == "pending-create":
+            return None
+        if expected_state == "established":
+            return {"reason": "expected-database-missing", "path": path}
+        # Backward-compatible migration is deliberately fail-safe: a device
+        # that already completed setup had chosen this data home, so absence is
+        # not silently reinterpreted as a new gradebook. An explicit env path
+        # or pre-setup choice remains an authorized new target.
+        if (st.session_state.get("prefs", {}).get("setup_done")
+                and not os.environ.get("CAM_DB_PATH", "").strip()):
+            _set_database_expectation(path, "established", "")
+            return {"reason": "expected-database-missing", "path": path}
+        _set_database_expectation(path, "pending-create", "")
+        return None
+
+    if snapshot.state != "ok":
+        return None  # The existing unreadable/storage diagnosis owns this.
+
+    found_id = str(snapshot.database_id or "")
+    if (expected_state == "established" and expected_id
+            and found_id != expected_id):
+        return {
+            "reason": "database-identity-mismatch", "path": path,
+            "expected_database_id": expected_id,
+            "found_database_id": found_id,
+            "counts": _snapshot_counts(snapshot),
+        }
+
+    # A readable database at an explicitly selected pending location is an
+    # adoption, while a legacy v1 database is established with an empty UUID
+    # until its first checked save upgrades it.
+    _set_database_expectation(path, "established", found_id)
+    return None
 
 
 def _safe_dirname(name: str) -> str:
@@ -797,7 +902,9 @@ def init_state() -> None:
         # autosave — on top of a real database we merely failed to read. If the
         # configured path is unreadable, empty-but-heavy, or on missing storage,
         # quarantine instead of proceeding; persist() then refuses to write.
-        blocked = diagnose_db_load(snapshot)
+        siblings = find_database_conflict_siblings(path)
+        blocked = (diagnose_expected_database(snapshot, siblings)
+                   or diagnose_db_load(snapshot))
         if blocked:
             st.session_state["db_load_blocked"] = blocked
         else:
@@ -1036,8 +1143,33 @@ def persist(show: bool = False, allow_shrink: bool = False) -> None:
             shrink_min_assignments=SHRINK_MIN_ASSIGNMENTS,
             shrink_keep_ratio=SHRINK_KEEP_RATIO)
         st.session_state["db_write_token"] = result.token
+        _set_database_expectation(
+            path, "established", result.token.database_id)
         if show:
             st.session_state["save_status"] = ("ok", f"Saved to {path}.")
+    except DatabaseCloudConflictError as exc:
+        recovery_path = ""
+        recovery_error = ""
+        try:
+            recovery = write_conflict_recovery(
+                path, gb(), payload, expected, exc.observed,
+                reason="cloud-conflict-sibling")
+            recovery_path = recovery.path
+        except Exception as recovery_exc:
+            recovery_error = str(recovery_exc)
+        st.session_state["db_load_blocked"] = {
+            "reason": "cloud-conflict-sibling", "path": path,
+            "siblings": list(exc.siblings), "recovery": recovery_path,
+            "recovery_error": recovery_error}
+        if recovery_path:
+            note = ("Save blocked because CAM found a likely cloud-conflict "
+                    f"database copy. Pending work is preserved at {recovery_path}.")
+        else:
+            note = ("Save blocked because CAM found a likely cloud-conflict "
+                    "database copy. CAM could not verify a recovery file; do "
+                    "not close this session.")
+        st.session_state["save_status"] = ("error", note)
+        return
     except DatabaseConcurrencyError as exc:
         recovery_path = ""
         recovery_error = ""
@@ -6056,6 +6188,13 @@ def _render_db_switch_panel(pending: dict) -> None:
     path = pending["path"]
     new_custom = pending.get("new_custom", "")
     counts = pending.get("counts", {})
+    candidate = capture_database_snapshot(path)
+    expected = _database_expectation(path)
+    expected_id = str(expected.get("database_id", "") or "")
+    found_id = str(candidate.database_id or "")
+    requires_rebind = bool(
+        expected.get("state") == "established" and expected_id
+        and found_id != expected_id)
     st.markdown("**A database already exists at this location**")
     st.info(
         f"`{path}`\n\n"
@@ -6064,8 +6203,19 @@ def _render_db_switch_panel(pending: dict) -> None:
         f"**{counts.get('classes', 0)} class(es)**.")
     st.caption("CAM will not overwrite it automatically. Choose what to do:")
 
+    rebind_text = ""
+    if requires_rebind:
+        st.warning(
+            "This valid database has a different identity from the database "
+            "this device previously used at the same path. Confirm the change "
+            "to update this device only; the database file will not be edited.")
+        st.code(f"Expected: {expected_id}\nFound: {found_id or '(legacy v1)'}")
+        rebind_text = st.text_input(
+            "Type USE THIS DATABASE to confirm", key="dbsw_rebind_confirm",
+            autocomplete="off")
     if st.button("📥 Load this database into CAM", type="primary",
                  width="stretch", key="dbsw_adopt",
+                 disabled=requires_rebind and rebind_text != "USE THIS DATABASE",
                  help="Use the database already at this location — the normal "
                       "way to point a second computer at your cloud data. "
                       "Nothing on disk is changed."):
@@ -6074,6 +6224,7 @@ def _render_db_switch_panel(pending: dict) -> None:
         # quarantine does not linger; the hydrate re-diagnoses the (ok) file.
         prefs = st.session_state["prefs"]
         prefs["db_custom_path"] = new_custom
+        _set_database_expectation(path, "established", found_id)
         save_prefs(prefs)
         st.session_state["db_loaded"] = False
         st.session_state["db_load_blocked"] = None
@@ -6102,6 +6253,8 @@ def _render_db_switch_panel(pending: dict) -> None:
         else:
             prefs = st.session_state["prefs"]
             prefs["db_custom_path"] = new_custom
+            _set_database_expectation(
+                path, "established", result.token.database_id)
             save_prefs(prefs)
             st.session_state["db_write_token"] = result.token
             note = f"Overwrote {path} with the current session."
@@ -6373,6 +6526,7 @@ def settings_dialog() -> None:
                 return
             st.session_state["db_write_token"] = database_write_token(
                 capture_database_snapshot(new_path))
+            _set_database_expectation(new_path, "pending-create", "")
         prefs["db_custom_path"] = new_custom
         save_prefs(prefs)
         persist()  # write the database to the (possibly new) path immediately
@@ -9353,9 +9507,30 @@ def _adopt_db_path(new_custom: str, note: str) -> None:
     offers an overwrite. ``db_load_blocked`` is cleared so a stale quarantine
     from the pre-choice state does not linger (the hydrate re-diagnoses the new
     path)."""
+    path = resolve_db_path(new_custom)
+    snapshot = capture_database_snapshot(path)
+    if snapshot.state == "unreadable":
+        st.error("CAM found a database file at that location but could not "
+                 "read it. Wait for synchronization or choose another path.")
+        return
+    siblings = find_database_conflict_siblings(path)
     prefs = st.session_state["prefs"]
     prefs["db_custom_path"] = new_custom
     prefs["setup_done"] = True
+    if not siblings:
+        expected = _database_expectation(path)
+        expected_id = str(expected.get("database_id", "") or "")
+        found_id = str(snapshot.database_id or "")
+        # Preserve an existing, different binding; the boot quarantine supplies
+        # the dedicated typed rebind confirmation.
+        mismatch = (snapshot.state == "ok"
+                    and expected.get("state") == "established"
+                    and expected_id and found_id != expected_id)
+        if not mismatch:
+            _set_database_expectation(
+                path,
+                "established" if snapshot.state == "ok" else "pending-create",
+                found_id)
     save_prefs(prefs)
     st.session_state["db_loaded"] = False
     st.session_state["db_load_blocked"] = None
@@ -9506,6 +9681,41 @@ def _render_db_quarantine_banner() -> None:
             "synchronization to finish, then restart CAM to load the shared "
             "version. Review the shared and recovery versions before choosing "
             "any recovery action.")
+    elif reason == "cloud-conflict-sibling":
+        sibling_lines = "\n".join(
+            f"- `{item}`" for item in blocked.get("siblings", []))
+        recovery = blocked.get("recovery", "")
+        if recovery:
+            recovery_note = (f" Pending work from this session was saved and "
+                             f"verified at **`{recovery}`**.")
+        elif blocked.get("recovery_error"):
+            recovery_note = (" CAM could not create and verify a recovery "
+                             "file. **Do not close this CAM session.**")
+        else:
+            recovery_note = ""
+        detail = (
+            f"CAM found a likely cloud synchronization conflict beside "
+            f"**`{path}`**:\n\n{sibling_lines}\n\nCAM did not select, merge, "
+            "rename, delete, or overwrite either version." + recovery_note +
+            " Allow cloud synchronization to finish and review the files "
+            "before retrying.")
+    elif reason == "expected-database-missing":
+        detail = (
+            f"This device expects an established database at **`{path}`**, "
+            "but the file is temporarily absent. CAM will not create an empty "
+            "replacement. Reconnect the drive or allow cloud synchronization "
+            "to restore the expected file, then retry.")
+    elif reason == "database-identity-mismatch":
+        counts = blocked.get("counts", {})
+        detail = (
+            f"The database at **`{path}`** is readable, but its identity differs "
+            "from the database this device previously used there. CAM will not "
+            "adopt it automatically.\n\n"
+            f"Expected: `{blocked.get('expected_database_id', '')}`  \n"
+            f"Found: `{blocked.get('found_database_id', '') or '(legacy v1)'}`  \n"
+            f"Found database: {counts.get('assignments', 0)} assignment(s), "
+            f"{counts.get('students', 0)} student(s), "
+            f"{counts.get('classes', 0)} class(es).")
     elif reason == "shrink-blocked":
         parked = blocked.get("parked", "")
         parked_note = (f" Your unsaved session was set aside at **`{parked}`** "
@@ -9527,11 +9737,16 @@ def _render_db_quarantine_banner() -> None:
         detail = (f"Your database file **`{path}`** exists but could not be "
                   "read — it may be malformed, temporarily locked, or a cloud "
                   "file that has not finished downloading.")
-    if reason == "concurrency-conflict":
+    if reason in ("concurrency-conflict", "cloud-conflict-sibling"):
         footer = (
             "**Nothing else will be saved by this session.** Its rejected save "
             "did not overwrite the shared database. Follow the recovery steps "
             "above, then restart CAM.")
+    elif reason == "database-identity-mismatch":
+        footer = (
+            "**Nothing will be saved** unless you explicitly confirm the "
+            "different database below. Confirmation updates this device's "
+            "expectation only; it does not modify the database file.")
     else:
         footer = (
             "**Nothing will be saved** while this banner is showing, so your "
@@ -9541,7 +9756,8 @@ def _render_db_quarantine_banner() -> None:
     st.error(
         f"🛑 **Database not loaded — CAM is in read-only quarantine.**\n\n"
         f"{detail}\n\n{footer}")
-    if reason == "concurrency-conflict" and not blocked.get("recovery"):
+    if reason in ("concurrency-conflict", "cloud-conflict-sibling") \
+            and blocked.get("recovery_error") and not blocked.get("recovery"):
         if st.button("Retry saving the conflict recovery file",
                      key="retry_conflict_recovery"):
             expected = st.session_state.get("db_write_token")
@@ -9550,7 +9766,8 @@ def _render_db_quarantine_banner() -> None:
                     raise RuntimeError("The session revision token is missing.")
                 observed = capture_database_snapshot(path)
                 recovery = write_conflict_recovery(
-                    path, gb(), build_session_payload(), expected, observed)
+                    path, gb(), build_session_payload(), expected, observed,
+                    reason=reason)
             except Exception as exc:
                 blocked["recovery_error"] = str(exc)
                 st.session_state["save_status"] = (
@@ -9562,6 +9779,31 @@ def _render_db_quarantine_banner() -> None:
                 st.session_state["save_status"] = (
                     "ok", f"Pending work preserved at {recovery.path}.")
                 st.rerun()
+    may_retry_database = (
+        reason == "expected-database-missing"
+        or (reason == "cloud-conflict-sibling"
+            and not (blocked.get("recovery_error")
+                     and not blocked.get("recovery"))))
+    if may_retry_database:
+        if st.button("Retry database check", key="retry_database_check"):
+            st.session_state["db_load_blocked"] = None
+            st.session_state["db_loaded"] = False
+            st.session_state["db_write_token"] = None
+            st.session_state["mirror_ready"] = False
+            st.rerun()
+    if reason == "database-identity-mismatch":
+        confirmation = st.text_input(
+            "Type USE THIS DATABASE to bind this device to the found database",
+            key="db_identity_rebind_confirm", autocomplete="off")
+        if st.button("Use this database", key="db_identity_rebind",
+                     disabled=confirmation != "USE THIS DATABASE"):
+            _set_database_expectation(
+                path, "established", blocked.get("found_database_id", ""))
+            st.session_state["db_load_blocked"] = None
+            st.session_state["db_loaded"] = False
+            st.session_state["db_write_token"] = None
+            st.session_state["mirror_ready"] = False
+            st.rerun()
 
 
 def _render_top_bar() -> None:

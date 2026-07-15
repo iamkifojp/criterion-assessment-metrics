@@ -46,6 +46,7 @@ class AppDatabaseConcurrencyTests(unittest.TestCase):
         prefs = dict(app.DEFAULT_PREFS)
         prefs["setup_done"] = True
         with mock.patch.object(app, "load_prefs", return_value=prefs), \
+                mock.patch.object(app, "save_prefs"), \
                 mock.patch.object(app, "_heal_from_class_mirrors"), \
                 mock.patch.object(app, "_seed_mirror_fingerprints"):
             app.init_state()

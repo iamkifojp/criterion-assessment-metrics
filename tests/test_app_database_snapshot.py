@@ -128,6 +128,7 @@ class AppDatabaseSnapshotTests(unittest.TestCase):
         try:
             with mock.patch("builtins.open", side_effect=tracked_open), \
                     mock.patch.object(app, "load_prefs", return_value=prefs), \
+                    mock.patch.object(app, "save_prefs"), \
                     mock.patch.object(app, "_heal_from_class_mirrors"), \
                     mock.patch.object(app, "_seed_mirror_fingerprints"), \
                     mock.patch.object(app, "save_database") as save_db, \

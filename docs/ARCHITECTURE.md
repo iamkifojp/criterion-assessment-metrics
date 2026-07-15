@@ -235,9 +235,34 @@ an unmounted cloud folder, a disconnected share — *not* a first run). Any of
 these sets `st.session_state["db_load_blocked"] = {reason, path}`;
 `persist()` then refuses every write and a full-width **read-only quarantine**
 banner names the path and the fix (restart after repairing the file/path). Only
-an **absent file inside an existing folder** is treated as a legitimate first
-run (start empty, create on first save). This is wipe-mechanism 2 in
+an absent file at a path explicitly recorded as `pending-create` is treated as
+a legitimate first run (start empty, create on first save). Once the path is
+`established`, absence is a quarantine condition even when its parent folder
+still exists. This is wipe-mechanism 2 in
 [CROSS_DEVICE_AND_DB_SAFETY_PLAN.md](CROSS_DEVICE_AND_DB_SAFETY_PLAN.md).
+
+**⚠ Invariant: an established device/path binding cannot silently become a
+different or empty database.** Device-local `database_expectations` in
+`local_device_prefs.json` is keyed by normalized absolute database path. Each
+entry is either `pending-create` with no UUID, or `established` with the schema-v2
+UUID (empty only while a legacy-v1 database awaits its checked upgrade). Before
+hydration, `diagnose_expected_database()` compares the captured snapshot with
+that binding. A missing established file produces `expected-database-missing`;
+a different UUID produces `database-identity-mismatch`; both enter read-only
+quarantine. Existing completed installations without the new map are backfilled
+from a readable database and fail safe if their configured file is absent. A
+matching file can be retried after synchronization. A different valid identity
+requires the teacher to type `USE THIS DATABASE`; rebind changes only device
+preferences and never edits the database.
+
+The same boot pass calls `find_database_conflict_siblings()` to conservatively
+detect regular JSON files derived from the active stem (for example,
+`acm_database (conflicted copy).json` or `acm_database-Laptop.json`). The exact
+primary plus CAM-owned `.bak-*`, `.conflict-recovery-*`, `.blocked-*`, lock,
+safety-marker, and temporary names are excluded. Any remaining candidate causes
+`cloud-conflict-sibling` quarantine; CAM never opens, selects, merges, renames,
+or deletes it. The teacher reviews the paths, lets cloud synchronization settle,
+and explicitly retries the database check.
 
 **⚠ Invariant: a session saves only the exact database generation it loaded or
 last saved.** After boot, Streamlit retains a frozen, raw-byte-free
@@ -252,6 +277,14 @@ increments the generation exactly once, and returns the verified next token.
 The lock is only local coordination — the persisted UUID/generation/hash is the
 cross-device check because cloud services do not provide immediate lock
 propagation.
+
+Both `save_database_checked()` and `replace_database_checked()` repeat conflict-
+sibling detection while holding that lock, immediately after the fresh snapshot
+and before concurrency/shrink checks, backups, or replacement. A sibling that
+appears after boot raises `DatabaseCloudConflictError`. Normal `persist()` then
+preserves the pending session in the same verified recovery-file format, skips
+class mirrors, and quarantines; a recovery failure leaves the only pending copy
+in memory and deliberately withholds the database-reload action.
 
 A legacy schema-v1 database is loaded without modification and represented by
 its exact content hash. Its first checked save may upgrade it to v2 only if that
@@ -653,7 +686,7 @@ works without them.
 |------------|-------|---------|
 | `acm_database.json` | Streamlit | Schema-v2 serialized `Gradebook` + session state, stable database UUID and monotonic generation; legacy v1 upgrades on its first verified save. |
 | `acm_database.json.cam-write.lock` | Streamlit | Persistent sidecar used for OS-managed local write serialization; not authoritative between cloud devices. |
-| `acm_database.json.conflict-recovery-*.json` | Streamlit | Verified standalone copy of a stale session's pending state plus non-student recovery provenance; never auto-merged. |
+| `acm_database.json.conflict-recovery-*.json` | Streamlit | Verified standalone copy of a stale session or cloud-sibling-blocked save plus non-student recovery provenance; never auto-merged. |
 | `grading_cache.json` | Flask | Multi-folder marking mirror (see DATA_DICTIONARY). |
 | `grades_<folderId>.json` | Flask | Per-assignment full `STATE` snapshot. |
 | `gcg_exams.json` | Flask/exam_engine | Exam definitions, keyed by class. |
@@ -661,7 +694,7 @@ works without them.
 | `cam_grades_<folderId>.json` | Streamlit writes, Flask consumes | CAM's current grades for one folder-backed assignment, published at handoff into `[db folder]/[class]/`; deleted by the workspace once merged (§8). |
 | `token.json`, `client_secret_*.json` | Flask | Google OAuth material (read by Streamlit for Drive listing). `find_client_secret()` also probes `<cloud_dir>` after the app root; `token.json` may be opt-in seeded from `<cloud_dir>` (Phase 5). |
 | `gcg_settings.json` | Flask; `cloud_dir` + class map are **CAM-managed** (seeded by the launch bridge via `POST /api/config`, read-only in the workspace). `my_identities` is workspace-owned and editable in Settings. | Cloud-sync dir + class → Drive-folder-ID map + the teacher's own identities. Mirrored into `<cloud_dir>` so identities heal across machines (Phase 5). |
-| `local_device_prefs.json` | both (each app keeps its own copy beside its `app.py`) | Device-local UI prefs, never the shared cloud DB. CAM: db path + column widths / scroll heights. CGW: the `anonymous_grading` toggle (§8), the opt-in `token_bootstrap` toggle (Phase 5), and any `my_identities` override. Writers merge, so unknown keys are preserved. |
+| `local_device_prefs.json` | both (each app keeps its own copy beside its `app.py`) | Device-local prefs, never the shared cloud DB. CAM: db path, path-keyed `database_expectations`, column widths and scroll heights. CGW: the `anonymous_grading` toggle (§8), the opt-in `token_bootstrap` toggle (Phase 5), and any `my_identities` override. Writers merge, so unknown keys are preserved. |
 
 ---
 

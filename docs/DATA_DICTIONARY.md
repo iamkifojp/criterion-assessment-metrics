@@ -819,7 +819,42 @@ of the shared database. It additionally carries:
 These fields contain only revision provenance, never student names, IDs, scores,
 or comments. The recovery file is reported to the teacher only after atomic
 creation, SHA-256 read-back verification, and successful hydration. CAM does not
-automatically merge or restore it.
+automatically merge or restore it. `kind` is `concurrency-conflict` for a stale
+writer and `cloud-conflict-sibling` when a likely synchronization sibling blocked
+the save; the remaining provenance fields keep the same shape.
+
+### D.3 Device-local database expectations
+
+`local_device_prefs.json` carries a map that is deliberately outside the shared
+database:
+
+```jsonc
+"database_expectations": {
+  "c:\\users\\teacher\\onedrive\\cam\\acm_database.json": {
+    "state": "established",
+    "database_id": "4e16d740-2d95-4a32-a2ff-70c3784587e4"
+  }
+}
+```
+
+Map keys are `normcase(abspath(path))` values local to that device. `state` is
+`pending-create` only after an explicit selection of a new destination and
+permits one absent primary; a verified save promotes it to `established`.
+Established schema-v2 entries require the same `database_id` at boot. A legacy
+schema-v1 entry is established with an empty ID until its first checked save
+performs the verified v2 upgrade. Switching paths adds or refreshes an entry and
+does not remove bindings for other paths. These preferences contain no student
+data and are not part of the database concurrency token.
+
+### D.4 Cloud-conflict sibling names
+
+`find_database_conflict_siblings(path)` lists regular JSON files in the primary's
+directory whose stem begins with the primary stem followed by a space, bracket,
+hyphen, or underscore. This covers typical cloud-generated names without opening
+their contents. Exact-primary and documented CAM sidecars (`.bak-*`,
+`.conflict-recovery-*`, `.blocked-*`, `.cam-write.lock`, safety markers, and
+temporary files) are excluded. Returned paths are absolute, deduplicated, and
+stably ordered; detection never modifies a candidate.
 
 ---
 

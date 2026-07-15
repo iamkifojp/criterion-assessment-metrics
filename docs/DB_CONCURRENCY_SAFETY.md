@@ -2,11 +2,12 @@
 
 ## Status
 
-Phases 1 and 2 are implemented. CAM now retains the exact database generation
-loaded by each session and rejects a save when the shared file has changed.
-Phases 3-5 remain proposed work; cloud-conflict sibling detection, dirty-only
-persistence, session snapshots, and strict per-record validation are not yet
-implemented.
+Phases 1-3 are implemented. CAM now retains the exact database generation
+loaded by each session, rejects a save when the shared file has changed, binds
+each device/database path to the established database identity, and quarantines
+missing, identity-mismatched, or cloud-conflicted database files. Phases 4-5
+remain proposed work; dirty-only persistence, session snapshots, and strict
+per-record validation are not yet implemented.
 
 ## Purpose
 
@@ -311,8 +312,27 @@ complete 229-test suite passes in isolated test environments.
 
 ### Phase 3: missing and conflicted cloud files
 
-Add expected-database state and conservative detection of database-like cloud
-conflict siblings.
+Implemented. Device-local `database_expectations` entries are keyed by normalized
+absolute database path and distinguish an explicitly authorized `pending-create`
+location from an `established` database identity. Successful boot/adoption and
+checked saves refresh the binding; legacy version-1 bindings acquire their UUID
+when the checked upgrade save completes. Existing completed setups without the
+new metadata fail safe when their configured database is absent.
+
+At boot, CAM checks likely database-shaped conflict siblings without opening or
+modifying them, then validates the captured immutable primary snapshot against
+the path's expectation before hydration or mirror healing. Missing established
+files, unexpected UUIDs, and conflict siblings enter read-only quarantine. A
+retry action re-runs boot diagnosis after synchronization, while an identity
+change requires the teacher to type `USE THIS DATABASE` before CAM updates only
+the device-local binding.
+
+Both checked write paths repeat sibling detection inside the local write lock,
+before concurrency/shrink checks, backups, or replacement. A sibling discovered
+before a normal save leaves the primary unchanged, preserves pending work in a
+unique read-back-verified conflict-recovery file, skips mirrors, and quarantines
+the session. Recognized CAM backups, recovery files, blocked payloads, lock
+files, safety markers, and temporary files are excluded from detection.
 
 Completion criteria:
 
@@ -322,6 +342,11 @@ Completion criteria:
 - explicit adoption of an existing database remains possible;
 - an unexpected conflict sibling produces a safe state; and
 - the expected database can recover normally after synchronization completes.
+
+All criteria are covered by `tests/test_database_cloud_safety.py` and
+`tests/test_app_database_cloud_safety.py`, with regression coverage in the
+existing snapshot and concurrency modules. The complete 243-test suite passes
+in isolated test environments.
 
 ### Phase 4: dirty persistence and session snapshots
 
