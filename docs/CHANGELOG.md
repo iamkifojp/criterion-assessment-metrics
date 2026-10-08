@@ -6,6 +6,56 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-08 — Draft feedback and document viewing
+
+- **Drafts have no marks.** Module 1 can create or label an assignment as
+  “Draft — comments only” with focus criteria such as A. The workspace hides
+  grade inputs and exports explicit draft metadata. Ingestion retains comments,
+  keywords and submission references without creating criterion scores.
+- **Module 3 respects drafts.** Drafts never generate missing-work zeros or
+  contribute retained old marks to grades, trends or calculation-method sizing.
+  Feedback appears in the comments log and a qualitative section of the report
+  prompt. Module 2 can match unidentified draft submissions without assigning
+  a score. Legacy assignments retain their existing grading behavior.
+- **PDF page selection and overview.** The focused viewer accepts assignment-wide
+  omitted ranges (for example `1-9, 12`), keeps original page numbers, and offers
+  a page-thumbnail grid, navigation and zoom. PyMuPDF renders pages on demand;
+  original files are unchanged. Downloaded Drive PDFs use a 256 MiB cache budget,
+  with an exception for the active file if it alone exceeds the budget.
+- **Drive-hosted Word files** open in an embedded Drive preview, with an external
+  link if browser authentication prevents embedding. Comments and matching work
+  for DOCX; CAM's omitted-page and page-grid controls require a PDF copy.
+- Fixed Drive URL extraction misreading macOS local paths containing `/folders/`.
+  Tests use fictional data and temporary workspace copies, with no live
+  preferences, student databases or Google credentials.
+
+Validation: 301 isolated regression tests pass; the browser check covers draft
+comment saving, omitted-page navigation and the PDF thumbnail grid. Drive Word
+preview routing is tested locally; authenticated previews on the school network
+still depend on the user's browser session and network rules.
+
+## 2026-10-07 — Match copied submissions to the class namelist
+
+Downloaded/re-uploaded Drive submissions lose their original owner identity.
+The grading workspace now receives the active class's Module-2 roster at CAM
+handoff and matches unique full names (either order), student IDs and emails
+in filenames. Conflicting/partial identities stay as separate unmatched files
+for Module-2 review; its manual decisions travel back on the next handoff.
+Matched cards show roster names while exports keep canonical student IDs.
+Automatic matching retains marking saved under older identities rather than
+redistributing it. Local folders also retain flat files alongside student
+subfolders.
+
+The roster parser now preserves alphanumeric school IDs with multiple digit
+runs. Previously it shortened these to a year prefix and silently discarded
+classmates as duplicate keys. Older shortened rosters require a namelist
+re-upload; existing grades are not automatically migrated.
+
+OAuth client-secret discovery checks both `cam_grading_workspace/` and the
+project root before the configured cloud-folder fallback. Setup guidance and
+missing-credentials messages document both local locations; credentials remain
+git-ignored.
+
 ## 2026-07-15 — Database concurrency safety Phase 5: strict validation
 
 **What this changes** — readable JSON could contain one malformed score, exam

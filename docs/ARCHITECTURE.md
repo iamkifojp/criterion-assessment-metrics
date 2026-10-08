@@ -53,6 +53,42 @@ the launch bridge below. They are coupled through the filesystem:
 
 ### The launch bridge (CAM → workspace)
 
+**Roster identity and draft mode (2026-10-08).** The per-folder
+`cam_grades_<key>.json` handoff also carries `matching_roster`, `work_aliases`,
+`is_draft`, focus `criteria`, and `draft_feedback`. The workspace saves identity
+context so a manual reload after handoff consumption still matches filenames.
+`submission_identity.py` matches a unique roster ID/email or normalized full
+name (both name orders), checks conflicting identities, and leaves partial or
+ambiguous names unmatched. Every unresolved file gets a distinct stable key;
+Module-2 decisions are sent back as aliases. Previously saved marking is not
+silently redistributed when automatic identity changes. School email localparts
+with several digit runs remain intact; old shortened rosters require re-upload.
+
+**Comments-only assignment lifecycle.** `Assignment.is_draft` defaults to false;
+`draft_feedback` holds per-student comment, keywords, file references, lateness
+and timestamp independently of `CriterionScore`. Focus `criteria` may still be
+`["A"]`. Module 1 controls the mode. A draft export has `Assessment Mode=draft`
+and `Focus Criteria`, with no grade columns. Ingestion ignores any stale numeric
+cells in a draft CSV; an existing Module-1 draft setting also overrides legacy
+exports. Unmatched feedback enters the existing Module-2 pool and resolves into
+the matching class's assignment feedback. Persistence validates and serializes
+these optional fields without a schema migration. Module 3 excludes drafts from
+synthetic missing zeros, aggregate inputs, trends and assignment-count policy;
+report prompts include draft observations only as qualitative evidence.
+
+**Focused document viewer.** Drive Word files (`.doc`/`.docx`) use Google's
+authenticated `/file/d/<id>/preview` iframe; native Google documents retain
+their existing embeds. CAM does not control the pages inside these frames.
+PDFs use `static/pdf_viewer.js` and two Flask endpoints:
+`GET /api/pdf/<id>/pages` lists visible original page numbers, and
+`GET /api/pdf/<id>/pages/<n>?width=...` renders a bounded PNG with PyMuPDF.
+Only PDFs in the loaded assignment are accepted. `pdf_view.py` parses omitted
+page ranges, stored as `pdf_omit_pages` per assignment in saved state/cache.
+Omission affects display only. Thumbnails load lazily; neither PDFs nor generated
+page images are uploaded or modified. Drive files download only when opened;
+the PDF disk cache evicts older copies above 256 MiB, retaining the current file
+even when oversized. Large active PDFs still need local temporary space.
+
 Window 1's **Grade this Assignment/Exam** buttons call
 `launch_grading_workspace()` / `launch_exam_setup()` (`app.py`). Each spawns
 the Flask workspace on **port 5001** if it isn't already listening
@@ -560,8 +596,12 @@ so the button appears in *both* modes: always in Add mode (a first-time user
 can sign in before creating their first Drive-backed class), and in Edit mode
 whenever the saved master directory is a Drive ID (per `_master_is_local()`).
 `credentials.json` — the OAuth client secret, type
-"Desktop app" — remains a prerequisite; when it is absent, `/signin` renders a
-guidance page pointing at the Google Cloud Console instead of raising.
+"Desktop app" — remains a prerequisite. Discovery accepts `credentials.json`
+or `client_secret*.json` in the workspace directory, then the project root,
+then the configured cloud folder. All credential names remain git-ignored.
+When absent, `/signin` renders setup guidance instead of raising. Drafts,
+filename matching and PDF controls reuse the existing Drive connection and do
+not require a new API project or broader permissions.
 
 **Takeaway:** local scanning = `os.scandir`/`os.walk`, no credentials. Drive
 scanning = OAuth token required. The two are chosen at runtime by inspecting

@@ -49,6 +49,8 @@ from flask import (
 )
 
 import exam_engine
+from submission_identity import match_submission, unmatched_identity, has_shortened_school_ids
+from pdf_view import page_ranges, visible_pages, prune_pdf_cache
 
 # ---- Google API imports -----------------------------------------------------
 from google.auth.transport.requests import Request, AuthorizedSession
@@ -170,6 +172,9 @@ STATE = {
     "checklist": [],        # per-folder rubric criteria [{label, type}]; [] = use frontend defaults
     "criteria": [],         # selected MYP criteria, e.g. ["A","C"]; [] = none chosen yet
     "deadline": "",         # official deadline, ISO 8601 (from <input datetime-local>)
+    "is_draft": False,
+    "draft_extra": {},
+    "pdf_omit_pages": "",
     # CAM-graded students with no files in the folder (keyed by CAM student
     # id). Not gradable here, but carried into every CSV export so CAM's
     # whole-assignment purge-replace on Sync never drops their marks.
@@ -576,7 +581,7 @@ load_settings()
 def find_client_secret():
     """Locate the OAuth client-secret file regardless of its exact name.
 
-    Probes the app root first, then the configured cloud dir (Phase 5) so a new
+    Probes the workspace, project root, then the configured cloud dir so a new
     machine that only has the shared OneDrive/Drive folder can authenticate
     without hand-copying credentials.json. An installed-app client secret is
     low-sensitivity — useless without the teacher consenting in a browser — so a
@@ -588,7 +593,7 @@ def find_client_secret():
         found += sorted(glob.glob(os.path.join(folder, "client_secret*.json")))
         return found
 
-    candidates = _probe(BASE_DIR)
+    candidates = _probe(BASE_DIR) + _probe(os.path.dirname(BASE_DIR))
     cloud = SETTINGS.get("cloud_dir", "").strip()
     if cloud and os.path.isdir(cloud):
         candidates += _probe(cloud)
@@ -649,7 +654,8 @@ def get_credentials():
             if not secret:
                 raise FileNotFoundError(
                     "No OAuth client-secret file found. Place your downloaded "
-                    "'credentials.json' (or 'client_secret_*.json') next to app.py."
+                    "'credentials.json' (or 'client_secret*.json') in the project "
+                    "root or cam_grading_workspace/, or your configured cloud folder."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(secret, SCOPES)
             creds = flow.run_local_server(port=0)
@@ -727,6 +733,7 @@ def write_cache():
         cache["version"] = CACHE_VERSION   # stamp fresh (empty) files too
         cache[fid] = {
             "folder_name": STATE["folder_name"],
+            "class_name": STATE.get("class_name"),
             # CAM's display name for this folder (survives the published-file
             # consumption + later manual reloads, so the export keeps using it).
             "cam_name": STATE.get("cam_name"),
@@ -739,6 +746,9 @@ def write_cache():
             # Selected MYP criteria + official deadline for this assignment.
             "criteria": STATE.get("criteria", []),
             "deadline": STATE.get("deadline", ""),
+            "is_draft": STATE.get("is_draft", False),
+            "draft_extra": STATE.get("draft_extra", {}),
+            "pdf_omit_pages": STATE.get("pdf_omit_pages", ""),
             # "students" is the established key and doubles as the student_data
             # bucket: each student's marks (per-criterion grades, keyword
             # checkboxes, comment).
@@ -936,6 +946,66 @@ def consume_cam_published(folder_id):
         pass
 
 
+def load_matching_context(folder_id, class_name):
+    """Read the active class roster/aliases without modifying CAM's database.
+
+    A fresh dashboard handoff wins. The configured database supports manual
+    workspace loads; saved assignment state supports later standalone reloads.
+    Never search project sample data or other classes for a matching name.
+    """
+    if not class_name:
+        return [], {}
+    paths = [cam_published_path(folder_id)]
+    cloud = SETTINGS.get("cloud_dir", "").strip()
+    if cloud:
+        paths.append(os.path.join(cloud, "acm_database.json"))
+    paths.append(state_path(folder_id))
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            if not isinstance(data, dict):
+                continue
+            if "session" in data:
+                session = data.get("session") or {}
+                roster = session.get("rosters", {}).get(class_name)
+                aliases = session.get("work_aliases", {}).get(class_name, {})
+            else:
+                if (data.get("class") or data.get("class_name")) != class_name:
+                    continue
+                roster = data.get("matching_roster")
+                aliases = data.get("work_aliases", {})
+            if isinstance(roster, list):
+                roster = [e for e in roster if isinstance(e, dict) and e.get("key")]
+                return roster, aliases if isinstance(aliases, dict) else {}
+        except (OSError, ValueError, AttributeError, TypeError):
+            continue
+    return [], {}
+
+
+def load_assignment_options(folder_id):
+    options = {"is_draft": False, "pdf_omit_pages": "", "draft_extra": {}}
+    cached = load_cache().get(folder_id) or {}
+    if cached.get("class_name") == STATE.get("class_name"):
+        options.update({key: cached[key] for key in options if key in cached})
+    for path in (state_path(folder_id), cam_published_path(folder_id)):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            if (data.get("class") or data.get("class_name")) != STATE.get("class_name"):
+                continue
+            for key in options:
+                if key in data:
+                    options[key] = data[key]
+            if path == cam_published_path(folder_id):
+                if data.get("is_draft"):
+                    options["draft_criteria"] = data.get("criteria", [])
+                    options["published_feedback"] = data.get("draft_feedback", {})
+        except (OSError, ValueError, AttributeError):
+            continue
+    return options
+
+
 def load_cache_entry(folder_id):
     """Return (grades_dict, groups, checklist, criteria, deadline, cam_extra,
     cam_name) from the cache."""
@@ -1067,6 +1137,10 @@ def classify(mime, name=""):
         return "image"
     if mime == "application/pdf":
         return "pdf"
+    if ext in {".doc", ".docx"} or mime in {
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}:
+        return "word"
     return "other"
 
 
@@ -1194,6 +1268,8 @@ def normalized_base(name):
 
 
 def embed_url_for(file_id, kind):
+    if kind == "word":
+        return f"https://drive.google.com/file/d/{file_id}/preview"
     if kind == "slides":
         return f"https://docs.google.com/presentation/d/{file_id}/embed"
     if kind == "doc":
@@ -1253,7 +1329,7 @@ def fetch_folder(folder_id):
     return folder_name, files
 
 
-def group_by_student(files, saved):
+def group_by_student(files, saved, roster=None, aliases=None):
     """Group files by Student Owner into a nested structure.
 
     Returns an ordered list of student dicts:
@@ -1265,7 +1341,24 @@ def group_by_student(files, saved):
     # Annotate + bucket by student.
     buckets = {}
     for f in files:
-        name, email = pick_student(f)
+        legacy_name, legacy_email = pick_student(f)
+        name, email = legacy_name, legacy_email
+        reason = "metadata"
+        if roster:
+            entry, reason = match_submission(f, roster, aliases)
+            if entry:
+                name, email = entry["key"], entry.get("email", "")
+            else:
+                name, email = unmatched_identity(f), ""
+            # Never silently redistribute already-saved marking from an old
+            # teacher/filename bucket to newly inferred student identities.
+            old_key = student_key(legacy_name, legacy_email)
+            old = saved.get(old_key, {})
+            if reason != "manual" and old_key != student_key(name, email) and (
+                    old.get("graded") or old.get("grades") or old.get("comment")
+                    or old.get("keywords")):
+                name, email, reason = legacy_name, legacy_email, "saved_identity"
+        f["_identity_reason"] = reason
         f["_student"], f["_email"] = name, email
         f["_kind"] = classify(f.get("mimeType", ""), f.get("name", ""))
         f["_time"] = file_recency(f)
@@ -1287,11 +1380,22 @@ def group_by_student(files, saved):
         name = flist[0]["_student"]
         email = flist[0]["_email"]
         prev = saved.get(key, {})
+        if not prev and aliases:
+            # Explicit Module-2 decisions can carry an unmatched file's own
+            # marking forward. Never merge marks from several old buckets.
+            sources = {student_key(unmatched_identity(f), "") for f in flist
+                       if f["_identity_reason"] == "manual"}
+            marked = [saved[k] for k in sources if k in saved]
+            if len(marked) == 1:
+                prev = marked[0]
+        roster_label = next((e.get("name", "") for e in (roster or [])
+                             if e.get("key") == name), "")
         students[key] = {
             "key": key,
             "name": name,
             "email": email,
             "display_id": short_id(name, email),
+            "roster_label": roster_label,
             "count": len(flist),
             # Per-criterion grades, e.g. {"A": "7", "C": "5"}. Empty until graded.
             "grades": dict(prev.get("grades", {})),
@@ -1310,11 +1414,13 @@ def group_by_student(files, saved):
             "files": [{
                 "id": f["id"],
                 "filename": f.get("name", "(unnamed)"),
+                "identity_reason": f["_identity_reason"],
                 "kind": f["_kind"],
                 "flagged": f["_flagged"],
                 "has_thumb": bool(f.get("thumbnailLink")),
                 "web_view": f.get("webViewLink"),
-                "embed_url": embed_url_for(f["id"], f["_kind"]),
+                "embed_url": (None if "local_student" in f else
+                              embed_url_for(f["id"], f["_kind"])),
                 # Original upload time — used by the frontend for late detection.
                 "created_time": (parse_time(f.get("createdTime")).isoformat()
                                  if parse_time(f.get("createdTime")) else None),
@@ -1400,6 +1506,7 @@ def _anonymize_student(st, label):
     c["name"] = label
     c["display_id"] = label
     c["email"] = ""                       # the email carries the numeric student id
+    c["roster_label"] = ""
     c["files"] = [
         {**f, "filename": f"{_ANON_FILE_NOUN.get(f.get('kind'), 'File')} {i}"}
         for i, f in enumerate(st.get("files", []), start=1)
@@ -1472,7 +1579,9 @@ class DriveProvider:
 
     def fetch_folder(self, folder_id):
         """(folder_name, [file-dict]) for an assignment subfolder — see fetch_folder()."""
-        return fetch_folder(folder_id)
+        name, files = fetch_folder(folder_id)
+        self._pdf_versions = {f["id"]: f.get("modifiedTime", "") for f in files}
+        return name, files
 
     def state_key(self, ref):
         """Durable persistence key for the loaded reference. A Drive folder ID is
@@ -1522,21 +1631,23 @@ class DriveProvider:
         except Exception:
             abort(404)
 
-    def pdf(self, file_id):
-        """Download a Drive PDF through the authenticated session and serve it
-        inline for the focused viewer's native <iframe> engine.
+    def pdf_path(self, file_id):
+        """Return a cached Drive PDF path for the page renderer/raw download.
 
         Cached to disk keyed by file id + modifiedTime, so re-opening the same
         document is instant and a re-upload (fresh modifiedTime) invalidates the
         stale copy automatically. Credentials never reach the browser.
         """
         try:
-            service = get_service()
-            meta = service.files().get(
-                fileId=file_id,
-                fields="modifiedTime,name",
-                supportsAllDrives=True,
-            ).execute()
+            versions = getattr(self, "_pdf_versions", {})
+            if file_id in versions:
+                meta = {"modifiedTime": versions[file_id]}
+            else:
+                service = get_service()
+                meta = service.files().get(
+                    fileId=file_id, fields="modifiedTime,name",
+                    supportsAllDrives=True,
+                ).execute()
         except HttpError:
             abort(404)
 
@@ -1566,7 +1677,15 @@ class DriveProvider:
                     headers={"Content-Disposition": "inline",
                              "Cache-Control": "private, max-age=300"})
 
-        resp = send_file(cache_path, mimetype="application/pdf",
+        os.utime(cache_path, None)
+        prune_pdf_cache(PDF_CACHE_DIR, cache_path)
+        return cache_path
+
+    def pdf(self, file_id):
+        path = self.pdf_path(file_id)
+        if not isinstance(path, str):
+            return path   # download succeeded but local caching was unavailable
+        resp = send_file(path, mimetype="application/pdf",
                          conditional=True)
         resp.headers["Content-Disposition"] = "inline"
         resp.headers["Cache-Control"] = "private, max-age=300"
@@ -1729,12 +1848,11 @@ class LocalProvider:
             for d in subdirs:
                 for path in self._walk_files(d.path):
                     files.append(self._file_dict(path, d.name))
-        else:
-            # Flat layout: filename stem = student (the exam-engine convention).
-            for e in entries:
-                if e.is_file() and not e.name.startswith("."):
-                    student = os.path.splitext(e.name)[0]
-                    files.append(self._file_dict(e.path, student))
+        # Keep flat files even when some submissions have their own subfolders.
+        for e in entries:
+            if e.is_file() and not e.name.startswith("."):
+                student = os.path.splitext(e.name)[0]
+                files.append(self._file_dict(e.path, student))
         return folder_name, files
 
     @staticmethod
@@ -1766,6 +1884,7 @@ class LocalProvider:
             # subfolder name / filename stem exactly as it reads a Drive owner
             # email — the emitted CSV's Student Name is then shaped identically.
             "owners": [{"displayName": student, "emailAddress": student}],
+            "local_student": student,
             # Lateness comes from the file mtime (when the file was saved/copied
             # locally, not necessarily when the student submitted — the teacher
             # corrects with the sticky Late tick). Both timestamps feed the
@@ -1826,10 +1945,14 @@ class LocalProvider:
         return Response(png, mimetype="image/png",
                         headers={"Cache-Control": "private, max-age=300"})
 
-    def pdf(self, file_id):
+    def pdf_path(self, file_id):
         path = self._resolve(file_id)
         if not path:
             abort(404)
+        return path
+
+    def pdf(self, file_id):
+        path = self.pdf_path(file_id)
         resp = send_file(path, mimetype="application/pdf", conditional=True)
         resp.headers["Content-Disposition"] = "inline"
         resp.headers["Cache-Control"] = "private, max-age=300"
@@ -1918,7 +2041,8 @@ def signin():
             "Google Cloud Console</a>, create an OAuth client of type "
             "“Desktop app”, download its JSON and save it as "
             "<code>credentials.json</code> (or <code>client_secret_*.json"
-            "</code>) in <code>cam_grading_workspace/</code>, then click "
+            "</code>) in the project root or <code>cam_grading_workspace/</code> "
+            "(the configured cloud folder is also supported), then click "
             "\U0001F517 Connect Google Drive in CAM again.</p>"
             "</body></html>",
             mimetype="text/html")
@@ -1937,6 +2061,8 @@ def signin():
 def _extract_folder_id(raw):
     """Accept a bare ID or a full Drive URL and return the folder ID."""
     raw = (raw or "").strip()
+    if not raw.startswith(("https://", "http://")):
+        return raw  # macOS temp paths can also contain a /folders/ segment.
     m = re.search(r"/folders/([A-Za-z0-9_-]+)", raw)
     return m.group(1) if m else raw
 
@@ -2072,7 +2198,22 @@ def api_load():
     (cache_grades, cache_groups, cache_checklist, cache_criteria,
      cache_deadline, cam_extra, cache_cam_name) = load_cache_entry(folder_id)
     saved.update(cache_grades)
-    students, ordered = group_by_student(files, saved)
+    matching_roster, work_aliases = load_matching_context(folder_id, class_name)
+    if has_shortened_school_ids(matching_roster):
+        return jsonify({"error": "This class roster has shortened school IDs from "
+                                 "an older import. Re-upload the namelist in CAM's "
+                                 "Module 2, then reopen the assignment. Existing "
+                                 "grades have not been reassigned."}), 409
+    students, ordered = group_by_student(files, saved, matching_roster, work_aliases)
+    options = load_assignment_options(folder_id)
+    draft_extra = dict(options.get("draft_extra") or {})
+    if "published_feedback" in options:
+        draft_extra = dict(options["published_feedback"] or {})
+        for student in students.values():
+            record = draft_extra.pop(student["name"], None)
+            if record is not None:
+                student["comment"] = record.get("comment", "")
+                student["keywords"] = list(record.get("keywords") or [])
 
     # Reconcile CAM's published grades (written at every dashboard handoff —
     # CAM is the source of truth, so its values are the latest the teacher
@@ -2088,10 +2229,10 @@ def api_load():
     # manual load (no fresh handoff), never clobbering it with None.
     cam_name = load_cam_published_name(folder_id) or cache_cam_name
     cam = load_cam_published(folder_id)
-    if cam is not None:
+    if cam is not None and not options["is_draft"]:
         matched = set()
         for st in students.values():
-            sid = student_id_from_email(st.get("email")) or (st.get("name") or "")
+            sid = (st.get("name") or "") or student_id_from_email(st.get("email"))
             pub = cam.get(sid)
             if not pub:
                 continue
@@ -2129,6 +2270,8 @@ def api_load():
         if derived:
             checklist = derived
     criteria = cache_criteria
+    if options.get("is_draft") and "draft_criteria" in options:
+        criteria = options["draft_criteria"]
     deadline = cache_deadline
 
     # Keep only cached groups whose members still exist in this folder, and
@@ -2155,6 +2298,11 @@ def api_load():
         STATE["criteria"] = criteria
         STATE["deadline"] = deadline
         STATE["cam_extra"] = cam_extra
+        STATE["matching_roster"] = matching_roster
+        STATE["work_aliases"] = work_aliases
+        STATE["is_draft"] = bool(options["is_draft"])
+        STATE["draft_extra"] = draft_extra
+        STATE["pdf_omit_pages"] = options["pdf_omit_pages"]
         save_state()
         # Only after the merged state is safely persisted: a stale copy
         # re-read later would overwrite newer marking with old CAM values.
@@ -2171,6 +2319,11 @@ def api_load():
         "student_count": len(ordered),
         "file_count": sum(s["count"] for s in ordered),
         "unknown_owner_count": sum(1 for s in ordered if s["name"] == "Unknown student"),
+        "roster_matching": bool(matching_roster),
+        "filename_match_count": sum(f["_identity_reason"] == "filename" for f in files),
+        "review_file_count": sum(f["_identity_reason"] in ("unmatched", "ambiguous")
+                                 for f in files),
+        "saved_identity_count": sum(f["_identity_reason"] == "saved_identity" for f in files),
         # Anonymized + seeded-shuffled when the device pref is on; else the same
         # alphabetical `ordered` list. Counts above stay derived from the real
         # `ordered` (order-independent), so anonymity never distorts them.
@@ -2181,6 +2334,8 @@ def api_load():
         # Selected MYP criteria + official deadline (restored from cache).
         "criteria": criteria,
         "deadline": deadline,
+        "is_draft": STATE["is_draft"],
+        "pdf_omit_pages": STATE["pdf_omit_pages"],
     })
 
 
@@ -2207,6 +2362,53 @@ def api_pdf(file_id):
     return current_provider().pdf(file_id)
 
 
+def open_assignment_pdf(file_id):
+    """Open only a PDF in the loaded assignment, using the existing Drive login."""
+    if not any(f["id"] == file_id and f["kind"] == "pdf"
+               for s in STATE["students"].values() for f in s["files"]):
+        abort(404)
+    source = current_provider().pdf_path(file_id)
+    fitz = exam_engine._fitz()
+    if isinstance(source, str):
+        return fitz.open(source)
+    # A disk-cache failure may return bytes in a Flask response instead.
+    try:
+        source.direct_passthrough = False
+        return fitz.open(stream=source.get_data(), filetype="pdf")
+    finally:
+        source.close()
+
+
+@app.route("/api/pdf/<file_id>/pages")
+def api_pdf_pages(file_id):
+    try:
+        with open_assignment_pdf(file_id) as doc:
+            if doc.needs_pass:
+                return jsonify({"error": "This PDF is password protected. Open an unlocked copy."}), 400
+            pages = visible_pages(doc.page_count, STATE.get("pdf_omit_pages", ""))
+            return jsonify({"page_count": doc.page_count, "pages": pages})
+    except (RuntimeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/pdf/<file_id>/pages/<int:page_number>")
+def api_pdf_page(file_id, page_number):
+    width = request.args.get("width", 1400, type=int)
+    width = max(120, min(width or 1400, 2200))
+    try:
+        with open_assignment_pdf(file_id) as doc:
+            if page_number not in visible_pages(doc.page_count, STATE.get("pdf_omit_pages", "")):
+                abort(404)
+            page = doc[page_number - 1]
+            # Bound both axes for unusual page dimensions and large originals.
+            scale = min(width / max(page.rect.width, 1), 3000 / max(page.rect.height, 1))
+            pix = page.get_pixmap(matrix=exam_engine._fitz().Matrix(scale, scale), alpha=False)
+            return Response(pix.tobytes("png"), mimetype="image/png",
+                            headers={"Cache-Control": "private, max-age=300"})
+    except (RuntimeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
 @app.route("/api/download/<file_id>")
 def api_download(file_id):
     """Serve a raw file for the "↗ open" / download affordance via the active
@@ -2231,7 +2433,7 @@ def api_save():
             tst = STATE["students"].get(tkey)
             if not tst:
                 continue
-            if "grades" in data and isinstance(data["grades"], dict):
+            if not STATE.get("is_draft") and "grades" in data and isinstance(data["grades"], dict):
                 # Keep only non-empty criterion values, e.g. {"A":"7","C":"5"}.
                 tst["grades"] = {str(k): str(v) for k, v in data["grades"].items()
                                  if str(v).strip() != ""}
@@ -2243,7 +2445,8 @@ def api_save():
                 tst["late_marked"] = data["late_marked"]
             if "late_manual" in data:
                 tst["late_manual"] = bool(data["late_manual"])
-            tst["graded"] = bool(tst.get("grades"))
+            tst["graded"] = (bool(tst.get("comment") or tst.get("keywords"))
+                             if STATE.get("is_draft") else bool(tst.get("grades")))
             updated.append(tst)
         # MODIFIED marker (CAM-changed criteria): per-student, not mirrored to
         # partners — dismissing it is a review acknowledgement, not a grade.
@@ -2266,6 +2469,11 @@ def api_settings():
     so toggling a criterion or editing the deadline can never wipe a score.
     """
     data = request.get_json(force=True, silent=True) or {}
+    if "pdf_omit_pages" in data:
+        try:
+            page_ranges(data["pdf_omit_pages"])
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
     with STATE_LOCK:
         if not STATE["folder_id"]:
             return jsonify({"error": "No folder is currently loaded."}), 400
@@ -2274,10 +2482,13 @@ def api_settings():
                                  if c in MYP_CRITERIA]
         if "deadline" in data:
             STATE["deadline"] = (data.get("deadline") or "").strip()
+        if "pdf_omit_pages" in data:
+            STATE["pdf_omit_pages"] = str(data["pdf_omit_pages"] or "").strip()
         save_state()
         return jsonify({"ok": True,
                         "criteria": STATE["criteria"],
-                        "deadline": STATE["deadline"]})
+                        "deadline": STATE["deadline"],
+                        "pdf_omit_pages": STATE.get("pdf_omit_pages", "")})
 
 
 @app.route("/api/prefs", methods=["GET", "POST"])
@@ -2548,6 +2759,9 @@ def api_export():
         class_name = STATE.get("class_name")
         students = sorted(STATE["students"].values(), key=lambda s: s["name"].lower())
         cam_extra = dict(STATE.get("cam_extra") or {})
+        is_draft = bool(STATE.get("is_draft"))
+        focus_criteria = list(criteria)
+        draft_extra = dict(STATE.get("draft_extra") or {})
 
     if not students:
         return jsonify({"error": "Nothing loaded to export."}), 400
@@ -2570,6 +2784,9 @@ def api_export():
     held |= {c for rec in cam_extra.values() for c in rec.get("grades", {})}
     extra_cols = sorted(c for c in held if c in MYP_CRITERIA and c not in criteria)
     criteria += extra_cols
+    if is_draft:
+        criteria = []  # No grade columns or fallback zeros in a draft export.
+        cam_extra = {}
 
     # The official assignment deadline (Due Date), date portion only, so
     # downstream apps can read it and reflect the due date on the dashboard.
@@ -2583,7 +2800,7 @@ def api_export():
     grade_headers = [f"Grade (Crit {c})" for c in criteria]
     header = (["Student Name"] + grade_headers +
               ["Checked Keywords", "Comment", "Due Date",
-               "File Count", "Files (newest first)", "Late"])
+               "File Count", "Files (newest first)", "Late", "Assessment Mode", "Focus Criteria"])
 
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -2600,7 +2817,8 @@ def api_export():
         writer.writerow(
             [s["name"]] + grade_cells +
             [keywords, s.get("comment", ""), due_date,
-             s.get("count", 0), filenames, late_cell]
+             s.get("count", 0), filenames, late_cell,
+             "draft" if is_draft else "graded", ",".join(focus_criteria)]
         )
     # Carry forward CAM-graded students who have no files in this folder —
     # their marks exist only in CAM, and the purge-replace on Sync would
@@ -2613,8 +2831,17 @@ def api_export():
         # the Late cell stays blank (tri-state None).
         writer.writerow(
             [sid] + [rec.get("grades", {}).get(c, "") for c in criteria] +
-            ["", rec.get("comment", ""), due_date, 0, "", ""]
+            ["", rec.get("comment", ""), due_date, 0, "", "", "graded", ",".join(focus_criteria)]
         )
+    if is_draft:
+        present = {s["name"] for s in students}
+        for sid, record in draft_extra.items():
+            if sid in present:
+                continue
+            writer.writerow([sid, "; ".join(record.get("keywords", [])),
+                             record.get("comment", ""), due_date, 0,
+                             record.get("files", ""), "1" if record.get("late") else "",
+                             "draft", ",".join(focus_criteria)])
 
     safe_name = re.sub(r'[\\/*?:"<>|]', "_", folder_name).strip() or "Grades"
     filename = f"{safe_name}_Grades_{file_date}.csv"
@@ -3501,13 +3728,28 @@ HTML_PAGE = r"""<!DOCTYPE html>
                       color:#fff; border:none; border-radius:6px; padding:5px 11px; cursor:pointer;
                       font-size:13px; }
   #overlay .ovclose:hover { background:var(--accent); }
-  /* Focused document mode: overlay fills the left panel with the browser's
-     native PDF engine (or a Google-native embed) — its own toolbar supplies
-     scroll/page/zoom; our only chrome is the ✕ close button. */
+  /* Focused document mode fills the left panel while marking stays visible. */
   #overlay.doc-mode { pointer-events:auto; background:var(--imgbg); }
   #overlay.doc-mode #overlayImg { display:none; }
   #overlay .docframe { position:absolute; inset:0; width:100%; height:100%;
                        border:0; background:#fff; z-index:1; }
+  .word-preview-note { position:absolute; bottom:0; left:0; right:0; padding:10px;
+    background:var(--panel); font-size:12px; z-index:3; }
+  .cam-pdf { position:absolute; inset:0; display:flex; flex-direction:column; }
+  .pdf-tools { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+               padding:8px 92px 8px 8px; background:var(--panel2); }
+  .pdf-tools label { display:flex; align-items:center; gap:4px; font-size:12px; }
+  .pdf-tools button, .pdf-tools select, .pdf-tools input { font:inherit; font-size:12px; }
+  .pdf-omit { width:110px; padding:5px; }
+  .pdf-note, .pdf-message { color:var(--muted); font-size:12px; }
+  .pdf-message { padding:6px 10px; }
+  .pdf-pages { flex:1; min-height:0; overflow:auto; padding:10px; }
+  .pdf-pages.pdf-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+                        gap:12px; align-content:start; }
+  .pdf-page { box-sizing:border-box; margin:0 auto; padding:0; text-align:center; color:var(--text); }
+  .pdf-page img { display:block; width:100%; background:white; }
+  .pdf-grid .pdf-page { width:100%; border:1px solid var(--line); background:var(--panel); cursor:pointer; }
+  .pdf-page div { padding:5px; font-size:12px; }
 
   /* Grading matrix */
   #right h2 { margin:0; padding:12px 14px; font-size:15px; border-bottom:1px solid var(--line);
@@ -3682,6 +3924,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
   <!-- Assignment setup: deadline + which MYP criteria are being assessed -->
   <div id="setupbar" class="hidden">
+    <span id="draftNote" class="hidden">Draft — comments only · no marks</span>
     <label class="setup-field">
       <span>Deadline</span>
       <input id="deadlineInput" type="datetime-local"
@@ -3723,8 +3966,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<script src="/static/pdf_viewer.js"></script>
 <script>
 const GRADES = ["", "0","1","2","3","4","5","6","7","8"];
+let pdfViewer = null;
 
 // The four MYP assessment criteria. Each is graded 0-8 independently; the
 // teacher ticks which subset applies to the current assignment.
@@ -3735,6 +3980,8 @@ const MYP_CRITERIA = [
   {id:"D", desc:"Evaluating"},
 ];
 let SELECTED_CRITERIA = [];   // e.g. ["A","C"] — drives the matrix grade columns
+let IS_DRAFT = false;
+let PDF_OMIT_PAGES = "";
 let DEADLINE = "";            // official deadline (datetime-local string)
 let CLASS_FOLDER_ID = "";     // parent class folder currently loaded
 let ACTIVE_CLASS_NAME = "";   // selected class label -> cloud subfolder routing
@@ -3872,9 +4119,16 @@ async function loadFolder() {
     $("#folderName").textContent = data.cam_name || data.folder_name;
     let s = data.student_count + " student(s) · " + data.file_count + " file(s)";
     if (data.unknown_owner_count) s += " · " + data.unknown_owner_count + " with no owner metadata";
+    if (data.roster_matching) s += " · " + data.filename_match_count + " matched by filename";
+    else if (ACTIVE_CLASS_NAME) s += " · no class roster available: upload the namelist in Module 2 and reopen from CAM";
+    if (data.review_file_count) s += " · " + data.review_file_count + " need matching in Module 2 after export/sync";
+    if (data.saved_identity_count) s += " · " + data.saved_identity_count + " kept under saved identities — review before export";
     setStatus(s);
     STUDENTS = data.students;
     GROUPS = data.groups || [];
+    IS_DRAFT = !!data.is_draft;
+    PDF_OMIT_PAGES = data.pdf_omit_pages || "";
+    $("#draftNote").classList.toggle("hidden", !IS_DRAFT);
     // Restore saved assignment setup (criteria + deadline) for this folder.
     SELECTED_CRITERIA = Array.isArray(data.criteria) ? data.criteria.slice() : [];
     DEADLINE = data.deadline || "";
@@ -4110,6 +4364,7 @@ function isLate(st) {
 
 /* Sum of a student's selected-criterion grades (numbers only). */
 function gradeSum(st) {
+  if (IS_DRAFT) return null;
   const g = st.grades || {};
   let total = 0, any = false;
   const crits = SELECTED_CRITERIA.length ? SELECTED_CRITERIA : Object.keys(g);
@@ -4123,6 +4378,7 @@ function gradeSum(st) {
 /* Card/drawer grade chip text. With one criterion the sum IS the grade, so we
    show a bare number; with several we prefix Σ to signal it's a total. */
 function gradeChipText(st) {
+  if (IS_DRAFT) return (st.comment || (st.keywords || []).length) ? "Feedback saved" : "Draft";
   const sum = gradeSum(st);
   if (sum === null) return "";
   const n = SELECTED_CRITERIA.length || Object.keys(st.grades || {}).length;
@@ -4225,7 +4481,7 @@ function makeCard(st) {
   }
 
   const meta = document.createElement("div"); meta.className="meta";
-  meta.innerHTML = `<div class="nm">${escapeHtml(st.name)}</div>`
+  meta.innerHTML = `<div class="nm">${escapeHtml(st.roster_label || st.name)}</div>`
                  + `<div class="sub">newest: ${escapeHtml(newest ? newest.filename : "—")}</div>`;
   card.appendChild(meta);
 
@@ -4294,7 +4550,7 @@ function makeExpandedCard(st) {
 
   const head = document.createElement("div"); head.className = "dhead";
   const chip = gradeChipText(st);
-  head.innerHTML = `<span class="dn">${escapeHtml(st.name)}</span>`
+  head.innerHTML = `<span class="dn">${escapeHtml(st.roster_label || st.name)}</span>`
                  + `<span class="dc">${st.count} file(s)${st.email ? " · " + escapeHtml(st.email) : ""}</span>`
                  + (chip ? `<span class="dg">${chip}</span>` : "")
                  + (st.late_marked ? `<span class="dlate">Late</span>` : "");
@@ -4345,6 +4601,7 @@ function phEl(cls, f) {
   d.textContent = f.kind==="slides" ? "Google Slides — open ↗"
                 : f.kind==="doc" ? "Google Doc — open ↗"
                 : f.kind==="pdf" ? "PDF — open ↗"
+                : f.kind==="word" ? "Word document — open ↗"
                 : "No preview\n" + f.filename;
   return d;
 }
@@ -4579,13 +4836,8 @@ document.addEventListener("keydown", (e) => {
 });
 window.addEventListener("resize", () => { if (videoZoomActive) sizeVideoOverlay(); });
 
-/* ---------- Focused document viewer (PDF native engine / Google embed) ----------
-   Fills the left panel with the browser's own PDF engine (an <iframe> pointed
-   at /api/pdf/<id>) or a Google-native preview embed. The native viewer supplies
-   scroll, page navigation and zoom via its built-in toolbar; our only chrome is
-   the ✕ close button (Escape also closes). The right-hand grading pane is
-   untouched, so every grading tool keeps working while a document is focused.
-   Modelled on the video-zoom overlay above, reusing the same #overlay element. */
+/* PDF pages use CAM's filtered page/grid viewer. Other documents use Google's
+   authenticated preview; page filtering is unavailable inside that embed. */
 function enterDocFocus(f) {
   const src = (f.kind === "pdf") ? ("/api/pdf/" + f.id) : f.embed_url;
   if (!src) return;
@@ -4596,12 +4848,36 @@ function enterDocFocus(f) {
   overlay.classList.add("doc-mode");
   overlayImg.style.display = "none";
   overlay.style.display = "block";
+  if (f.kind === "pdf") {
+    pdfViewer = new CAMPdfViewer(overlay, f, PDF_OMIT_PAGES, async (omitted) => {
+      const response = await fetch("/api/settings", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({pdf_omit_pages: omitted})
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not save the page selection.");
+      PDF_OMIT_PAGES = data.pdf_omit_pages;
+      return PDF_OMIT_PAGES;
+    });
+    sizeDocOverlay();
+    ensureDocCloseBtn();
+    return;
+  }
   const frame = document.createElement("iframe");
   frame.className = "docframe";
   frame.src = src;
   frame.setAttribute("title", f.filename || "Document");
   docFrameEl = frame;
   overlay.appendChild(frame);
+  if (f.kind === "word") {
+    const note = document.createElement("div");
+    note.className = "word-preview-note";
+    note.textContent = "Word preview · For omitted pages and CAM page thumbnails, use a PDF copy. ";
+    const link = document.createElement("a");
+    link.href = f.web_view || src; link.target = "_blank"; link.rel = "noopener";
+    link.textContent = "Open in Drive";
+    note.appendChild(link); overlay.appendChild(note);
+  }
   sizeDocOverlay();
   ensureDocCloseBtn();
 }
@@ -4623,6 +4899,8 @@ function ensureDocCloseBtn() {
 function closeDocFocus() {
   if (!docFocusActive) return;
   docFocusActive = false;
+  if (pdfViewer) { pdfViewer.destroy(); pdfViewer = null; }
+  overlay.querySelector(".word-preview-note")?.remove();
   overlay.classList.remove("doc-mode");
   overlay.style.display = "none";
   overlayImg.style.display = "";
@@ -4637,12 +4915,12 @@ window.addEventListener("resize", () => { if (docFocusActive) sizeDocOverlay(); 
 /* ---------- Grading matrix (one row per student, stable order) ---------- */
 function renderTable() {
   if (!STUDENTS.length) { tableWrap.innerHTML = '<div class="empty">No files.</div>'; return; }
-  if (!SELECTED_CRITERIA.length) {
+  if (!IS_DRAFT && !SELECTED_CRITERIA.length) {
     tableWrap.innerHTML = '<div class="empty">Select one or more MYP criteria above to begin grading.</div>';
     return;
   }
   const t = document.createElement("table");
-  const gradeCols = SELECTED_CRITERIA
+  const gradeCols = (IS_DRAFT ? [] : SELECTED_CRITERIA)
     .map(c => `<th title="Criterion ${c}">Crit ${c}<br>(0–8)</th>`).join("");
   t.innerHTML = `<thead><tr>
       <th class="idcol">ID</th>${gradeCols}<th>Keywords</th><th>Comment</th>
@@ -4684,7 +4962,7 @@ function makeRow(st) {
 
   // One grade selector (0–8) per selected MYP criterion.
   st.grades = st.grades || {};
-  SELECTED_CRITERIA.forEach(crit => {
+  (IS_DRAFT ? [] : SELECTED_CRITERIA).forEach(crit => {
     const tdG = document.createElement("td");
     const sel = document.createElement("select"); sel.className="grade"; sel.dataset.crit = crit;
     GRADES.forEach(g => { const o=document.createElement("option"); o.value=g; o.textContent=g===""?"–":g;
@@ -4780,7 +5058,7 @@ function refreshRow(st) {
 }
 
 async function save(st) {
-  st.graded = !!gradeSum(st) || (st.grades && Object.keys(st.grades).length > 0);
+  st.graded = IS_DRAFT ? !!(st.comment || st.keywords.length) : !!gradeSum(st) || (st.grades && Object.keys(st.grades).length > 0);
   let affected = [st];
   try {
     const res = await fetch("/api/save", {

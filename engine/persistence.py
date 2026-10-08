@@ -176,7 +176,7 @@ _STRING_FIELDS = {
     "source_file", "class_name", "term", "folder_ref",
 }
 _BOOL_SCORE_FIELDS = {"is_valid", "include_in_report", "late"}
-_BOOL_ASSIGNMENT_FIELDS = {"grading_complete", "is_exam"}
+_BOOL_ASSIGNMENT_FIELDS = {"grading_complete", "is_exam", "is_draft"}
 
 
 def _add_issue(issues: List[DatabaseValidationIssue], path: str,
@@ -347,6 +347,23 @@ def _validate_assignment(value: Any, path: str,
     for field in _BOOL_ASSIGNMENT_FIELDS & value.keys():
         if not isinstance(value[field], bool):
             _add_issue(issues, f"{path}.{field}", "expected-boolean")
+    if "draft_feedback" in value:
+        feedback = value["draft_feedback"]
+        if not isinstance(feedback, dict):
+            _add_issue(issues, f"{path}.draft_feedback", "expected-object")
+        else:
+            for sid, record in feedback.items():
+                loc = f"{path}.draft_feedback.*"
+                if not isinstance(sid, str) or not isinstance(record, dict):
+                    _add_issue(issues, loc, "expected-feedback-object")
+                    continue
+                for field in ("comment", "files", "timestamp"):
+                    if field in record and not isinstance(record[field], str):
+                        _add_issue(issues, f"{loc}.{field}", "expected-string")
+                if "keywords" in record:
+                    _validate_string_list(record["keywords"], f"{loc}.keywords", issues)
+                if "late" in record and not isinstance(record["late"], bool):
+                    _add_issue(issues, f"{loc}.late", "expected-boolean")
     if "question_labels" in value:
         _validate_string_list(value["question_labels"],
                               f"{path}.question_labels", issues)
@@ -517,7 +534,7 @@ def _validate_unmatched_works(value: Any, path: str,
                 for field in ("csv_key", "comment", "files", "timestamp"):
                     if field in row and not isinstance(row[field], str):
                         _add_issue(issues, f"{row_path}.{field}", "expected-string")
-                for field in ("late", "is_exam"):
+                for field in ("late", "is_exam", "is_draft"):
                     if field in row and not isinstance(row[field], bool):
                         _add_issue(issues, f"{row_path}.{field}", "expected-boolean")
                 if "keywords" in row:
@@ -801,6 +818,8 @@ def _assignment_to_dict(a: Assignment) -> Dict[str, Any]:
         "term": getattr(a, "term", ""),
         "folder_ref": getattr(a, "folder_ref", ""),
         "grading_complete": bool(getattr(a, "grading_complete", False)),
+        "is_draft": a.is_draft,
+        "draft_feedback": a.draft_feedback,
         "is_exam": bool(getattr(a, "is_exam", False)),
         "max_total": int(getattr(a, "max_total", 0)),
         "question_labels": list(getattr(a, "question_labels", [])),
@@ -821,6 +840,8 @@ def _assignment_from_dict(d: Dict[str, Any]) -> Assignment:
         term=d.get("term", ""),
         folder_ref=d.get("folder_ref", ""),
         grading_complete=bool(d.get("grading_complete", False)),
+        is_draft=bool(d.get("is_draft", False)),
+        draft_feedback=dict(d.get("draft_feedback", {})),
         is_exam=bool(d.get("is_exam", False)),
         max_total=int(d.get("max_total", 0)),
         question_labels=list(d.get("question_labels", [])),

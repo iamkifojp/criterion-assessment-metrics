@@ -1503,7 +1503,7 @@ def qualifying_assignment_count() -> int:
     names = current_term_assignment_names()
     n = 0
     for r in assignment_table():
-        if r["name"] not in names or r["criteria"] == "—":
+        if r["name"] not in names or r["criteria"] == "—" or r.get("is_draft"):
             continue
         if r["name"].strip().lower().endswith("(reflection)"):
             continue
@@ -2995,7 +2995,16 @@ def _publish_workspace_grades(assignment_name: str, folder_ref: str) -> None:
         "folder_ref": folder_ref,
         "published": datetime.now().isoformat(timespec="seconds"),
         "students": students,
+        # The middle module's roster is also the identity source for copied
+        # submissions whose Drive ownership metadata was lost on re-upload.
+        "matching_roster": st.session_state["rosters"].get(cls, []),
+        "work_aliases": aliases,
     }
+    asg = next((a for a in gb().assignments
+                if a.name == assignment_name and a.class_name == cls), None)
+    if asg is not None:
+        payload.update(is_draft=asg.is_draft, criteria=list(asg.criteria),
+                       draft_feedback=asg.draft_feedback)
     import re
     # Key the handoff file by the workspace's DURABLE key, not the raw ref: a
     # Drive ID passes through unchanged, but a local path becomes the same
@@ -3334,6 +3343,25 @@ def excused_assignments_for(sid: str) -> set:
             if v and k.startswith(prefix)}
 
 
+def draft_assignment_names() -> set:
+    cls = st.session_state.get("active_class", "")
+    return {a.name for a in gb().assignments if a.class_name == cls and a.is_draft}
+
+
+def assessment_exclusions_for(sid: str) -> set:
+    """Draft feedback and excused work never participate in numerical math."""
+    return excused_assignments_for(sid) | draft_assignment_names()
+
+
+def draft_feedback_for(student) -> list:
+    """Current-term qualitative evidence, kept separate from score evidence."""
+    cls = st.session_state.get("active_class", "")
+    names = current_term_assignment_names() - excused_assignments_for(student.student_id)
+    return [(a, a.draft_feedback[student.student_id]) for a in gb().assignments
+            if a.class_name == cls and a.is_draft and a.name in names
+            and student.student_id in a.draft_feedback]
+
+
 def missing_assignment_rows(student, names=None) -> list:
     """Assignment-table rows the student has no scores in, among the selected
     criteria-bearing assignments — the Missing = 0 candidates. Excused
@@ -3346,7 +3374,7 @@ def missing_assignment_rows(student, names=None) -> list:
     student_asgs = {sc.assignment for b in student.scores.values() for sc in b}
     out = []
     for r in rows:
-        if r["name"] not in names or r["criteria"] == "—":
+        if r["name"] not in names or r["criteria"] == "—" or r.get("is_draft"):
             continue
         # Folder-backed work still being graded is Awaiting Grade, not missing —
         # it must never invent a 0 (see the policy note above). Once its folder
@@ -3379,7 +3407,7 @@ def aggregate_with_policy(student, crit_letter: str, names=None):
         student, Criterion(crit_letter), method=calculation_method(student.student_id),
         include_assignments=names,
         extra_scores=missing_zero_points(student, crit_letter, names),
-        exclude_assignments=excused_assignments_for(student.student_id) or None,
+        exclude_assignments=assessment_exclusions_for(student.student_id) or None,
     )
 
 
@@ -3445,7 +3473,7 @@ def student_term_grades(student):
 def sync_active_into_scores() -> None:
     """Mirror the CURRENT term's per-assignment On checkboxes onto
     include_in_report, so the math/trend/prompt all follow the selected term."""
-    on = {a.name: assignment_on(a.name) for a in gb().assignments}
+    on = {a.name: assignment_on(a.name) and not a.is_draft for a in gb().assignments}
     for _, score in all_scores():
         score.include_in_report = on.get(score.assignment, True)
 
@@ -3474,7 +3502,7 @@ def assignment_table():
             continue  # belongs to a different class/level
         if asg.name in archived:
             continue  # soft-deleted: hidden from the active table & math
-        pairs = scores_for_assignment(asg.name)
+        pairs = [] if asg.is_draft else scores_for_assignment(asg.name)
         valid = [sc.value for _, sc in pairs if sc.is_valid]
         lates = sum(
             1 for s, sc in pairs
@@ -3516,6 +3544,7 @@ def assignment_table():
             "name": asg.name,
             "criteria": ",".join(asg.criteria) if asg.criteria else "—",
             "is_formative": asg.is_formative,
+            "is_draft": asg.is_draft,
             "is_exam": is_exam,
             "folder_ref": getattr(asg, "folder_ref", "") or "",
             "grading_complete": bool(getattr(asg, "grading_complete", False)),
@@ -3523,7 +3552,8 @@ def assignment_table():
             "raw_avg": round(mean(raw_totals), 1) if raw_totals else None,
             "term": assignment_term(asg),
             "date": when,
-            "submissions": max(len({s.student_id for s, _ in pairs}),
+            "submissions": max(len(asg.draft_feedback) if asg.is_draft else 0,
+                               len({s.student_id for s, _ in pairs}),
                                len(raw_totals)),
             "avg": round(mean(valid), 2) if valid else None,
             "spread": round(pstdev(valid), 2) if len(valid) > 1 else 0.0,
@@ -3540,6 +3570,10 @@ def student_label(student) -> str:
 
 def submitter_keys(assignment: str) -> set:
     keys = set()
+    cls = st.session_state.get("active_class", "")
+    for a in gb().assignments:
+        if a.name == assignment and a.class_name == cls and a.is_draft:
+            keys.update(a.draft_feedback)
     for s, sc in scores_for_assignment(assignment):
         keys.add(s.student_id)
         if s.name:
@@ -4563,6 +4597,8 @@ def _assignment_richness(a) -> tuple:
     same name+class: an exam, one with scores/criteria, or one backed by a
     source file outranks a bare timeline placeholder."""
     return (
+        bool(getattr(a, "is_draft", False)),
+        len(getattr(a, "draft_feedback", {}) or {}),
         bool(getattr(a, "is_exam", False)),
         int(getattr(a, "score_count", 0) or 0),
         len(getattr(a, "criteria", []) or []),
@@ -4679,6 +4715,8 @@ def _ingest_cloud_file(path: str, fname: str, class_name: str,
                       if a.name == assignment
                       and getattr(a, "class_name", "") == class_name
                       and getattr(a, "folder_ref", "")), "")
+    prior_draft = next((a for a in gb().assignments if a.name == assignment
+                        and a.class_name == class_name and a.is_draft), None)
     _purge_assignment_in_class(assignment, class_name)
     # Roster-aware routing inputs (Phase 3): the class roster's keys and the
     # durable alias map. An empty roster leaves both falsy → ingest_csv skips
@@ -4707,6 +4745,8 @@ def _ingest_cloud_file(path: str, fname: str, class_name: str,
         else:
             created = IngestionPipeline(gb()).ingest_csv(
                 path, assignment=assignment, manual_criterion_target=target,
+                is_draft=True if prior_draft else None,
+                draft_criteria=list(prior_draft.criteria) if prior_draft else None,
                 roster_keys=roster_keys or None,
                 aliases=aliases or None,
                 unmatched_out=unmatched,
@@ -4754,6 +4794,7 @@ def _ingest_cloud_file(path: str, fname: str, class_name: str,
             e.get("key")
             for entries in st.session_state["archived_students"].values()
             for e in (entries or []) if e.get("key")}
+        all_roster_keys |= {sid for a in gb().assignments for sid in a.draft_feedback}
         phantoms = [sid for sid, s in gb().students.items()
                     if sid not in all_roster_keys
                     and not any(s.scores.values())
@@ -4808,7 +4849,8 @@ def assign_work(class_name: str, assignment: str, csv_key: str,
     if row.get("is_exam"):
         IngestionPipeline(gb()).materialize_exam_row(assignment, roster_key, row)
     else:
-        IngestionPipeline(gb()).materialize_row(assignment, roster_key, row)
+        IngestionPipeline(gb()).materialize_row(assignment, roster_key, row,
+                                               class_name=class_name)
     # 3. Drop it from the pool; prune an emptied assignment / class.
     pool_map[assignment] = [r for r in rows if r.get("csv_key") != csv_key]
     if not pool_map[assignment]:
@@ -5562,7 +5604,7 @@ def _trend_png(student):
     except ImportError:
         return None
 
-    excused = excused_assignments_for(student.student_id)
+    excused = assessment_exclusions_for(student.student_id)
     zero_by_crit = {c: missing_zero_points(student, c) for c in CRIT_ORDER}
     label_order = sorted(
         {sc.timestamp
@@ -5921,7 +5963,7 @@ def _current_term_evidence(student) -> list:
     """Build :class:`Evidence` items from the student's valid, included scores in
     the CURRENT term's active assignments — the raw material for slicing.
     Excused assignments are left out of the prompt entirely."""
-    names = current_term_assignment_names() - excused_assignments_for(student.student_id)
+    names = current_term_assignment_names() - assessment_exclusions_for(student.student_id)
     items = []
     for bucket in student.scores.values():
         for sc in bucket:
@@ -5940,7 +5982,7 @@ def _current_term_evidence(student) -> list:
 def _matched_task_lines(student) -> list:
     """Current-term assignments the student has marks in, with their criteria.
     Excused assignments are omitted (they are out of the assessment)."""
-    names = current_term_assignment_names() - excused_assignments_for(student.student_id)
+    names = current_term_assignment_names() - assessment_exclusions_for(student.student_id)
     table = {r["name"]: r for r in assignment_table()}
     have = sorted({sc.assignment
                    for bucket in student.scores.values()
@@ -5957,7 +5999,7 @@ def _trend_lines(student, detail: str = "compact") -> list:
     Follows the Missing=0 / Excused policy so the narrated trend matches the
     plotted one. ``detail`` ("compact"|"detailed") controls how much of the
     path each sentence narrates (see ``format_trend_sentence``)."""
-    names = current_term_assignment_names() - excused_assignments_for(student.student_id)
+    names = current_term_assignment_names() - assessment_exclusions_for(student.student_id)
     lines = []
     for c in CRIT_ORDER:
         series = [(sc.timestamp, sc.value)
@@ -5984,7 +6026,7 @@ def _late_submission_stats(student, names) -> tuple:
     where **any** criterion score reads late via the two-layer ``is_late`` (a
     manual override wins, else the synced ``late`` field). Counted per distinct
     assignment — how many criteria it touched is irrelevant."""
-    excused = excused_assignments_for(student.student_id)
+    excused = assessment_exclusions_for(student.student_id)
     submitted = 0
     late = 0
     for asg in names:
@@ -6154,6 +6196,16 @@ def compile_prompt(student, cfg) -> str:
             "Frame the growth areas from this material:\n  - "
             + "\n  - ".join(e.as_text() for e in growths))
 
+    draft_lines = [f"{a.name} (Criterion {', '.join(a.criteria) or 'unspecified'}): "
+                   f"{record.get('comment') or '; '.join(record.get('keywords', []))}"
+                   for a, record in draft_feedback_for(student)
+                   if record.get("comment") or record.get("keywords")]
+    if draft_lines:
+        blocks.append("[CURRENT TERM — DRAFT FEEDBACK, NO MARKS]\n"
+                      "Use these observations qualitatively. Do not infer a score, "
+                      "zero, or completed summative achievement from a draft.\n  - "
+                      + "\n  - ".join(draft_lines))
+
     # ---- 7. Trend trajectory (optional, math-engine derived) ----
     if cfg.get("inc_trend", True):
         # Detail level auto-follows the word budget: a roomier comment (130+
@@ -6214,7 +6266,7 @@ def compile_prompt(student, cfg) -> str:
             "'has room to improve'). The numeric data above is for your "
             "understanding only.")
     req.append("Base the narrative ONLY on the current term's curriculum, "
-               "criterion, strength, growth and trend sections above.")
+               "criterion, strength, growth, draft feedback and trend sections above.")
     if late_block:
         req.append("If a notable share of tasks was late, acknowledge "
                    "submission habits briefly within the next steps.")
@@ -6897,7 +6949,7 @@ def add_assignment_dialog() -> None:
     with st.form("add_asg_form"):
         name = st.text_input("Name", placeholder="e.g. Perspective Drawing Task",
                              autocomplete="off")
-        kind = st.radio("Type", ["Assignment", "Exam"], horizontal=True,
+        kind = st.radio("Type", ["Assignment", "Draft — comments only", "Exam"], horizontal=True,
                         key="add_asg_kind")
         when = st.date_input("Deadline / date", value=date.today(),
                              key="add_asg_date")
@@ -6910,9 +6962,9 @@ def add_assignment_dialog() -> None:
                  "when grading the raw marks.")
         submitted = st.form_submit_button("Create", type="primary",
                                           width="stretch")
-    st.caption("ℹ Once created, an assignment counts as **missing = 0** for "
+    st.caption("ℹ Once created, a scored assignment counts as **missing = 0** for "
                "every student until you enter their grades (or switch it Off "
-               "in the table). An ungraded exam stays out of the math.")
+               "in the table). Drafts and ungraded exams stay out of the math.")
     if submitted:
         name = (name or "").strip()
         if not name:
@@ -6928,7 +6980,7 @@ def add_assignment_dialog() -> None:
             note=("manually created exam — set it up via 🛠 Exam setup"
                   if is_exam else "manually created assignment"),
             class_name=st.session_state["active_class"],
-            term=current_term(), is_exam=is_exam))
+            term=current_term(), is_exam=is_exam, is_draft=kind == "Draft — comments only"))
         st.session_state["date_override"][name] = when
         st.session_state["active"][name] = True
         st.session_state["archived"].discard(name)
@@ -7088,6 +7140,27 @@ def manage_assignment_dialog(name: str, r: dict) -> None:
     A centered modal (rather than a row popover) so it is never clipped or
     squeezed by the narrow Manage column / Window 1 width on a small screen."""
     st.markdown(f"**Manage · {name}**")
+    asg = next((a for a in gb().assignments if a.name == name
+                and a.class_name == st.session_state.get("active_class", "")), None)
+    if asg is not None and not asg.is_exam:
+        draft = st.checkbox("Draft — comments only", value=asg.is_draft,
+                            key=f"draft_{name}", help="Keeps feedback without marks. "
+                            "Excluded from missing zeros, trends and final grades.")
+        focus = st.multiselect("Feedback criteria" if draft else "Assessment criteria",
+                               CRIT_ORDER, default=asg.criteria or (["A"] if draft else []),
+                               key=f"draft_criteria_{name}")
+        if st.button("Apply assessment type", key=f"draft_apply_{name}"):
+            asg.is_draft = draft
+            asg.criteria = list(focus)
+            if draft:
+                for student, score in scores_for_assignment(name):
+                    if score.comment or score.keywords:
+                        asg.draft_feedback.setdefault(student.student_id, {
+                            "comment": score.comment, "keywords": list(score.keywords),
+                            "files": "", "late": score.late,
+                            "timestamp": score.timestamp.isoformat()})
+            persist()
+            st.rerun()
     new = st.text_input("Rename", value=name, key=f"rn_{name}",
                         autocomplete="off")
     if st.button("Apply rename", key=f"rnb_{name}"):
@@ -7138,7 +7211,9 @@ def _render_assignment_table() -> None:
         if c[1].button(name, key=f"sel_{name}", width="stretch"):
             st.session_state["sel_assignment"] = name
             show_analytics_dialog(name)
-        if r.get("is_exam"):
+        if r.get("is_draft"):
+            c[2].caption(f"Draft · {r['criteria']} · {r['date']:%b %d}")
+        elif r.get("is_exam"):
             # Exams show their RAW class average (e.g. "raw ø 31.5/45"), not a
             # band — banding happens in the panel below the table.
             raw = (f"raw ø {r['raw_avg']}/{r['max_total']}"
@@ -8211,6 +8286,8 @@ def render_window2() -> None:
                         continue
                     if is_excused(key, nm):
                         tag = " _(excused)_"
+                    elif table_by_name.get(nm, {}).get("is_draft"):
+                        tag = " _(draft feedback pending; no marks)_"
                     elif awaiting_grade(table_by_name.get(nm, {})):
                         # Folder-backed and still being graded — awaiting a grade
                         # from its folder, never counted as a 0. Once the folder's
@@ -8222,16 +8299,16 @@ def render_window2() -> None:
                     st.markdown(f"- {nm}{tag}")
                 if active_names and len(missing) == len(active_names):
                     st.caption(f"No work recorded in {current_term()} at all. "
-                               "Missing tasks count as **0** in the assessment "
+                               "Missing scored tasks count as **0** in the assessment "
                                "math — for a mid-year transfer, mark their "
                                "pre-arrival tasks Excused (Window 3 edit "
-                               "panel) so nothing counts against them.")
+                               "panel) so nothing counts against them. Drafts never count as 0.")
                 else:
-                    st.caption("Missing tasks inject a **0** into the trend "
+                    st.caption("Missing scored tasks inject a **0** into the trend "
                                "graph and the grade calculation. Mark one "
                                "Excused in Window 3's edit panel to remove it "
                                "from the assessment instead; tasks awaiting "
-                               "grade are never counted as 0.")
+                               "grade and drafts are never counted as 0.")
             else:
                 st.caption(f"All {current_term()} assignments submitted.")
 
@@ -8299,6 +8376,16 @@ def render_window3() -> None:
         student_asgs = {sc.assignment for b in student.scores.values() for sc in b}
         any_cell = False
         for asg in active_names:
+            if table_by_name.get(asg, {}).get("is_draft"):
+                any_cell = True
+                feedback = next((record for a, record in draft_feedback_for(student)
+                                 if a.name == asg), {})
+                st.caption(f"{asg} · Draft · Crit {table_by_name[asg]['criteria']} · no marks")
+                if feedback.get("comment"):
+                    st.write(feedback["comment"])
+                else:
+                    st.caption("Feedback pending — excluded from grade calculations.")
+                continue
             excused_now = is_excused(student.student_id, asg)
             scs = [sc for b in student.scores.values()
                    for sc in b if sc.assignment == asg]
@@ -8370,6 +8457,9 @@ def edit_grade_dialog(sid: str, asg: str, crit: str) -> None:
     vanished off-screen on short window heights). Shows the assignment name,
     a 0-8 dropdown, late/excused checklists, the task's comment, and
     Save / Cancel."""
+    if asg in draft_assignment_names():
+        st.info("This is a draft assignment. Add comments in the grading workspace; no marks are required.")
+        return
     student = find_student(sid)
     if student is None:
         st.caption("Student not found.")
@@ -8577,7 +8667,7 @@ def _trend_figure(student):
     assignments are removed from every trace."""
     import plotly.graph_objects as go
 
-    excused = excused_assignments_for(student.student_id)
+    excused = assessment_exclusions_for(student.student_id)
     zero_by_crit = {c: missing_zero_points(student, c) for c in CRIT_ORDER}
 
     fig = go.Figure()
@@ -8770,13 +8860,19 @@ def clean_comment(text: str) -> str:
 
 def _render_comments(student) -> None:
     items = []
+    drafts = draft_assignment_names()
     for bucket in student.scores.values():
         for sc in bucket:
-            if not sc.include_in_report:
+            if not sc.include_in_report or sc.assignment in drafts:
                 continue  # task not selected into the current term's assessment
             cleaned = clean_comment(sc.comment)
             if cleaned:
                 items.append((sc.timestamp, cleaned))
+    for asg, record in draft_feedback_for(student):
+        cleaned = clean_comment(record.get("comment", ""))
+        if cleaned:
+            items.append((parse_iso_date(record.get("timestamp")) or asg.ingested_at or datetime.now(),
+                          f"{asg.name} (draft): {cleaned}"))
     items.sort(key=lambda x: x[0], reverse=True)
     joined = ", ".join(c for _, c in items)
     st.markdown(f"**Comments log — {current_term()}** (newest first)")
@@ -9486,7 +9582,8 @@ def _class_dialog_body(edit: bool) -> None:
                 "[Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com), "
                 "then create an OAuth **Desktop app** client under "
                 "[Credentials](https://console.cloud.google.com/apis/credentials) "
-                "and save the downloaded JSON as `credentials.json` inside "
+                "and save the downloaded JSON as `credentials.json` (or "
+                "`client_secret*.json`) in the project root or "
                 "`cam_grading_workspace/`; then click **🔗 Connect Google "
                 "Drive** once and sign in with the account that can see the "
                 "class folders (a consent screen still in **Testing** status "
@@ -9520,7 +9617,8 @@ def _class_dialog_body(edit: bool) -> None:
                 watch_master_directory()
             st.rerun()
     drive_help = ("Drive watching needs a one-time Google sign-in (and a "
-                  "credentials.json in cam_grading_workspace/). Opens the "
+                  "credentials.json or client_secret*.json in the project root "
+                  "or cam_grading_workspace/). Opens the "
                   "sign-in page in your browser.")
     if edit:
         # Watch acts on the SAVED master directory (the form above only

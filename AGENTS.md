@@ -41,3 +41,13 @@ backups are what stand between a mistake and lost work.
 - `engine/` — framework-free core (models, ingestion, aggregation, persistence).
 - `cam_grading_workspace/` — optional Flask grading companion.
 - `docs/` — architecture, data dictionary, setup, user manual.
+
+## Deferred setup improvement: OAuth credentials discovery
+
+User request (2026-10-07): implement this when next making other code changes,
+not as a standalone change now. The grading workspace should discover
+`credentials.json` and `client_secret*.json` in both the project root and
+`cam_grading_workspace/`, while retaining its configured cloud-folder fallback.
+First-time users are likely to place their downloaded OAuth credentials in the
+project root. Update setup guidance and missing-credentials messages to make
+both supported locations clear. Keep all credential files git-ignored.

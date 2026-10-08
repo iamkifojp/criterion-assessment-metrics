@@ -303,7 +303,7 @@ _ANY_ID = re.compile(r"(\d+)")
 
 
 def student_id_from_email(email: str) -> str:
-    """Resolve the numeric student ID embedded in a school email address.
+    """Resolve the student ID embedded in a school email address.
 
     The grading sheet's numeric IDs are the email *local part* (the substring
     before ``@``). This strips the domain and isolates the leading numeric ID
@@ -312,6 +312,10 @@ def student_id_from_email(email: str) -> str:
         "100001@school.ed.jp"      -> "100001"
         "100001.jane@school.org"   -> "100001"
         "s100001@school.org"       -> "100001"
+        "26b1001@school.org"       -> "26b1001"
+
+    Multiple digit runs signify an alphanumeric school ID; keep that complete
+    local part so students sharing an enrolment-year prefix remain distinct.
 
     Falls back to the first digit run anywhere in the local part, and finally
     to the trimmed local part itself, so a malformed address never crashes the
@@ -322,6 +326,13 @@ def student_id_from_email(email: str) -> str:
     local = str(email).split("@", 1)[0].strip()
     if not local:
         return ""
+    # Some schools encode enrolment year + letters + serial in the local
+    # part (e.g. 26b1001). Taking only "26" collapses a whole year of students
+    # and parse_classroom_roster then silently drops duplicate keys. Keep the
+    # complete identifier when it contains several distinct digit runs.
+    # Legacy s100001 / 100001.jane forms still resolve as before.
+    if len(_ANY_ID.findall(local)) > 1:
+        return local
     m = _LEADING_ID.match(local)
     if m:
         return m.group(1)
@@ -527,6 +538,8 @@ class IngestionPipeline:
         aliases: Optional[Dict[str, str]] = None,
         unmatched_out: Optional[List[dict]] = None,
         auto_aliases_out: Optional[Dict[str, str]] = None,
+        is_draft: Optional[bool] = None,
+        draft_criteria: Optional[List[str]] = None,
     ) -> List[CriterionScore]:
         """Ingest one CSV export into the gradebook (hybrid mapping).
 
@@ -558,15 +571,27 @@ class IngestionPipeline:
         per_student_override = per_student_override or {}
         ingest_time = ingest_time or datetime.now()
         created: List[CriterionScore] = []
+        feedback = {}
 
         with open(path, "r", encoding="utf-8-sig", newline="") as fh:
             reader = csv.DictReader(fh)
             fieldnames = reader.fieldnames or []
+            rows = list(reader)
+            # Explicit draft exports carry their mode even when all comments
+            # are blank. A CAM assignment setting overrides older CSVs.
+            draft = (is_draft if is_draft is not None else any(
+                (row.get("Assessment Mode") or "").strip().lower() == "draft"
+                for row in rows))
+            focus = set(draft_criteria or [])
+            if draft_criteria is None:
+                for row in rows:
+                    focus.update(c.strip() for c in (row.get("Focus Criteria") or "").split(",")
+                                 if c.strip() in {"A", "B", "C", "D"})
 
             # Decide which columns carry grades and for which criterion.
-            column_map = self._resolve_column_map(
-                fieldnames, grade_column, manual_criterion_target
-            )
+            column_map = (map_criterion_columns(fieldnames) if draft else
+                          self._resolve_column_map(
+                              fieldnames, grade_column, manual_criterion_target))
 
             # Durable format: locate the explicit per-row date column (by exact
             # name, else a case-insensitive match) so legacy files without it
@@ -589,7 +614,7 @@ class IngestionPipeline:
                         late_col = cand
                         break
 
-            for row in reader:
+            for row in rows:
                 sid = (row.get(id_column) or "").strip()
                 if not sid:
                     continue
@@ -619,7 +644,7 @@ class IngestionPipeline:
                 # row can be routed as a unit (byte-identical to the old inline
                 # loop when no routing is in play).
                 row_grades = []
-                for column, criterion in column_map.items():
+                for column, criterion in ({} if draft else column_map).items():
                     grade = self._coerce_grade(row.get(column))
                     if grade is None:
                         continue
@@ -634,7 +659,7 @@ class IngestionPipeline:
                         # Unmatched → pool the whole row for visual matching, but
                         # only when it carried grades (a grade-less row minted no
                         # student before either, so it pools nothing).
-                        if unmatched_out is not None and row_grades:
+                        if unmatched_out is not None and (row_grades or (draft and (comment or keywords or files))):
                             unmatched_out.append({
                                 "csv_key": sid,
                                 "grades": [[c.value, g] for c, g in row_grades],
@@ -643,16 +668,24 @@ class IngestionPipeline:
                                 "files": files,
                                 "late": late,
                                 "timestamp": timestamp.isoformat(),
+                                "is_draft": draft,
                             })
                         continue
                     if auto_alias is not None and auto_aliases_out is not None:
                         auto_aliases_out[sid] = auto_alias
 
+                if draft:
+                    if comment or keywords or files:
+                        feedback[target] = {"comment": comment, "keywords": list(keywords),
+                                            "files": files, "late": late,
+                                            "timestamp": timestamp.isoformat()}
+                        self.gradebook.get_or_create(target)
+                    continue
                 self._apply_grades(target, assignment, row_grades, comment,
                                    keywords, timestamp, late, created)
 
         # Register the assignment metadata (0-4 criteria).
-        criteria_letters = sorted({c.value for c in column_map.values()})
+        criteria_letters = sorted(focus or {c.value for c in column_map.values()}) if draft else sorted({c.value for c in column_map.values()})
         self.gradebook.register_assignment(
             Assignment(
                 name=assignment,
@@ -660,6 +693,8 @@ class IngestionPipeline:
                 source_file=path,
                 ingested_at=ingest_time,
                 score_count=len(created),
+                is_draft=bool(draft),
+                draft_feedback=feedback,
                 note="formative / skipped week - no grades"
                 if not criteria_letters
                 else "",
@@ -693,7 +728,7 @@ class IngestionPipeline:
             created.append(score)
 
     def materialize_row(self, assignment: str, target_sid: str,
-                        pool_row: dict) -> List[CriterionScore]:
+                        pool_row: dict, class_name: Optional[str] = None) -> List[CriterionScore]:
         """Re-create the scores for one pooled *unmatched* row under
         ``target_sid``.
 
@@ -703,6 +738,20 @@ class IngestionPipeline:
         the Window-2 matcher produces exactly the scores a subsequent re-sync —
         routed through the now-recorded alias — would. Returns the scores
         created."""
+        if pool_row.get("is_draft"):
+            target = next((a for a in reversed(self.gradebook.assignments)
+                           if a.name == assignment and a.is_draft
+                           and (class_name is None or a.class_name == class_name)), None)
+            if target is not None:
+                target.draft_feedback[target_sid] = {
+                    "comment": pool_row.get("comment", ""),
+                    "keywords": list(pool_row.get("keywords") or []),
+                    "files": pool_row.get("files", ""),
+                    "late": bool(pool_row.get("late")),
+                    "timestamp": pool_row.get("timestamp", ""),
+                }
+                self.gradebook.get_or_create(target_sid)
+            return []
         row_grades = [(Criterion(c), int(g))
                       for c, g in (pool_row.get("grades") or [])]
         timestamp = parse_iso_date(pool_row.get("timestamp")) or datetime.now()
