@@ -5,7 +5,9 @@
 In CAM Module 1, open an assignment's **Manage** dialog, enable **Draft —
 comments only**, choose feedback criterion **A**, and click **Apply assessment
 type**. Reopen the grading workspace from CAM. Grade inputs are hidden; write
-comments/use keywords and export as usual. Module 2 retains submission matching;
+comments/use keywords and export as usual. Saving a comment or keyword marks
+the artwork **SEEN** on its thumbnail and expanded card, including after reload.
+Drafts without feedback have no review badge. Module 2 retains submission matching;
 Module 3 shows the feedback without zeros or a contribution to final grades.
 New assignments can also be created directly as drafts.
 

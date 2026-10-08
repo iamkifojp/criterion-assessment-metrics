@@ -1533,6 +1533,13 @@ def present_student(key):
     return _anonymize_student(st, labels.get(key, "Work"))
 
 
+def has_assessment(student, is_draft):
+    """Draft review is indicated by feedback; assessed work by saved marks."""
+    if is_draft:
+        return bool(student.get("comment") or student.get("keywords"))
+    return bool(student.get("grades"))
+
+
 def _sync_group_grades(anchor_key):
     """Make every partner in a group share one grade/keywords/comment.
 
@@ -1559,7 +1566,7 @@ def _sync_group_grades(anchor_key):
         tst["comment"] = src.get("comment", "")
         tst["late_marked"] = src.get("late_marked")
         tst["late_manual"] = src.get("late_manual", False)
-        tst["graded"] = bool(tst["grades"])
+        tst["graded"] = has_assessment(tst, STATE.get("is_draft"))
 
 
 # -----------------------------------------------------------------------------
@@ -2258,6 +2265,11 @@ def api_load():
         pub_crits = {c for rec in cam.values() for c in rec["grades"]}
         cache_criteria = sorted(set(cache_criteria) | pub_crits)
 
+    # Recompute after restoring feedback or CAM's handoff. Legacy cached
+    # flags can reflect marks from before an assignment became a draft.
+    for student in students.values():
+        student["graded"] = has_assessment(student, options["is_draft"])
+
     # Restore the custom rubric headers: the live cache wins; otherwise fall
     # back to the legacy grades file; otherwise [] tells the frontend to use
     # its built-in default checklist template.
@@ -2445,8 +2457,7 @@ def api_save():
                 tst["late_marked"] = data["late_marked"]
             if "late_manual" in data:
                 tst["late_manual"] = bool(data["late_manual"])
-            tst["graded"] = (bool(tst.get("comment") or tst.get("keywords"))
-                             if STATE.get("is_draft") else bool(tst.get("grades")))
+            tst["graded"] = has_assessment(tst, STATE.get("is_draft"))
             updated.append(tst)
         # MODIFIED marker (CAM-changed criteria): per-student, not mirrored to
         # partners — dismissing it is a review acknowledgement, not a grade.
@@ -4378,7 +4389,7 @@ function gradeSum(st) {
 /* Card/drawer grade chip text. With one criterion the sum IS the grade, so we
    show a bare number; with several we prefix Σ to signal it's a total. */
 function gradeChipText(st) {
-  if (IS_DRAFT) return (st.comment || (st.keywords || []).length) ? "Feedback saved" : "Draft";
+  if (IS_DRAFT) return (st.comment || (st.keywords || []).length) ? "SEEN" : "";
   const sum = gradeSum(st);
   if (sum === null) return "";
   const n = SELECTED_CRITERIA.length || Object.keys(st.grades || {}).length;

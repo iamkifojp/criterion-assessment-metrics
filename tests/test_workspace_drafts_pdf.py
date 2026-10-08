@@ -9,7 +9,9 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,6 +21,71 @@ from engine.ingestion import IngestionPipeline
 from cam_grading_workspace.pdf_view import visible_pages, prune_pdf_cache
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class WorkspaceUiTests(unittest.TestCase):
+    def test_draft_badges_and_grade_columns(self):
+        node = shutil.which(os.environ.get("CAM_TEST_NODE", "node"))
+        if not node:
+            self.skipTest("Node.js is required for workspace UI checks")
+        source = (ROOT / "cam_grading_workspace/app.py").read_text()
+        # Run the actual UI functions without starting an app or accessing data.
+        functions = []
+        for name in ("gradeSum", "gradeChipText", "renderTable", "makeRow"):
+            start = source.index(f"function {name}(")
+            end = re.search(r"^function ", source[start + 1:], re.MULTILINE)
+            functions.append(source[start:start + 1 + end.start()])
+        script = r"""
+const assert = require('node:assert/strict');
+class Element {
+  constructor(tag) {
+    this.tag = tag; this.children = []; this.dataset = {};
+    this.classList = {add() {}}; this.innerHTML = '';
+  }
+  appendChild(child) { this.children.push(child); }
+  addEventListener() {}
+}
+const document = {createElement: tag => new Element(tag)};
+let IS_DRAFT = true, SELECTED_CRITERIA = ['A', 'B'];
+const tableWrap = new Element('div');
+let STUDENTS = [];
+const selectedKey = null, DEADLINE = '', KEYWORDS = [];
+const GRADES = ['', '0', '1', '8'];
+const groupForKey = () => null;
+const shortIdOf = st => st.key;
+const escapeHtml = text => text;
+const st = {key: 'fictional', keywords: [], comment: '', grades: {A: '8'}};
+STUDENTS = [st];
+""" + "\n".join(functions) + r"""
+const descendants = el => [el, ...el.children.flatMap(descendants)];
+function checkColumns(expected) {
+  tableWrap.children = [];
+  renderTable();
+  const table = tableWrap.children[0];
+  const selectors = descendants(table).filter(el => el.tag === 'select');
+  assert.deepEqual(selectors.map(el => el.dataset.crit), expected);
+  assert.equal(table.innerHTML.includes('Crit A'), expected.includes('A'));
+  assert.equal(table.innerHTML.includes('Crit B'), expected.includes('B'));
+}
+assert.equal(gradeChipText(st), ''); // Old marks never imply draft review.
+checkColumns([]);
+st.comment = 'Explain your artist choice.';
+assert.equal(gradeChipText(st), 'SEEN');
+st.comment = ''; st.keywords = ['Context'];
+assert.equal(gradeChipText(st), 'SEEN');
+st.keywords = [];
+assert.equal(gradeChipText(st), '');
+SELECTED_CRITERIA = [];
+checkColumns([]); // Draft feedback works without a grading criterion.
+IS_DRAFT = false; SELECTED_CRITERIA = ['A', 'B'];
+st.grades = {A: '0', B: '8'};
+checkColumns(['A', 'B']);
+assert.equal(gradeChipText(st), 'Σ8');
+SELECTED_CRITERIA = ['A'];
+assert.equal(gradeChipText(st), '0');
+"""
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class PdfSelectionTests(unittest.TestCase):
@@ -124,6 +191,7 @@ class WorkspaceTests(unittest.TestCase):
             "grades": {"A": "0"}, "comment": "Explain your artist choice.", "keywords": ["Context"]})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.student["grades"], {"A": "8"})
+        self.assertTrue(response.get_json()["student"]["graded"])
         exported = self.client.get("/api/export").get_json()
         path = Path(exported["path"])
         self.assertTrue(path.is_relative_to(self.data))
@@ -138,6 +206,51 @@ class WorkspaceTests(unittest.TestCase):
         self.load()
         self.assertTrue(self.loaded["is_draft"])
         self.assertEqual(self.student["comment"], "Explain your artist choice.")
+        self.assertTrue(self.student["graded"])
+
+    def test_draft_review_requires_feedback_and_clears_when_removed(self):
+        self.ws.STATE["is_draft"] = True
+        self.student.update(grades={"A": "8"}, graded=True)
+        self.ws.save_state()
+        self.load()
+        self.assertFalse(self.student["graded"])
+        response = self.client.post("/api/save", json={"key": self.student["key"],
+            "keywords": ["Context"], "comment": ""})
+        self.assertTrue(response.get_json()["student"]["graded"])
+        self.load()
+        self.assertTrue(self.student["graded"])
+        response = self.client.post("/api/save", json={"key": self.student["key"],
+            "keywords": [], "comment": ""})
+        self.assertFalse(response.get_json()["student"]["graded"])
+        self.load()
+        self.assertFalse(self.student["graded"])
+
+    def test_linked_drafts_share_feedback_and_review_status(self):
+        shutil.copy2(self.pdf, self.folder / "Sam Chen.pdf")
+        self.load()
+        self.ws.STATE["is_draft"] = True
+        students = list(self.ws.STATE["students"].values())
+        first, second = students
+        self.client.post("/api/save", json={"key": first["key"],
+            "comment": "Name your sources."})
+        # Linking from the unseen partner should adopt the reviewed feedback.
+        response = self.client.post("/api/group/link", json={"a_key": second["key"], "b_key": first["key"]})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        for student in students:
+            self.assertEqual(student["comment"], "Name your sources.")
+            self.assertTrue(student["graded"])
+        self.load()
+        self.assertTrue(all(student["graded"] for student in self.ws.STATE["students"].values()))
+
+    def test_oauth_discovery_supports_both_local_locations_and_cloud_fallback(self):
+        workspace = Path(self.ws.BASE_DIR)
+        for folder in (workspace, self.root, self.data):
+            for name in ("credentials.json", "client_secret_fixture.json", "client_secretFixture.json"):
+                with self.subTest(folder=folder.name, name=name):
+                    path = folder / name
+                    path.write_text('{}')
+                    self.assertEqual(Path(self.ws.find_client_secret()), path)
+                    path.unlink()
 
     def test_word_uses_drive_preview_but_never_treats_it_as_a_pdf(self):
         self.assertEqual(self.client.get('/static/pdf_viewer.js').status_code, 200)
@@ -163,6 +276,7 @@ class WorkspaceTests(unittest.TestCase):
         self.load()
         self.assertEqual(self.student["name"], "10001")
         self.assertEqual(self.student["comment"], "Name your sources.")
+        self.assertTrue(self.student["graded"])
         self.assertTrue(self.loaded["is_draft"])
         self.assertEqual(self.loaded["criteria"], ["A"])
         self.assertFalse(path.exists())  # handoff consumed only after saving

@@ -6,6 +6,21 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-09 — SEEN indicators for draft feedback
+
+- Draft artwork thumbnails and expanded cards show **SEEN** once a comment or
+  keyword is saved, making reviewed work easy to identify without marks.
+  Drafts without feedback have no review badge; grade selectors remain hidden.
+- Review status is recalculated when an assignment is reopened or feedback is
+  restored from CAM, and follows shared feedback when partners are linked.
+  Removing all feedback clears the indicator. Old marks do not count as draft
+  review.
+
+Validation: 17 isolated workspace and draft-assessment tests pass, including
+JavaScript checks for draft grade-column suppression and normal grade display,
+feedback save/reload, linked partners, and OAuth discovery in both local
+locations and the cloud fallback.
+
 ## 2026-10-08 — Draft feedback and document viewing
 
 - **Drafts have no marks.** Module 1 can create or label an assignment as
