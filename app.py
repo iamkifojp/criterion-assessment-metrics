@@ -9691,9 +9691,11 @@ def render_tray() -> None:
     labels['teaching'] = f"Current teaching group — {st.session_state['active_class']}"
     if st.session_state.get('report_scope_id') not in options:
         st.session_state['report_scope_id'] = 'teaching'
-    picker = st.columns([4, 2])
-    chosen = picker[0].selectbox('Report for', options, format_func=labels.get, key='report_scope_id')
-    if picker[1].button('Manage reporting classes'):
+    picker = st.columns([0.7, 5, 2], vertical_alignment="center")
+    picker[0].markdown('Report for')
+    chosen = picker[1].selectbox('Report for', options, format_func=labels.get,
+                                key='report_scope_id', label_visibility='collapsed')
+    if picker[2].button('Manage reporting classes'):
         st.session_state.pop('_report_drafts', None)
         for key in list(st.session_state):
             if key.startswith('report_edit_'):

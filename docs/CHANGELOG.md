@@ -6,6 +6,15 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-09 — Align reporting controls on one row
+
+- System deliverables places “Report for”, the reporting-class dropdown and
+  “Manage reporting classes” on one vertically centered row. The dropdown keeps
+  its accessible label while hiding the separate label above it.
+
+Validation: the isolated reporting UI test passes; `git diff --check` passes.
+No student database changes are included.
+
 ## 2026-10-09 — Custom reporting classes across teaching groups
 
 - System deliverables can report a saved custom class/homeroom without changing
