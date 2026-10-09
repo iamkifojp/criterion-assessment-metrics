@@ -6,6 +6,47 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-09 — Custom reporting classes across teaching groups
+
+- System deliverables can report a saved custom class/homeroom without changing
+  the teaching group used for grading or comment generation. The manager saves
+  explicit student/source references, supports search and whole-group selection,
+  five output sorts, manual position numbers and move arrows, rename and deletion.
+  Save/cancel keeps unfinished edits out of the database and existing downloads.
+- Excel, combined report cards, email ZIPs, saved class comments and single cards
+  share the selected membership and order. Each student retains their source
+  group's assignments, unit plan, roster/email and grading context, including
+  unequal workloads, genuine missing work, excused/awaiting work and drafts.
+  Custom Excel adds source provenance and subset analytics, preserves historical
+  Raw Scores, and omits the teaching-group-only Classroom Entry sheet.
+- Reports run against detached snapshots using the existing grading helpers.
+  Same-title assignments stay separate by group; unresolved/archived references,
+  incompatible class settings and ambiguous legacy evidence block the affected
+  custom report. Fixed same-title tasks pulling another roster's students into
+  source membership, and draft assignments appearing as missing numeric marks
+  on report cards. Excel final grades now honor saved final overrides.
+- Saved lists round-trip through checked saves, full snapshots/replacement and
+  conflict recovery. Source rename updates references; deletion/archival keeps
+  unresolved entries; full wipe clears lists; term restore leaves them alone.
+  Empty/absent stores share a dirty fingerprint, so this additive field needs no
+  migration or startup write. Update every device that writes the shared DB.
+- Every download cache uses the same report-content fingerprint, including ZIP
+  and single cards. Scope/name/term/order, grades, comments, roster and settings
+  edits invalidate stale files. Filenames include term and scope discriminators.
+  Saved all-term comments and teacher remarks are exported verbatim.
+- Updated the architecture, data dictionary, user manual and implementation
+  record in `CUSTOM_REPORTING_CLASSES_PLAN.md`.
+
+Validation: 323 tests run, 322 pass and one existing JavaScript check is skipped
+because Node.js is unavailable on PATH. Fictional acceptance fixtures cover
+three source groups, repeated titles, unequal work, exams, drafts, overrides,
+all output sorts and formats, source provenance, mail-merge visibility, cache
+changes, lifecycle preservation, and unchanged live state on successful/failed
+exports. An isolated Streamlit AppTest smoke test covers scope selection, Excel
+building, searchable group selection, save/reload and cancel. Database,
+preferences and workspace paths were temporary; cloud access was disabled.
+`git diff --check` passes. No real student database or roster was changed.
+
 ## 2026-10-09 — Restore ID-only grading and match additional draft files
 
 - Grading cards and expanded previews show student IDs and neutral file labels

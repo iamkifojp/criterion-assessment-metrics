@@ -36,6 +36,11 @@ import sys
 import tempfile
 import time
 import webbrowser
+from copy import deepcopy
+from uuid import uuid4
+
+from engine.reporting import (ReportScope, ReportMember, SORT_MODES,
+    definition_issues, resolve_members, content_fingerprint, source_snapshot, bind_context)
 from datetime import date, datetime
 from collections import Counter
 from statistics import pstdev, mean
@@ -846,6 +851,7 @@ def init_state() -> None:
                                     # configured path or overwrite it.
         "save_status": ("", ""), # (kind, message) for last save attempt
         "prefs": DEFAULT_PREFS.copy(),  # device-local UI prefs (overwritten below)
+        "reporting_classes": [], # year-wide ordered references, never copied grades
         "classes": [],           # [{"name","grade","myp_year"}] taught this year
         "active_class": "",      # name of the class currently in focus
         "active_term": TERMS[0], # term newly-ingested assignments are tagged to
@@ -923,7 +929,7 @@ def init_state() -> None:
             st.session_state["db_load_blocked"] = blocked
         else:
             loaded = load_database_snapshot(snapshot)
-            if loaded and (loaded["gradebook"].students or loaded["gradebook"].assignments):
+            if loaded:
                 st.session_state["gradebook"] = loaded["gradebook"]
                 restore_session(loaded.get("session", {}))
             # The clean baseline represents the logical content captured from
@@ -997,6 +1003,7 @@ def build_session_payload() -> dict:
         "comments_by_term": ss["comments_by_term"],
         "effort_by_term": ss["effort_by_term"],
         "calc_method_by_term": ss["calc_method_by_term"],
+        "reporting_classes": ss.get("reporting_classes", []),
         "classes": ss["classes"],
         "active_class": ss["active_class"],
         "active_term": ss["active_term"],
@@ -1022,9 +1029,10 @@ def build_session_payload() -> dict:
 
 def restore_session(session: dict) -> None:
     """Re-hydrate teacher-side state from a loaded payload (inverse of above)."""
+    ss = st.session_state
+    ss["reporting_classes"] = deepcopy(session.get("reporting_classes", []))
     if not session:
         return
-    ss = st.session_state
     for k in ("late_flags", "excused_flags", "final_override", "teacher_remarks"):
         if isinstance(session.get(k), dict):
             ss[k] = session[k]
@@ -2529,6 +2537,10 @@ def rename_class(old: str, new: str) -> bool:
     for store in ("rosters", "archived_students", "unit_plans"):
         if old in ss[store]:
             ss[store][new] = ss[store].pop(old)
+    for definition in ss.get("reporting_classes", []):
+        for member in definition["members"]:
+            if member["source_class"] == old:
+                member["source_class"] = new
     # Assignments carry their owning class's name.
     for a in gb().assignments:
         if getattr(a, "class_name", "") == old:
@@ -5209,6 +5221,7 @@ def wipe_database_full() -> None:
     """Clear ALL teaching data across every class (device/window prefs kept)."""
     ss = st.session_state
     ss["gradebook"] = Gradebook()
+    ss["reporting_classes"] = []
     ss["classes"] = []
     ss["active_class"] = ""
     ss["rosters"] = {}
@@ -5265,12 +5278,14 @@ def students_for_active_class() -> list:
                      in st.session_state.get("archived_students", {}).get(cls, [])}
     class_assignments = {a.name for a in gb().assignments
                          if getattr(a, "class_name", "") == cls}
+    other_roster_keys = {r.get("key") for source, rows in st.session_state["rosters"].items()
+                         if source != cls for r in rows} - set(roster_keys)
     score_keys = {s.student_id for s, sc in all_scores()
-                  if sc.assignment in class_assignments}
+                  if sc.assignment in class_assignments and s.student_id not in other_roster_keys}
     ordered, seen = [], set()
     for key in roster_keys:
         student = gb().students.get(key)
-        if student is not None and key not in seen:
+        if student is not None and key not in seen and key not in archived_keys:
             ordered.append(student)
             seen.add(key)
     for sid in sorted(score_keys):
@@ -5494,7 +5509,8 @@ def build_excel_bytes() -> bytes:
         row = [student.student_id, student.name]
         for c in CRIT_ORDER:
             res = aggregate_with_policy(student, c)
-            row.append(f"{res.rounded_band}*" if res else "")
+            override = st.session_state["final_override"].get(student.student_id, {}).get(c)
+            row.append(override if override is not None else (f"{res.rounded_band}*" if res else ""))
         _n, _total, effort, myp, gyo = student_term_grades(student)
         row += [effort,
                 myp if myp is not None else "N/A",
@@ -5749,6 +5765,8 @@ def _student_docx(document, student, method, include_effort_school=True):
     head.add_run(f"Class: {ac.get('name', '')}     "
                  f"Subject: {subject_label()}     "
                  f"Term: {current_term()}").bold = True
+    if st.session_state.get("report_name"):
+        document.add_paragraph(f"Reporting class: {st.session_state['report_name']}")
     plan = st.session_state["unit_plan"]
     if plan:
         document.add_paragraph(f"Unit: {plan.unit_title}")
@@ -5757,7 +5775,7 @@ def _student_docx(document, student, method, include_effort_school=True):
     # ---- Individual marks (selected tasks, incl. Missing = 0 / Excused) ----
     # Student-facing wording: the 0-8 mark is labelled "Grade", never "band".
     rows = assignment_table()
-    active_names = [r["name"] for r in rows if assignment_on(r["name"])]
+    active_names = [r["name"] for r in rows if assignment_on(r["name"]) and not r.get("is_draft")]
     rows_by_name = {r["name"]: r for r in rows}
     marks = document.add_table(rows=1, cols=5)
     marks.style = "Table Grid"
@@ -5925,7 +5943,7 @@ def build_class_comments_docx(students) -> bytes:
     """One document compiling every student's saved comments for the whole
     class — each term's overall comment plus any teacher remarks."""
     document = _new_report_document()
-    cls = st.session_state["active_class"]
+    cls = st.session_state.get("report_name") or st.session_state["active_class"]
     document.add_heading(f"Class comments — {cls}", level=0)
     head = document.add_paragraph()
     head.add_run(f"Class: {cls}     Subject: {subject_label()}     "
@@ -5936,15 +5954,15 @@ def build_class_comments_docx(students) -> bytes:
         wrote = False
         for term in TERMS:
             text = ((by_term.get(term, {}) or {})
-                    .get(student.student_id, "") or "").strip()
-            if not text:
+                    .get(student.student_id, "") or "")
+            if not text.strip():
                 continue
             document.add_heading(term, level=2)
             document.add_paragraph(text)
             wrote = True
         remarks = (st.session_state["teacher_remarks"]
-                   .get(student.student_id, "") or "").strip()
-        if remarks:
+                   .get(student.student_id, "") or "")
+        if remarks.strip():
             document.add_heading("Teacher remarks", level=2)
             document.add_paragraph(remarks)
             wrote = True
@@ -9369,6 +9387,282 @@ def _render_ai_deck(student) -> None:
 # SYSTEM DELIVERABLES TRAY
 # --------------------------------------------------------------------------
 
+def reporting_snapshot():
+    """Capture report inputs, excluding device preferences, API keys and widgets."""
+    state = deepcopy(build_session_payload())
+    state["unit_plans"] = deepcopy(st.session_state["unit_plans"])
+    return state, deepcopy(gb())
+
+
+class ReportingExport:
+    """One detached report scope shared by every tray deliverable."""
+    def __init__(self, scope, state, book):
+        self.scope = scope
+        self.contexts = {}
+        self.analytics = {}
+        for source in dict.fromkeys(m.source_class for m in scope.members):
+            subset = source_snapshot(state, book, scope, source)
+            self.analytics[source] = bind_context(globals(), subset)
+            names = {a.name for a in book.assignments if a.class_name == source}
+            archived = {r.get('key') for r in state.get('archived_students', {}).get(source, [])}
+            roster_ids = {r['key'] for r in state['rosters'].get(source, [])}
+            other_ids = {r['key'] for group, rows in state['rosters'].items() if group != source for r in rows} - roster_ids
+            ids = list(dict.fromkeys([r['key'] for r in state['rosters'].get(source, [])]
+                    + [s.student_id for s in book if s.student_id not in other_ids and any(sc.assignment in names
+                        for bucket in s.scores.values() for sc in bucket)]
+                    + [m.student_id for m in scope.members if m.source_class == source]))
+            group_scope = ReportScope(scope.id, scope.name, scope.term,
+                    tuple(ReportMember(sid, source) for sid in ids if sid not in archived), scope.custom)
+            snapshot = source_snapshot(state, book, group_scope, source)
+            self.contexts[source] = bind_context(globals(), snapshot)
+        self.members = [(self.contexts[m.source_class],
+                         self.contexts[m.source_class].gb().students[m.student_id])
+                        for m in scope.members]
+        self.fingerprint = content_fingerprint(scope, state, book)
+
+    def docx(self, sid=None, mailmerge=False):
+        document = _new_report_document()
+        members = [(ctx, student) for ctx, student in self.members
+                   if sid is None or student.student_id == sid]
+        for i, (ctx, student) in enumerate(members):
+            ctx._student_docx(document, student, ctx.calculation_method(student.student_id),
+                              include_effort_school=not mailmerge)
+            if i < len(members) - 1:
+                document.add_page_break()
+        buf = io.BytesIO()
+        document.save(buf)
+        return buf.getvalue()
+
+    def zip(self):
+        import zipfile
+        seen, skipped = set(), []
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+            for ctx, student in self.members:
+                email = ctx.student_email_for(student).strip()
+                reason = ("no email on roster" if not email else
+                          "email unusable as filename" if re.search(r'[\\/:*?"<>|]', email) else
+                          "duplicate email" if email.casefold() in seen else "")
+                if reason:
+                    skipped.append((student_label(student), reason))
+                    continue
+                seen.add(email.casefold())
+                archive.writestr(f"{email}.docx", self.docx(student.student_id, mailmerge=True))
+        return buf.getvalue(), skipped
+
+    def comments(self):
+        # Comments are ID-keyed year-wide; collect with the existing builder in
+        # scope order, without generating or modifying any text.
+        if not self.members:
+            document = _new_report_document()
+            document.add_heading(f"Class comments — {self.scope.name}", level=0)
+            buf = io.BytesIO()
+            document.save(buf)
+            return buf.getvalue()
+        ctx = self.members[0][0]
+        return ctx.build_class_comments_docx([s for _, s in self.members])
+
+    def excel(self):
+        from copy import copy
+        from openpyxl import load_workbook, Workbook
+        if not self.scope.custom:
+            return next(iter(self.analytics.values())).build_excel_bytes()
+        wb = Workbook()
+        wb.remove(wb.active)
+        kit = _xl_style_kit()
+        templates = {}
+        for source, ctx in self.analytics.items():
+            source_wb = load_workbook(io.BytesIO(ctx.build_excel_bytes()))
+            for title in ("Final Suggestions", "Raw Scores", "Assignments"):
+                original = source_wb[title]
+                header = 6 if title == "Assignments" else 1
+                if title not in templates:
+                    target = wb.create_sheet(title)
+                    templates[title] = target
+                    for row in original.iter_rows(min_row=1, max_row=header):
+                        for cell in row:
+                            dest = target.cell(cell.row, cell.column, cell.value)
+                            for attr in ("font", "fill", "border", "alignment", "protection"):
+                                setattr(dest, attr, copy(getattr(cell, attr)))
+                            dest.number_format = cell.number_format
+                    target.freeze_panes = original.freeze_panes
+                    target.sheet_view.showGridLines = False
+                    for key, dimension in original.column_dimensions.items():
+                        target.column_dimensions[key].width = dimension.width
+                    target.cell(header, original.max_column + 1, "Teaching group")
+                    _style_header_row(target, header, original.max_column + 1, kit)
+                target = templates[title]
+                for row in original.iter_rows(min_row=header + 1):
+                    dest_row = target.max_row + 1
+                    for cell in row:
+                        dest = target.cell(dest_row, cell.column, cell.value)
+                        for attr in ("font", "fill", "border", "alignment", "protection"):
+                            setattr(dest, attr, copy(getattr(cell, attr)))
+                        dest.number_format = cell.number_format
+                    target.cell(dest_row, original.max_column + 1, source)
+        # Output order is independent of source grouping.
+        order = {m.student_id: i for i, m in enumerate(self.scope.members)}
+        for title in ('Final Suggestions', 'Raw Scores'):
+            ws = wb[title]
+            rows = sorted(list(ws.values)[1:], key=lambda r: order[r[0]])
+            for i, row in enumerate(rows, 2):
+                for j, value in enumerate(row, 1):
+                    ws.cell(i, j, value)
+        for row, (ctx, student) in enumerate(self.members, 2):
+            ws_final = wb['Final Suggestions']
+            for column, criterion in enumerate(CRIT_ORDER, 3):
+                res = ctx.aggregate_with_policy(student, criterion)
+                override = ctx.st.session_state['final_override'].get(student.student_id, {}).get(criterion)
+                value = override if override is not None else (f"{res.rounded_band}*" if res else "")
+                ws_final.cell(row, column).value = value
+            _, _, effort, myp, school = ctx.student_term_grades(student)
+            for column, value in enumerate((effort, myp if myp is not None else 'N/A',
+                                             school if school is not None else 'N/A'), 7):
+                ws_final.cell(row, column).value = value
+        ws = wb['Assignments']
+        ws.cell(1, 2, self.scope.name)
+        ws.cell(2, 2, self.scope.name)
+        wb['Raw Scores'].cell(1, 2, 'Assignment (source-group history, all terms)')
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+
+@st.dialog("Manage reporting classes", width="large")
+def reporting_classes_dialog():
+    """Widget edits are private until an explicitly validated Save."""
+    ss = st.session_state
+    definitions = ss.get('reporting_classes', [])
+    options = ['new'] + [d['id'] for d in definitions]
+    labels = {d['id']: d['name'] for d in definitions}
+    if ss.get('report_manager_id') not in options:
+        ss['report_manager_id'] = 'new'
+    chosen = st.selectbox('Edit saved list', options,
+                          format_func=lambda key: labels.get(key, 'Create a reporting class'),
+                          key='report_manager_id')
+    definition = next((d for d in definitions if d['id'] == chosen),
+                      {'id': str(uuid4()), 'name': '', 'sort_mode': 'manual', 'members': []})
+    # Prefix all draft widgets by definition ID, avoiding leaked edits between lists.
+    prefix = f'report_edit_{chosen}'
+    name = st.text_input('Reporting class name', value=definition['name'], key=prefix+'_name')
+    sort_mode = st.selectbox('Output order', SORT_MODES,
+                            index=SORT_MODES.index(definition['sort_mode']), key=prefix+'_sort',
+                            format_func=lambda mode: {'manual': 'Manual / register order',
+                                'last_first': 'Surname A–Z', 'first_last': 'Given name A–Z',
+                                'gojuon': 'Gojuon', 'email': 'Email'}[mode])
+    sources = st.multiselect('Source teaching groups', class_names(),
+                            default=list(dict.fromkeys(m['source_class'] for m in definition['members']
+                                                       if m['source_class'] in class_names())),
+                            key=prefix+'_sources')
+    query = st.text_input('Search name, ID or email', key=prefix+'_query').casefold().strip()
+    saved = {(m['student_id'], m['source_class']): i for i, m in enumerate(definition['members'], 1)}
+    candidates = dict(saved)
+    draft = ss.setdefault('_report_drafts', {}).setdefault(chosen, {})
+    for source in sources:
+        archived = {r.get('key') for r in ss['archived_students'].get(source, [])}
+        for row in ss['rosters'].get(source, []):
+            if row.get('key') and row['key'] not in archived:
+                candidates.setdefault((row['key'], source), len(candidates)+1)
+        roster_ids = {r.get('key') for r in ss['rosters'].get(source, [])}
+        other_ids = {r.get('key') for group, entries in ss['rosters'].items() if group != source for r in entries} - roster_ids
+        for student in gb():
+            if student.student_id not in archived and student.student_id not in other_ids and (
+                any(sc.assignment in {a.name for a in gb().assignments if a.class_name == source}
+                    for b in student.scores.values() for sc in b)
+                or any(student.student_id in a.draft_feedback for a in gb().assignments if a.class_name == source)):
+                candidates.setdefault((student.student_id, source), len(candidates)+1)
+    for source in sources:
+        if st.button(f'Select all — {source}', key=prefix+'_all_'+source):
+            for sid, group in candidates:
+                if group == source:
+                    key = f'{prefix}_member_{group}_{sid}'
+                    ss[key] = draft[key] = True
+    rows = []
+    for (sid, source), position in candidates.items():
+        roster = next((r for r in ss['rosters'].get(source, []) if r.get('key') == sid), {})
+        student = gb().students.get(sid)
+        display_name = roster.get('name') or (student.name if student else sid)
+        email = roster.get('email', '')
+        label = f"{display_name} · {sid} · {email} · {source}"
+        member_key = f'{prefix}_member_{source}_{sid}'
+        position_key = f'{prefix}_position_{source}_{sid}'
+        draft.setdefault(member_key, (sid, source) in saved)
+        draft.setdefault(position_key, position)
+        ss.setdefault(member_key, draft[member_key])
+        ss.setdefault(position_key, draft[position_key])
+        rows.append((sid, source, label, member_key, position_key, display_name, email))
+    def move(row, delta):
+        selected = sorted([r for r in rows if draft.get(r[3])], key=lambda r: draft[r[4]])
+        index = selected.index(row)
+        other = index + delta
+        if 0 <= other < len(selected):
+            a, b = row[4], selected[other][4]
+            draft[a], draft[b] = draft[b], draft[a]
+            ss[a], ss[b] = draft[a], draft[b]
+    def remember(key):
+        draft[key] = ss[key]
+    st.caption('Choose one source per student ID. Position numbers must be unique; arrows swap selected positions. Hidden search results retain their selection.')
+    headers = st.columns([0.6, 3, 3, 2, 1.2, 0.5, 0.5])
+    for column, title in zip(headers, ('Use', 'Name', 'ID / email', 'Source group', 'Position', '', '')):
+        column.caption(title)
+    for row in rows:
+        sid, source, label, member_key, position_key, display_name, email = row
+        if query and query not in label.casefold():
+            continue
+        cols = st.columns([0.6, 3, 3, 2, 1.2, 0.5, 0.5])
+        cols[0].checkbox(label, key=member_key, label_visibility='collapsed',
+                         on_change=remember, args=(member_key,))
+        cols[1].write(display_name)
+        cols[2].caption(f'{sid} · {email}')
+        cols[3].caption(source)
+        cols[4].number_input('Position', min_value=1, step=1, key=position_key,
+                             label_visibility='collapsed', on_change=remember, args=(position_key,))
+        cols[5].button('↑', key=position_key+'_up', on_click=move, args=(row, -1), disabled=not ss[member_key])
+        cols[6].button('↓', key=position_key+'_down', on_click=move, args=(row, 1), disabled=not ss[member_key])
+    selected = sorted([r for r in rows if draft.get(r[3])], key=lambda r: draft[r[4]])
+    proposed = dict(id=definition['id'], name=name.strip(), sort_mode=sort_mode,
+                    members=[{'student_id': r[0], 'source_class': r[1]} for r in selected])
+    updated = [deepcopy(d) for d in definitions if d['id'] != chosen] + [proposed]
+    def close():
+        ss.pop('_report_drafts', None)
+        for key in list(ss):
+            if key.startswith('report_edit_'):
+                del ss[key]
+        st.rerun()
+    buttons = st.columns(3)
+    if buttons[0].button('Save reporting class', type='primary'):
+        issues = definition_issues(updated)
+        if len({draft[r[4]] for r in selected}) != len(selected):
+            issues.append('Position numbers must be unique.')
+        _, unresolved = resolve_members(proposed, ss, gb(), sort_roster)
+        # Repair unresolved references, metadata conflicts and evidence
+        # ambiguity before saving the complete edit.
+        issues.extend(unresolved)
+        if issues:
+            st.error('Cannot save: ' + '; '.join(issues))
+        else:
+            previous = deepcopy(definitions)
+            ss['reporting_classes'] = updated
+            persist(show=True)
+            if not ss.get("db_dirty", True) and not ss.get("db_load_blocked"):
+                close()
+            else:
+                ss['reporting_classes'] = previous
+                st.error('Save failed; the saved list was restored. Your dialog edits remain available.')
+    if buttons[1].button('Cancel'):
+        close()
+    confirm = st.checkbox('Delete this saved list only; students and grades remain available.', disabled=chosen == 'new')
+    if buttons[2].button('Delete reporting class', disabled=chosen == 'new' or not confirm):
+        previous = deepcopy(definitions)
+        ss['reporting_classes'] = [d for d in definitions if d['id'] != chosen]
+        persist(show=True)
+        if not ss.get("db_dirty", True) and not ss.get("db_load_blocked"):
+            close()
+        else:
+            ss['reporting_classes'] = previous
+            st.error('Delete could not be saved; the list was restored.')
+
+
 def render_tray() -> None:
     st.markdown("### System deliverables")
 
@@ -9391,19 +9685,53 @@ def render_tray() -> None:
         st.caption("Exports are paused while files sit in staging — commit them first.")
         return
 
-    cols = st.columns(5, vertical_alignment="top")
-    if not list(gb()):
-        st.caption("Ingest a grading CSV to enable exports.")
+    definitions = st.session_state.get("reporting_classes", [])
+    options = ['teaching'] + [d['id'] for d in definitions]
+    labels = {d['id']: f"Custom — {d['name']}" for d in definitions}
+    labels['teaching'] = f"Current teaching group — {st.session_state['active_class']}"
+    if st.session_state.get('report_scope_id') not in options:
+        st.session_state['report_scope_id'] = 'teaching'
+    picker = st.columns([4, 2])
+    chosen = picker[0].selectbox('Report for', options, format_func=labels.get, key='report_scope_id')
+    if picker[1].button('Manage reporting classes'):
+        st.session_state.pop('_report_drafts', None)
+        for key in list(st.session_state):
+            if key.startswith('report_edit_'):
+                del st.session_state[key]
+        reporting_classes_dialog()
+    definition = next((d for d in definitions if d['id'] == chosen), None)
+    if definition:
+        members, errors = resolve_members(definition, st.session_state, gb(), sort_roster)
+        scope = ReportScope(chosen, definition['name'], current_term(), members, True)
+    else:
+        members = tuple(ReportMember(s.student_id, st.session_state['active_class'])
+                        for s in students_for_active_class())
+        errors = []
+        scope = ReportScope('teaching', st.session_state['active_class'], current_term(), members)
+    groups = ', '.join(dict.fromkeys(m.source_class for m in members)) or 'none'
+    st.caption(f"{scope.name} · {len(members)} members · Teaching groups: {groups} · {scope.term}")
+    if errors:
+        for error in errors:
+            st.error(error)
+        st.caption('Repair or remove unresolved members before building this custom report.')
         return
-
-    # Exports are scoped to the active Class/Level, not the whole gradebook.
-    active = st.session_state["active_class"]
-    class_students = students_for_active_class()
-    st.caption(f"Exports cover the **{active}** class only "
-               f"({len(class_students)} student(s)). Click a button to build "
-               "the file, then download it.")
+    if not members:
+        st.caption('No students in this report yet.')
+        return
+    state, book = reporting_snapshot()
+    report = ReportingExport(scope, state, book)
+    fingerprint = report.fingerprint
+    cols = st.columns(5, vertical_alignment="top")
+    active = scope.name
+    class_students = [student for _, student in report.members]
+    if scope.custom:
+        st.caption('Custom Excel omits Classroom Entry: direct Classroom column pasting requires a teaching-group roster. Raw Scores retains source-group history across terms.')
     date_tag = date.today().isoformat()
-    safe_cls = _safe_dirname(active)
+    safe_cls = _safe_dirname(active) + '_' + _safe_dirname(scope.term)
+    if scope.custom:
+        safe_cls += '_' + scope.id
+    else:
+        safe_cls += '_' + hashlib.sha256(active.encode()).hexdigest()[:8]
     mime_xlsx = ("application/vnd.openxmlformats-officedocument."
                  "spreadsheetml.sheet")
     mime_docx = ("application/vnd.openxmlformats-officedocument."
@@ -9414,16 +9742,16 @@ def render_tray() -> None:
     else:
         _export_slot(
             cols[0], "xlsx", f"Build Excel master — {active}",
-            build_excel_bytes,
+            report.excel,
             f"CAM_master_{safe_cls}_{date_tag}.xlsx", mime_xlsx,
-            ctx=(active, current_term()),
+            ctx=(fingerprint,),
             help_text="Multi-tab workbook: final suggestions, raw scores, "
                       "assignment analytics (with class/subject/term).")
         _export_slot(
             cols[1], "pack", f"Build report-card pack — {active}",
-            lambda: build_reportcards_docx(class_students),
+            report.docx,
             f"report_{safe_cls}_{date_tag}.docx", mime_docx,
-            ctx=(active, current_term()),
+            ctx=(fingerprint,),
             help_text="One document, one page per student: individual marks, "
                       "the progression graph, final criterion grades and "
                       "comments.")
@@ -9435,14 +9763,14 @@ def render_tray() -> None:
         # it is named after). The skipped-student note is rendered full-width
         # below the row (it lists names and would not fit this narrow column).
         slots = st.session_state.setdefault("export_ready", {})
-        zctx = (active, current_term(), len(class_students))
+        zctx = (fingerprint,)
         if cols[2].button(f"Build mail-merge pack — {active}",
                           key="build_mailmerge", width="stretch",
                           help="A ZIP of individual report cards, each named "
                                "<student-email>.docx, for batch emailing. PDF "
                                "conversion happens when your send-script mails "
                                "them."):
-            data, skipped = build_reportcards_zip(class_students)
+            data, skipped = report.zip()
             slots["mailmerge"] = {
                 "ctx": zctx, "fname": f"mailmerge_{safe_cls}_{date_tag}.zip",
                 "data": data, "skipped": skipped}
@@ -9456,28 +9784,33 @@ def render_tray() -> None:
             slots.pop("mailmerge", None)   # stale (class/term changed) — drop
         _export_slot(
             cols[3], "comments", f"Build class comments — {active}",
-            lambda: build_class_comments_docx(class_students),
+            report.comments,
             f"comments_{safe_cls}_{date_tag}.docx", mime_docx,
-            ctx=(active, current_term()),
+            ctx=(fingerprint,),
             help_text="Compiles every student's saved comments (all terms) "
                       "into one document.")
     sid = st.session_state["focus_sid"]
-    stu = find_student(sid) if sid else None
+    if scope.custom:
+        member_labels = {s.student_id: student_label(s) for _, s in report.members}
+        if st.session_state.get('report_single_sid') not in member_labels:
+            st.session_state['report_single_sid'] = next(iter(member_labels))
+        sid = cols[4].selectbox('Report student', list(member_labels), format_func=member_labels.get,
+                                key='report_single_sid')
+    stu = next((s for _, s in report.members if s.student_id == sid), None)
     if stu is not None:
         safe_stu = _safe_dirname(student_label(stu)).replace(" ", "_")
         _export_slot(
             cols[4], "single", f"Build report — {student_label(stu)}",
-            lambda: build_single_docx(stu),
-            f"report_{safe_stu}_{date_tag}.docx", mime_docx,
-            ctx=(active, current_term(), sid))
+            lambda: report.docx(sid),
+            f"report_{safe_cls}_{safe_stu}_{hashlib.sha256(sid.encode()).hexdigest()[:8]}_{date_tag}.docx", mime_docx,
+            ctx=(fingerprint, sid))
     else:
         cols[4].caption("Select a student to export their single card.")
 
     # Mail-merge skipped-student note — full width, below the button row, since
     # it lists every left-out student and would overflow the narrow column.
     mm_slot = st.session_state.get("export_ready", {}).get("mailmerge")
-    if class_students and mm_slot and mm_slot.get("ctx") == (
-            active, current_term(), len(class_students)):
+    if class_students and mm_slot and mm_slot.get("ctx") == (fingerprint,):
         skipped = mm_slot.get("skipped") or []
         if skipped:
             lines = "\n".join(f"- {lbl}: {why}" for lbl, why in skipped)
@@ -9496,7 +9829,7 @@ def _export_slot(col, kind: str, label: str, builder, fname: str, mime: str,
     download_button`` computes its payload up front) — with per-student chart
     rendering that meant multi-minute freezes at boot and on every student
     click. Building only when asked makes reruns instant. The built file is
-    kept until the class/term (or focused student) changes."""
+    kept until its report-content fingerprint (or selected student) changes."""
     slots = st.session_state.setdefault("export_ready", {})
     if col.button(label, key=f"build_{kind}", width="stretch",
                   help=help_text or None):

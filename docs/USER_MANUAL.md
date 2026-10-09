@@ -307,6 +307,52 @@ permanent delete, it's gated behind the **Confirm** checkbox.
 
 ---
 
+## Reporting a custom class or homeroom
+
+Keep marking and generating comments in the main teaching groups. In **System
+deliverables**, **Report for** chooses either the current teaching group or a
+saved custom reporting class. This selection leaves the main class, focused
+student, term and comment-generation scope in place. A fresh session defaults
+to the current teaching group.
+
+Choose **Manage reporting classes** to create a named list or edit an existing
+one. Select source teaching groups, use **Select all** for a group if helpful,
+then tick/untick individual students. The table shows name, ID/email and source
+group; search filters the table while keeping selections. Choose one source
+group for each student ID. Students with no marks or only draft feedback can
+be selected too. The same student can belong to several saved lists.
+
+Use unique position numbers or the up/down arrows for exact register order.
+Choose Manual, Surname A–Z, Given name A–Z, Gojuon or Email for output order.
+These sorts leave the saved manual order and teaching-group roster order intact.
+**Save reporting class** saves the complete edit; **Cancel** discards it. Deleting
+a reporting class deletes only its saved list, leaving students and grades
+available in their teaching groups.
+
+The scope caption shows member count, source groups and selected term. Resolve
+any missing/archived members, ambiguous legacy evidence or conflicting source
+subject/year/MYP settings before building that custom report. Other reports
+remain available. Different assignment counts and unfinished grading do not
+block export: each student's expected work and grades come from their own
+teaching group, with CAM's usual missing, excused and awaiting-grade policies.
+
+All five deliverables use the selected members and order. Custom Excel includes
+teaching-group provenance and subset assignment statistics; Raw Scores retains
+source-group history across terms. It omits Classroom Entry, which remains a
+teaching-group tool for pasting marks back to Classroom. Report cards show the
+reporting class and source teaching group, with that group's unit plan. Custom
+single cards have their own member selector. The mail-merge ZIP retains school
+email filenames, email warnings and withheld-grade rules. Class comments collect
+saved all-term comments and teacher remarks unchanged, without generating text.
+
+Build each file, then download it. Editing membership, order, names, grades,
+comments or report settings invalidates previously built downloads. Downloaded
+files remain snapshots. Reporting lists apply across terms within the current
+database; term backups do not recover them, so keep whole-database backups too.
+Update CAM on every device that writes the shared database before using these
+lists. Automatic workbook-to-roster mapping, transfer history and multi-year
+rollover are outside this feature; initial membership is selected manually.
+
 ## Where your data lives
 
 Your real gradebook is a single `acm_database.json` in a folder **you** choose —
