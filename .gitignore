@@ -53,6 +53,7 @@ client_secret*.json
 local_device_prefs.json
 gcg_settings.json
 grades_*.json
+cam_grades_*.json
 grading_cache.json
 workspace_startup.log
 pdf_cache/

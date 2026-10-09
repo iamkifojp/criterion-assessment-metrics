@@ -364,6 +364,9 @@ class Assignment:
     term: str = ""
     folder_ref: str = ""
     grading_complete: bool = False
+    # Drafts can target criteria but hold descriptive feedback without scores.
+    is_draft: bool = False
+    draft_feedback: Dict[str, dict] = field(default_factory=dict)
     # Exam (item-level) imports from the CAM grading app. Raw totals live in
     # each Student.exam_results[name]; ``criteria`` stays empty until the
     # teacher assigns 0-8 bands, at which point normal CriterionScores appear.
@@ -379,7 +382,7 @@ class Assignment:
     @property
     def is_formative(self) -> bool:
         """True when the assignment assessed no criteria (0-criterion event)."""
-        return len(self.criteria) == 0 and not self.is_exam
+        return self.is_draft or (len(self.criteria) == 0 and not self.is_exam)
 
 
 @dataclass
