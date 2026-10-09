@@ -6,6 +6,19 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-09 — Wrap long grading-sheet IDs
+
+- Long unmatched submission labels wrap within the grading sheet's ID column
+  and stay left aligned, preventing overlap with keyword checkboxes. File IDs
+  and filenames without spaces can also wrap. The same styling applies to
+  student labels in the exam grading sheet.
+- Repository instructions now record OAuth credentials discovery as completed
+  and retain its supported locations, discovery order and git-ignore rules.
+
+Validation: `git diff --check` passes. Of 21 isolated submission-identity tests,
+20 pass; one existing test helper omits `has_assessment`, causing a `NameError`
+in its assignment-load test. No live app or real database was used.
+
 ## 2026-10-09 — SEEN indicators for draft feedback
 
 - Draft artwork thumbnails and expanded cards show **SEEN** once a comment or

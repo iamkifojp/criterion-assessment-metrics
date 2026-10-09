@@ -3772,8 +3772,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
   td.name { font-weight:600; white-space:nowrap; }
   td.name .sub { display:block; font-weight:400; color:var(--muted); font-size:11px; }
   /* Narrow "ID" column lets the divider slide far right for max art-grid space */
-  th.idcol, td.idcol { width:84px; min-width:64px; max-width:120px; }
-  td.idcol .sid { font-weight:600; white-space:nowrap; }
+  th.idcol, td.idcol { width:84px; min-width:64px; max-width:120px; text-align:left; }
+  td.idcol { white-space:normal; }
+  td.idcol .sid { display:inline-block; max-width:120px; font-weight:600;
+                  white-space:normal; overflow-wrap:anywhere; }
   .rowchain { margin-left:5px; cursor:help; font-size:12px; vertical-align:middle; }
   select.grade { width:62px; padding:5px; background:var(--panel2); color:var(--text);
                  border:1px solid var(--line); border-radius:5px; font-size:14px; }
