@@ -5,7 +5,10 @@
 In CAM Module 1, open an assignment's **Manage** dialog, enable **Draft —
 comments only**, choose feedback criterion **A**, and click **Apply assessment
 type**. Reopen the grading workspace from CAM. Grade inputs are hidden; write
-comments/use keywords and export as usual. Saving a comment or keyword marks
+comments/use keywords, then click **Export CSV** to update the main CAM app.
+Saving alone keeps feedback in the workspace; export sends both feedback and
+submission records to CAM, which syncs them within a few seconds when its
+configured data folder is available. Saving a comment or keyword marks
 the artwork **SEEN** on its thumbnail and expanded card, including after reload.
 Drafts without feedback have no review badge. Module 2 retains submission matching;
 Module 3 shows the feedback without zeros or a contribution to final grades.
@@ -57,12 +60,17 @@ Files match by roster email/student ID or a unique full name in the filename
 punctuation are normalized. A local student subfolder can supply the identity
 too. Partial names, spelling mistakes, duplicate full names and conflicting
 identities need manual review. Teacher-owned re-uploaded files therefore do not
-all become one student when a roster is available. Matched cards show roster
-names; exports retain CAM's student IDs.
+all become one student when a roster is available. Matched cards show student
+IDs with neutral file labels, keeping names out of the grading pane. Anonymous
+grading additionally hides IDs and shuffles the order. Exports retain CAM's
+student IDs and original filenames.
 
 Unmatched files remain individual cards, even with identical filenames. Grade
 them, export/sync, then use **Match unmatched works** in Module 2 for the student
-missing that assignment. Those decisions are reused on the next CAM handoff.
+missing that assignment. For a student who already has a correctly named file,
+open their Module 2 submission popover and choose **match an additional file**.
+Adding a draft file preserves existing feedback and combines its file list.
+Those decisions are reused on the next CAM handoff.
 Already-saved marks under older identities stay there for review; automatic
 matching never redistributes them to newly inferred students.
 

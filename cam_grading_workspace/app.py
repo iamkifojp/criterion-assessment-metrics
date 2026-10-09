@@ -1471,7 +1471,8 @@ def _ordered_students():
 # -----------------------------------------------------------------------------
 # Anonymous grading — a display-only bias-reduction layer over the payload
 # -----------------------------------------------------------------------------
-# When the device pref is on, the JSON handed to the front end swaps every
+# Default display uses student IDs and neutral filenames. When the device
+# pref is on, the JSON handed to the front end also swaps every
 # identity-bearing DISPLAY string — student name / id / email / filename — for
 # neutral "Work NN" / "Image N" labels, and orders students by a seeded shuffle
 # (seed = the durable state key) so the same student isn't always graded first.
@@ -1484,6 +1485,7 @@ def _ordered_students():
 # still serves the real file) — see the plan's T7.
 _ANON_FILE_NOUN = {
     "image": "Image", "video": "Video", "pdf": "Document", "doc": "Document",
+    "word": "Document",
     "slides": "Slides", "sheet": "Sheet", "drawing": "Drawing",
 }
 
@@ -1514,23 +1516,29 @@ def _anonymize_student(st, label):
     return c
 
 
+def _id_only_student(student, index):
+    """Keep school IDs visible while hiding roster names and named filenames."""
+    label = student.get("display_id") or ""
+    if (not label or student.get("name", "").startswith("Unmatched ")
+            or " " in label or label == student.get("roster_label")
+            or (not student.get("email") and not student.get("roster_label")
+                and not label.isdecimal())):
+        label = f"Work {index + 1:02d}"
+    return _anonymize_student(student, label)
+
+
 def present_students():
-    """The ordered student list for a payload: seeded-shuffled + anonymized when
-    the device pref is on, else today's alphabetical order (byte-identical)."""
+    """ID-only display by default; the anonymous preference also shuffles work."""
     if not anonymous_enabled():
-        return sorted(STATE["students"].values(), key=lambda s: s["name"].lower())
+        ordered = _ordered_students()
+        return [_id_only_student(s, i) for i, s in enumerate(ordered)]
     order, labels = _anon_plan(STATE.get("folder_id") or "")
     return [_anonymize_student(STATE["students"][k], labels[k]) for k in order]
 
 
 def present_student(key):
-    """Single-student presentation (the api_save response): an anonymized copy
-    when the pref is on, else the real STATE dict (today's behaviour)."""
-    st = STATE["students"].get(key)
-    if st is None or not anonymous_enabled():
-        return st
-    _, labels = _anon_plan(STATE.get("folder_id") or "")
-    return _anonymize_student(st, labels.get(key, "Work"))
+    """Use the same display labels for saves as for the initial payload."""
+    return next((s for s in present_students() if s["key"] == key), None)
 
 
 def has_assessment(student, is_draft):
@@ -2336,9 +2344,9 @@ def api_load():
         "review_file_count": sum(f["_identity_reason"] in ("unmatched", "ambiguous")
                                  for f in files),
         "saved_identity_count": sum(f["_identity_reason"] == "saved_identity" for f in files),
-        # Anonymized + seeded-shuffled when the device pref is on; else the same
-        # alphabetical `ordered` list. Counts above stay derived from the real
-        # `ordered` (order-independent), so anonymity never distorts them.
+        # Anonymized + seeded-shuffled when the device pref is on; otherwise
+        # ID-only labels in the same alphabetical order. Counts above stay
+        # derived from the real `ordered`, so anonymity never distorts them.
         "students": present_students(),
         "groups": groups,
         # Saved rubric criteria, or [] -> frontend uses its default template.
@@ -4494,7 +4502,7 @@ function makeCard(st) {
   }
 
   const meta = document.createElement("div"); meta.className="meta";
-  meta.innerHTML = `<div class="nm">${escapeHtml(st.roster_label || st.name)}</div>`
+  meta.innerHTML = `<div class="nm">${escapeHtml(shortIdOf(st))}</div>`
                  + `<div class="sub">newest: ${escapeHtml(newest ? newest.filename : "—")}</div>`;
   card.appendChild(meta);
 
@@ -4563,7 +4571,7 @@ function makeExpandedCard(st) {
 
   const head = document.createElement("div"); head.className = "dhead";
   const chip = gradeChipText(st);
-  head.innerHTML = `<span class="dn">${escapeHtml(st.roster_label || st.name)}</span>`
+  head.innerHTML = `<span class="dn">${escapeHtml(shortIdOf(st))}</span>`
                  + `<span class="dc">${st.count} file(s)${st.email ? " · " + escapeHtml(st.email) : ""}</span>`
                  + (chip ? `<span class="dg">${chip}</span>` : "")
                  + (st.late_marked ? `<span class="dlate">Late</span>` : "");

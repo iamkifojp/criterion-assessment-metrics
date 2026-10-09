@@ -8054,10 +8054,11 @@ def _work_caption(row: dict) -> str:
 def match_works_dialog(student_key: str, assignment: str) -> None:
     """Resolve one student's unmatched work visually (Phase 4).
 
-    The dialog is scoped to ONE student who is missing ONE assignment, so
-    matching is a single click — no dropdown. It shows a scrollable grid of the
-    assignment's pooled works (thumbnail + filename caption); the teacher clicks
-    the one that is this student's, which calls :func:`assign_work` (write the
+    The dialog is scoped to ONE student and ONE assignment, including extra
+    misnamed files for an already-submitted task. Matching is a single click —
+    no dropdown. It shows a scrollable grid of the assignment's pooled works
+    (thumbnail + filename caption); the teacher clicks the one that is this
+    student's, which calls :func:`assign_work` (write the
     durable alias, materialise the score, drop from the pool) and reruns.
     Clicking a thumbnail's ⤢ Enlarge renders it full-width (~1600px) to read a
     handwritten name; ⤡ Shrink returns to the grid. Both toggles rerun only the
@@ -8311,6 +8312,16 @@ def render_window2() -> None:
                                "grade and drafts are never counted as 0.")
             else:
                 st.caption(f"All {current_term()} assignments submitted.")
+            # A second file may be unnamed even when the first file matched.
+            # Keep matching accessible for those already-submitted tasks too.
+            cls = st.session_state["active_class"]
+            pools = st.session_state["unmatched_works"].get(cls, {})
+            for nm in active_names:
+                if nm in missing or not pools.get(nm):
+                    continue
+                if st.button(f"🧩 {nm} — match an additional file",
+                             key=f"match_extra_{key}_{nm}", width="stretch"):
+                    match_works_dialog(key, nm)
 
         if row[5].button("Focus", key=f"foc_{i}"):
             sid = key if key in gb().students else None
@@ -8381,10 +8392,16 @@ def render_window3() -> None:
                 feedback = next((record for a, record in draft_feedback_for(student)
                                  if a.name == asg), {})
                 st.caption(f"{asg} · Draft · Crit {table_by_name[asg]['criteria']} · no marks")
-                if feedback.get("comment"):
-                    st.write(feedback["comment"])
+                if feedback:
+                    st.caption("Submitted · feedback recorded" if (
+                        feedback.get("comment") or feedback.get("keywords"))
+                        else "Submitted · awaiting feedback")
+                    if feedback.get("comment"):
+                        st.write(feedback["comment"])
+                    elif feedback.get("keywords"):
+                        st.write("; ".join(feedback["keywords"]))
                 else:
-                    st.caption("Feedback pending — excluded from grade calculations.")
+                    st.caption("No submission recorded · feedback pending — excluded from grade calculations.")
                 continue
             excused_now = is_excused(student.student_id, asg)
             scs = [sc for b in student.scores.values()

@@ -64,6 +64,7 @@ def workspace(tmp):
         "_safe_dirname", "cam_published_path", "state_path", "load_matching_context",
         "find_client_secret", "api_export", "_anonymize_student", "LocalProvider",
         "api_load", "_extract_folder_id", "consume_cam_published",
+        "_id_only_student", "present_students", "present_student", "_ordered_students", "has_assessment",
         "load_assignment_options",
     ], ns)
 
@@ -192,6 +193,26 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(anon["roster_label"], "")
         self.assertNotIn("Ada", json.dumps(anon))
         self.assertEqual(st["roster_label"], "Rivera Ada")
+
+    def test_default_presentation_uses_ids_and_hides_named_filenames_on_save(self):
+        students, _ = self.ns["group_by_student"]([
+            file("Ada Rivera.pdf", "a"), file("Rivera Ada draft.pdf", "b"),
+            file("unknown name scan.pdf", "c")], {}, ROSTER)
+        self.ns.update(anonymous_enabled=lambda: False,
+                       _ANON_FILE_NOUN={"pdf": "Document"})
+        self.ns["STATE"]["students"] = students
+        shown = self.ns["present_students"]()
+        ada = next(s for s in shown if s["key"] == "email:10001@example.test")
+        self.assertEqual((ada["name"], ada["display_id"], ada["email"]), ("10001", "10001", ""))
+        self.assertEqual([f["filename"] for f in ada["files"]], ["Document 1", "Document 2"])
+        self.assertEqual(self.ns["present_student"](ada["key"]), ada)
+        self.assertEqual(students[ada["key"]]["roster_label"], "Rivera Ada")
+        self.assertEqual(students[ada["key"]]["files"][0]["filename"], "Ada Rivera.pdf")
+        unknown = next(s for s in shown if s["key"] != ada["key"])
+        self.assertTrue(unknown["display_id"].startswith("Work "))
+        self.assertEqual(unknown["roster_label"], "")
+        local = self.ns["_id_only_student"]({"name": "Ada", "display_id": "Ada", "files": []}, 0)
+        self.assertEqual(local["display_id"], "Work 01")
 
     def write(self, path, data):
         Path(path).parent.mkdir(parents=True, exist_ok=True)

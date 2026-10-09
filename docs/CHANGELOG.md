@@ -6,6 +6,33 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-09 — Restore ID-only grading and match additional draft files
+
+- Grading cards and expanded previews show student IDs and neutral file labels
+  instead of roster names and named filenames. Unidentified work receives a
+  numbered label. Saved responses retain the same display labels; exports keep
+  the original student IDs and filenames. Anonymous grading additionally hides
+  IDs and shuffles the grading order.
+- Module 2 allows unmatched files to be assigned to students who already have a
+  submission for that task, covering a correctly named file plus a misnamed
+  extra file. Attaching another draft combines file references, comments and
+  keywords without erasing existing feedback, including after alias-based sync.
+- Module 3 distinguishes submitted drafts awaiting feedback, drafts with
+  recorded feedback, and drafts with no submission recorded. Keyword-only
+  feedback is displayed without creating marks.
+- Workspace guidance clarifies that **Export CSV** sends saved feedback and
+  submission records to the main app; saving alone remains local to the grading
+  workspace. The existing export-and-sync workflow is retained.
+- Fixed the isolated submission-identity test helper's missing `has_assessment`
+  dependency noted in the previous entry.
+
+Validation: 61 tests pass and one JavaScript UI test is skipped because Node.js
+is unavailable on the test PATH. Coverage includes ID-only display, draft
+export/ingestion, additional-file matching, feedback preservation on re-sync,
+cockpit submission states, PDF controls and exam identity regression checks.
+`git diff --check` passes. Tests use fictional data and temporary folders; no
+live app was launched and no real student database was modified.
+
 ## 2026-10-09 — Wrap long grading-sheet IDs
 
 - Long unmatched submission labels wrap within the grading sheet's ID column
