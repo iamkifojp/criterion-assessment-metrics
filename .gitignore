@@ -76,3 +76,5 @@ acm_term_summaries_*.json
 *.docx
 *.pdf
 !docs/CAM Quick Guide.pdf
+acm_database.json
+acm_database.json.cam-write.lock
