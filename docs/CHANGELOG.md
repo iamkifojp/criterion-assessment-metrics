@@ -6,6 +6,23 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-15 — Settings “📁 Browse…” no longer crashes
+
+- Symptom: picking a folder with ⚙ Settings → Cloud data sync → 📁 Browse…
+  raised `StreamlitAPIException: st.session_state.settings_db_custom_path
+  cannot be modified after the widget … is instantiated`, so a Windows device
+  could not be pointed at a cloud database folder by browsing.
+- Cause: the Browse handler wrote the path text box's widget key after the box
+  was already rendered in that run.
+- Fix: Browse now stashes the pick in `settings_db_browse_pick`; the next run
+  copies it into the widget key before the box is built. The box is seeded from
+  `prefs["db_custom_path"]` via session state instead of `value=`. The Term
+  backup folder Browse button (`tb_folder`) had the same bug and gets the same
+  fix (`tb_folder_browse_pick`).
+
+Validation: `python -m py_compile app.py` passes. The native folder picker was
+not exercised in a running app. No student database changes are included.
+
 ## 2026-10-09 — Align reporting controls on one row
 
 - System deliverables places “Report for”, the reporting-class dropdown and

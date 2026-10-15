@@ -6530,9 +6530,15 @@ def _render_term_backup_section(prefs: dict) -> None:
         "is a disaster tool: it replaces that term's data wholesale, behind a "
         "preview, a typed confirmation and an automatic backup.")
 
+    # Same stash-then-apply pattern as the database path Browse… button.
+    picked = st.session_state.pop("tb_folder_browse_pick", None)
+    if picked:
+        st.session_state["tb_folder"] = picked
+    elif "tb_folder" not in st.session_state:
+        st.session_state["tb_folder"] = prefs.get("term_backup_folder", "")
     folder_row = st.columns([5, 1], vertical_alignment="bottom")
     folder = folder_row[0].text_input(
-        "Backup folder", value=prefs.get("term_backup_folder", ""),
+        "Backup folder",
         placeholder=r"e.g. C:\Users\you\CAM-term-backups   or a USB drive",
         key="tb_folder", autocomplete="off",
         help="Where ⬇ Back up term writes its files. Per-device (like every "
@@ -6542,7 +6548,7 @@ def _render_term_backup_section(prefs: dict) -> None:
             "📁 Browse…", key="tb_folder_browse", width="stretch"):
         chosen = pick_folder("Choose a CAM term backup folder", folder or None)
         if chosen:
-            st.session_state["tb_folder"] = chosen
+            st.session_state["tb_folder_browse_pick"] = chosen
             st.rerun()
     bc = st.columns([2, 1], vertical_alignment="bottom")
     cur = current_term()
@@ -6608,10 +6614,16 @@ def settings_dialog() -> None:
     st.caption("Saved to this device only (local_device_prefs.json), so each "
                "machine keeps its own layout while sharing one cloud database.")
     st.markdown("**Cloud data sync**")
+    # Browse… stashes its pick here; copy it into the widget's state BEFORE the
+    # widget is built (Streamlit forbids writing a widget key afterwards).
+    picked = st.session_state.pop("settings_db_browse_pick", None)
+    if picked:
+        st.session_state["settings_db_custom_path"] = picked
+    elif "settings_db_custom_path" not in st.session_state:
+        st.session_state["settings_db_custom_path"] = prefs.get("db_custom_path", "")
     custom_row = st.columns([5, 1], vertical_alignment="bottom")
     custom = custom_row[0].text_input(
             "Custom Database Path (folder or .json file)",
-            value=prefs.get("db_custom_path", ""),
             key="settings_db_custom_path",
             autocomplete="off",
             placeholder=r"e.g. C:\Users\you\OneDrive\CAM   or   .../acm_database.json",
@@ -6626,7 +6638,7 @@ def settings_dialog() -> None:
         initial = custom if custom and os.path.isdir(custom) else None
         chosen = pick_folder("Choose your CAM data folder", initial)
         if chosen:
-            st.session_state["settings_db_custom_path"] = chosen
+            st.session_state["settings_db_browse_pick"] = chosen
             st.rerun()
     with st.form("settings_form"):
         st.markdown("**Column width ratios**")
