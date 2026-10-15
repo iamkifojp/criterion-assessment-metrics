@@ -576,6 +576,10 @@ def _validate_session(session: Any, path: str,
     if not isinstance(session, dict):
         _add_issue(issues, path, "expected-object")
         return
+    if "reporting_classes" in session:
+        from .reporting import definition_issues
+        for code in definition_issues(session["reporting_classes"]):
+            _add_issue(issues, f"{path}.reporting_classes.*", code)
     for field in ("rosters", "archived_students"):
         if field in session:
             _validate_roster_store(session[field], f"{path}.{field}", issues)
@@ -999,9 +1003,13 @@ def persistent_content_fingerprint(
     stable across an otherwise unchanged checked save and can be retained by a
     front end to distinguish persistent mutations from ordinary UI reruns.
     """
+    normalized_session = dict(session or {})
+    # Additive optional store: loading an old DB must not itself dirty it.
+    if normalized_session.get("reporting_classes") == []:
+        normalized_session.pop("reporting_classes")
     logical = {
         "gradebook": serialize_gradebook(gradebook),
-        "session": session or {},
+        "session": normalized_session,
     }
     canonical = json.dumps(
         logical, ensure_ascii=False, sort_keys=True,

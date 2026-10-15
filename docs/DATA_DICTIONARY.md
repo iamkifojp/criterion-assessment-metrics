@@ -773,6 +773,43 @@ layer** applied over **purge-replace** ingest.
 
 ---
 
+### C.7 `reporting_classes` (optional, persisted)
+
+Year-wide reporting lists referencing existing teaching-group students. Missing
+means `[]`; no migration or startup write is needed. The current database
+envelope version is unchanged.
+
+| Field | Type | Contract |
+|---|---|---|
+| `reporting_classes` | list | Saved definitions, default empty. |
+| `id` | UUID string | Stable, unique within the store; independent of name. |
+| `name` | string | Nonempty; case-insensitively unique after trimming. |
+| `sort_mode` | string | `manual`, `last_first`, `first_last`, `gojuon`, or `email`. |
+| `members` | list of objects | Saved manual/register order; unique student IDs within each list. |
+| `members[].student_id` | nonempty string | Existing student/roster key. |
+| `members[].source_class` | nonempty string | Explicit teaching-group reference; never a guessed first match. |
+
+Definition/member shapes reject extra fields. Names, emails, scores, comments,
+draft feedback and roster rows are resolved at report time rather than copied
+here. A student may appear in multiple reporting lists. Derived sort modes do
+not rewrite the member list. Source groups must have compatible subject, grade
+and MYP-year metadata; missing/deleted/archived references and ambiguous legacy
+score ownership block only the affected custom report. They remain stored for
+repair, rather than disappearing from final reports.
+
+Source-class rename updates references. Deletion/archival retains references;
+full database wipe clears definitions. Whole-database load/save, replacement,
+conflict recovery and backups retain them. Term backups/restores do not include
+or replace these year-wide lists. All devices that write the database must run
+this release or newer; older apps can discard unknown session fields.
+
+`report_scope_id`, custom single-student selection, manager drafts and export
+fingerprints are ephemeral UI/cache state and are not persisted. Reporting
+classes are never included in grading workspace seeding, source folders,
+ownership indexes or class mirrors.
+
+---
+
 ## Part D — `acm_database.json` envelope and concurrency metadata
 
 `engine/persistence.py` owns the whole-database envelope. The current shared

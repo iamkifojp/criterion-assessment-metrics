@@ -1448,3 +1448,73 @@ student with no record for an assignment (e.g. a non-submitter) leaves that
 Mark/Comment pair blank rather than inventing a 0 — this tab is a transcription
 aid, not part of the grade math, so the Missing = 0 policy (§8) does not apply
 here.
+
+
+## 12. Custom reporting classes (2026-10-09)
+
+Teaching groups remain the owners of rosters, assignments, folders, unit plans,
+grading and comment generation. System deliverables has an independent,
+session-only **Report for** selector. Its saved custom lists live in the shared
+`session.reporting_classes` store as UUID/name/sort mode plus ordered
+`{student_id, source_class}` references. No student evidence is duplicated.
+
+`engine/reporting.py` owns structural validation, frozen `ReportScope` and
+`ReportMember` values, reference resolution, source snapshots and content
+fingerprints. Resolution checks source membership and archives, requires matching
+subject/grade/MYP-year metadata, and blocks ambiguous name-keyed legacy evidence
+when a student belongs to multiple groups with the same task title. Broken
+references remain stored and visible until the teacher repairs/removes them.
+
+The app's `reporting_snapshot()` captures durable report inputs and parsed unit
+plans without device preferences, widget state or API keys. `ReportingExport`
+constructs detached contexts for each source group. Grade computation uses that
+group's membership and assignment context, including banded-exam/missing-work
+eligibility; workbook analytics uses only the selected members of that group.
+Scores and exam results are filtered by source assignment names. Copied score
+inclusion flags are derived from the selected term's name-keyed On choices,
+assignment term, archive state and draft status. Live flags are never changed.
+Existing name-keyed date/On/late/excused settings retain their stored semantics.
+
+To share existing grading policy and report styling without swapping Streamlit
+state, `bind_context()` binds the existing export/calculation function graph to
+a private globals dictionary containing a detached session facade. It follows
+explicit export roots and their transitive code dependencies, including nested
+code objects. It does not expose Streamlit UI methods or the app's persistence
+functions. Context helpers may populate default maps inside their private copy;
+none can mutate the live session through that facade. Keep report helpers free
+of closures over live state and side effects. This adapter avoids maintaining a
+second aggregation implementation while the original UI wrappers remain usable.
+
+All tray outputs share one resolved ordered scope. Custom Excel combines the
+existing styled source workbooks into Final Suggestions, historical Raw Scores
+and Assignments, adds teaching-group provenance, and omits Classroom Entry.
+Final grades use the full source context even when the reporting subset has no
+banded exam submission. DOCX pages show both reporting class and teaching group;
+they use the source roster/email/unit plan and the existing marks, graph and
+visibility rules. The ZIP follows scope order and retains filename/duplicate
+email checks and withheld-grade rules. Comments collect saved all-term text and
+teacher remarks verbatim. Custom single-report selection is restricted to the
+scope. Draft feedback never becomes an overall comment or a missing numeric mark.
+
+Every cached download, including ZIP and single cards, is keyed by a SHA-256
+fingerprint of the scope ID/name/term/ordered membership and all captured report
+inputs. In-memory changes invalidate output without requiring a database save.
+Filenames include term and a scope discriminator to avoid sanitized-name
+collisions. Builders still run only on click.
+
+The database envelope version stays unchanged. Absent and empty reporting stores
+have the same dirty fingerprint, preventing an additive-field-only startup
+write. Checked saves, full snapshots/replacement and conflict recovery preserve
+the store. Source rename updates references; source deletion/student archival
+leaves unresolved entries; a full wipe clears it. Term restores leave it alone.
+Reporting lists create no folders, assignment ownership entries or class mirrors.
+Update every writing device: an older app can drop this unknown session field.
+Whole-database backups recover definitions; term backups do not.
+
+`tests/test_reporting_classes.py` exercises fictional mixed-group exports,
+unequal workloads, repeated titles, roster-only/draft-only members, genuine
+missing/excused/awaiting work, exams, overrides, sorting, source provenance,
+comments, mail-merge visibility, fingerprints, validation and lifecycle behavior.
+It also checks live-state invariance after successful and injected-failure
+exports and runs the tray/manager with Streamlit AppTest against a temporary
+database and preferences, with cloud access disabled.

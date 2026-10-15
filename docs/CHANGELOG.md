@@ -6,6 +6,83 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-09 — Align reporting controls on one row
+
+- System deliverables places “Report for”, the reporting-class dropdown and
+  “Manage reporting classes” on one vertically centered row. The dropdown keeps
+  its accessible label while hiding the separate label above it.
+
+Validation: the isolated reporting UI test passes; `git diff --check` passes.
+No student database changes are included.
+
+## 2026-10-09 — Custom reporting classes across teaching groups
+
+- System deliverables can report a saved custom class/homeroom without changing
+  the teaching group used for grading or comment generation. The manager saves
+  explicit student/source references, supports search and whole-group selection,
+  five output sorts, manual position numbers and move arrows, rename and deletion.
+  Save/cancel keeps unfinished edits out of the database and existing downloads.
+- Excel, combined report cards, email ZIPs, saved class comments and single cards
+  share the selected membership and order. Each student retains their source
+  group's assignments, unit plan, roster/email and grading context, including
+  unequal workloads, genuine missing work, excused/awaiting work and drafts.
+  Custom Excel adds source provenance and subset analytics, preserves historical
+  Raw Scores, and omits the teaching-group-only Classroom Entry sheet.
+- Reports run against detached snapshots using the existing grading helpers.
+  Same-title assignments stay separate by group; unresolved/archived references,
+  incompatible class settings and ambiguous legacy evidence block the affected
+  custom report. Fixed same-title tasks pulling another roster's students into
+  source membership, and draft assignments appearing as missing numeric marks
+  on report cards. Excel final grades now honor saved final overrides.
+- Saved lists round-trip through checked saves, full snapshots/replacement and
+  conflict recovery. Source rename updates references; deletion/archival keeps
+  unresolved entries; full wipe clears lists; term restore leaves them alone.
+  Empty/absent stores share a dirty fingerprint, so this additive field needs no
+  migration or startup write. Update every device that writes the shared DB.
+- Every download cache uses the same report-content fingerprint, including ZIP
+  and single cards. Scope/name/term/order, grades, comments, roster and settings
+  edits invalidate stale files. Filenames include term and scope discriminators.
+  Saved all-term comments and teacher remarks are exported verbatim.
+- Updated the architecture, data dictionary, user manual and implementation
+  record in `CUSTOM_REPORTING_CLASSES_PLAN.md`.
+
+Validation: 323 tests run, 322 pass and one existing JavaScript check is skipped
+because Node.js is unavailable on PATH. Fictional acceptance fixtures cover
+three source groups, repeated titles, unequal work, exams, drafts, overrides,
+all output sorts and formats, source provenance, mail-merge visibility, cache
+changes, lifecycle preservation, and unchanged live state on successful/failed
+exports. An isolated Streamlit AppTest smoke test covers scope selection, Excel
+building, searchable group selection, save/reload and cancel. Database,
+preferences and workspace paths were temporary; cloud access was disabled.
+`git diff --check` passes. No real student database or roster was changed.
+
+## 2026-10-09 — Restore ID-only grading and match additional draft files
+
+- Grading cards and expanded previews show student IDs and neutral file labels
+  instead of roster names and named filenames. Unidentified work receives a
+  numbered label. Saved responses retain the same display labels; exports keep
+  the original student IDs and filenames. Anonymous grading additionally hides
+  IDs and shuffles the grading order.
+- Module 2 allows unmatched files to be assigned to students who already have a
+  submission for that task, covering a correctly named file plus a misnamed
+  extra file. Attaching another draft combines file references, comments and
+  keywords without erasing existing feedback, including after alias-based sync.
+- Module 3 distinguishes submitted drafts awaiting feedback, drafts with
+  recorded feedback, and drafts with no submission recorded. Keyword-only
+  feedback is displayed without creating marks.
+- Workspace guidance clarifies that **Export CSV** sends saved feedback and
+  submission records to the main app; saving alone remains local to the grading
+  workspace. The existing export-and-sync workflow is retained.
+- Fixed the isolated submission-identity test helper's missing `has_assessment`
+  dependency noted in the previous entry.
+
+Validation: 61 tests pass and one JavaScript UI test is skipped because Node.js
+is unavailable on the test PATH. Coverage includes ID-only display, draft
+export/ingestion, additional-file matching, feedback preservation on re-sync,
+cockpit submission states, PDF controls and exam identity regression checks.
+`git diff --check` passes. Tests use fictional data and temporary folders; no
+live app was launched and no real student database was modified.
+
 ## 2026-10-09 — Wrap long grading-sheet IDs
 
 - Long unmatched submission labels wrap within the grading sheet's ID column

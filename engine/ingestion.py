@@ -211,6 +211,22 @@ def _split_keywords(raw: str) -> List[str]:
     return [k.strip() for k in raw.split(";") if k.strip()]
 
 
+def merge_draft_feedback(existing: dict, incoming: dict) -> dict:
+    """Combine separate files for one draft without erasing earlier feedback."""
+    def unique_parts(field, separator):
+        return list(dict.fromkeys(part.strip() for record in (existing, incoming)
+                    for part in (record.get(field) or "").split(separator)
+                    if part.strip()))
+    return {
+        "comment": "\n\n".join(unique_parts("comment", "\n\n")),
+        "keywords": list(dict.fromkeys((existing.get("keywords") or []) +
+                                       (incoming.get("keywords") or []))),
+        "files": "; ".join(unique_parts("files", ";")),
+        "late": bool(existing.get("late") or incoming.get("late")),
+        "timestamp": max(existing.get("timestamp") or "", incoming.get("timestamp") or ""),
+    }
+
+
 def _looks_invalid(grade: int, comment: str) -> Optional[str]:
     """Return a reason string if a row should be flagged invalid."""
     c = (comment or "").lower()
@@ -676,9 +692,9 @@ class IngestionPipeline:
 
                 if draft:
                     if comment or keywords or files:
-                        feedback[target] = {"comment": comment, "keywords": list(keywords),
-                                            "files": files, "late": late,
-                                            "timestamp": timestamp.isoformat()}
+                        feedback[target] = merge_draft_feedback(feedback.get(target, {}), {
+                            "comment": comment, "keywords": list(keywords),
+                            "files": files, "late": late, "timestamp": timestamp.isoformat()})
                         self.gradebook.get_or_create(target)
                     continue
                 self._apply_grades(target, assignment, row_grades, comment,
@@ -743,13 +759,14 @@ class IngestionPipeline:
                            if a.name == assignment and a.is_draft
                            and (class_name is None or a.class_name == class_name)), None)
             if target is not None:
-                target.draft_feedback[target_sid] = {
+                target.draft_feedback[target_sid] = merge_draft_feedback(
+                    target.draft_feedback.get(target_sid, {}), {
                     "comment": pool_row.get("comment", ""),
                     "keywords": list(pool_row.get("keywords") or []),
                     "files": pool_row.get("files", ""),
                     "late": bool(pool_row.get("late")),
                     "timestamp": pool_row.get("timestamp", ""),
-                }
+                })
                 self.gradebook.get_or_create(target_sid)
             return []
         row_grades = [(Criterion(c), int(g))

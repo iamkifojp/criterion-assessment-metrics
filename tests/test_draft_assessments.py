@@ -80,6 +80,45 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(self.book.assignments[0].draft_feedback["10001"]["comment"], "Add sources.")
         self.assertEqual(other.draft_feedback, {})
 
+    def test_exported_unnamed_extra_file_preserves_feedback_through_assign_and_resync(self):
+        rows = [
+            {"Student Name": "10001", "Assessment Mode": "draft", "Focus Criteria": "A",
+             "Files (newest first)": "Ada Rivera.pdf", "Comment": "Explain the context.",
+             "Checked Keywords": "Context"},
+            {"Student Name": "Unmatched scan: unnamed.pdf", "Assessment Mode": "draft", "Focus Criteria": "A",
+             "Files (newest first)": "unnamed.pdf", "Comment": "", "Checked Keywords": ""},
+        ]
+        pool = []
+        self.ingest(rows, roster_keys={"10001", "10002"}, unmatched_out=pool)
+        self.assertEqual(len(pool), 1)  # Even an unreviewed draft is matchable.
+        task = self.book.assignments[0]
+        task.class_name = "Art"
+        self.pipeline.materialize_row("Investigation", "10001", pool[0], "Art")
+        expected = dict(task.draft_feedback["10001"])
+        self.assertEqual(expected["comment"], "Explain the context.")
+        self.assertEqual(expected["keywords"], ["Context"])
+        self.assertEqual(expected["files"], "Ada Rivera.pdf; unnamed.pdf")
+        self.book.assignments.clear()
+        self.ingest(rows, roster_keys={"10001", "10002"},
+                    aliases={rows[1]["Student Name"]: "10001"})
+        resynced = self.book.assignments[0].draft_feedback["10001"]
+        for field in ("comment", "keywords", "files", "late"):
+            self.assertEqual(resynced[field], expected[field])
+        self.assertFalse(any(self.book.students["10001"].scores.values()))
+
+    def test_assigning_second_reviewed_file_combines_feedback(self):
+        pool = []
+        self.ingest([
+            {"Student Name": "10001", "Assessment Mode": "draft", "Comment": "Context.",
+             "Files (newest first)": "named.pdf", "Checked Keywords": "Context"},
+            {"Student Name": "unknown", "Assessment Mode": "draft", "Comment": "Sources.",
+             "Files (newest first)": "scan.pdf", "Checked Keywords": "Context; Sources"},
+        ], roster_keys={"10001"}, unmatched_out=pool)
+        self.pipeline.materialize_row("Investigation", "10001", pool[0])
+        feedback = self.book.assignments[0].draft_feedback["10001"]
+        self.assertEqual(feedback["comment"], "Context.\n\nSources.")
+        self.assertEqual(feedback["keywords"], ["Context", "Sources"])
+
     def test_invalid_feedback_is_rejected_and_legacy_assignments_default_to_graded(self):
         payload = {"students": [], "assignments": [{"name": "Old", "criteria": ["A"]}]}
         self.assertFalse(deserialize_gradebook(payload).assignments[0].is_draft)
