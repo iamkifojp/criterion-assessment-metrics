@@ -343,7 +343,7 @@ class HandoffTests(unittest.TestCase):
                       _workspace_state_key=lambda ref: ref)
             functions_from(ROOT / "app.py", ["_publish_workspace_grades"], ns)
             ns["_publish_workspace_grades"]("Painting", "folder")
-            data = json.loads((Path(tmp) / "cam_grades_folder.json").read_text())
+            data = json.loads((Path(tmp) / "cam_grades_folder.json").read_text(encoding="utf-8"))
             self.assertEqual(data["matching_roster"], ROSTER)
             self.assertEqual(data["work_aliases"], {"scan": "10001"})
             self.assertNotIn("private-other", json.dumps(data))
