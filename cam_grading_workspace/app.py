@@ -2762,6 +2762,24 @@ def _deadline_date(deadline):
     return datetime.date.today().isoformat()
 
 
+def _existing_export_date(out_dir, safe_name):
+    """Date tail of the newest ``<safe_name>_Grades_YYYY-MM-DD.csv`` in
+    *out_dir*, or ``None`` when this assignment has no prior export there.
+
+    With several dated twins the most recently written one wins, so a
+    no-deadline re-export lands on a file that already exists instead of
+    adding yet another sibling."""
+    exact = re.compile(re.escape(safe_name) + r"_Grades_(\d{4}-\d{2}-\d{2})\.csv\Z")
+    pattern = os.path.join(glob.escape(out_dir),
+                           glob.escape(f"{safe_name}_Grades_") + "*.csv")
+    hits = []
+    for p in glob.glob(pattern):
+        m = exact.match(os.path.basename(p))
+        if m:
+            hits.append((os.path.getmtime(p), m.group(1)))
+    return max(hits)[1] if hits else None
+
+
 @app.route("/api/export")
 def api_export():
     force = request.args.get("force") == "1"
@@ -2863,13 +2881,19 @@ def api_export():
                              "draft", ",".join(focus_criteria)])
 
     safe_name = re.sub(r'[\\/*?:"<>|]', "_", folder_name).strip() or "Grades"
-    filename = f"{safe_name}_Grades_{file_date}.csv"
-    data_bytes = ("﻿" + buf.getvalue()).encode("utf-8")   # BOM for Excel
-
     # When a cloud directory + active class are configured, write the CSV
     # straight into [cloud_dir]/[class_name]/ (the dashboard feed) instead of
     # streaming a browser download. out_dir falls back to BASE_DIR otherwise.
     routed = out_dir != BASE_DIR
+    # No deadline (e.g. deliberately left blank so nobody is flagged Late):
+    # reuse the date of this assignment's existing export instead of today's,
+    # so re-exporting on a later day overwrites that file rather than minting
+    # a differently-dated twin that blocks CAM's Sync.
+    if routed and not due_date:
+        file_date = _existing_export_date(out_dir, safe_name) or file_date
+    filename = f"{safe_name}_Grades_{file_date}.csv"
+    data_bytes = ("﻿" + buf.getvalue()).encode("utf-8")   # BOM for Excel
+
     if routed:
         dest = os.path.join(out_dir, filename)
         # Don't silently clobber an existing export. Ask the frontend to

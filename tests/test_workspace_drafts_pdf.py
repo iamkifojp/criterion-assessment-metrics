@@ -208,6 +208,25 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.student["comment"], "Explain your artist choice.")
         self.assertTrue(self.student["graded"])
 
+    def test_no_deadline_export_reuses_existing_file_date(self):
+        self.ws.STATE["deadline"] = ""
+        first = Path(self.client.get("/api/export").get_json()["path"])
+        # Pretend that first export was made on an earlier day.
+        older = first.with_name("Investigation_Grades_2026-01-01.csv")
+        first.rename(older)
+        again = self.client.get("/api/export").get_json()
+        self.assertTrue(again.get("needs_confirm"), again)   # overwrite, not a twin
+        self.assertEqual(again["filename"], older.name)
+        saved = self.client.get("/api/export?force=1").get_json()
+        self.assertEqual(saved["stale_siblings"], [])
+        self.assertEqual(sorted(p.name for p in older.parent.glob("*_Grades_*.csv")),
+                         [older.name])
+        # A real deadline still names the file by its due date.
+        self.ws.STATE["deadline"] = "2026-03-05T15:00"
+        dated = self.client.get("/api/export").get_json()
+        self.assertEqual(dated["filename"], "Investigation_Grades_2026-03-05.csv")
+        self.assertEqual(dated["stale_siblings"], [older.name])
+
     def test_draft_review_requires_feedback_and_clears_when_removed(self):
         self.ws.STATE["is_draft"] = True
         self.student.update(grades={"A": "8"}, graded=True)
