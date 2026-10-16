@@ -6,6 +6,29 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-16 — No-deadline exports keep one CSV across days
+
+- Symptom: grading an assignment with no deadline over two days, then clicking
+  Export CSV, wrote a second file (`<name>_Grades_<today>.csv`) beside
+  yesterday's and showed the “Older export(s) … under a different date” alert.
+  CAM's Sync refuses an assignment with two dated exports, so the teacher had
+  to delete one by hand after every day's export. Leaving the deadline blank is
+  a valid choice (it keeps every student's Late flag off), so this hit anyone
+  who skipped a deadline on purpose.
+- Cause: CGW's `api_export` names the file by the due date and falls back to
+  today's date when none is set, so each new day gave a new file name.
+- Fix (CGW `app.py`): a routed export with no deadline now reuses the date of
+  the assignment's existing `<name>_Grades_YYYY-MM-DD.csv` in the class folder
+  (newest by mtime if several), via `_existing_export_date()`. A re-export then
+  hits the normal overwrite confirm instead of creating a twin. With a deadline
+  set, the due date still names the file and the stale-sibling alert is
+  unchanged. A first export with no deadline still uses today's date.
+
+Validation: new `test_no_deadline_export_reuses_existing_file_date` passes in
+the temp-folder Flask sandbox; full suite 322 passed, 1 skipped, 1 failed
+(`test_dashboard_publishes_only_active_class_roster_and_aliases`, which also
+fails without this change). No student database changes are included.
+
 ## 2026-10-15 — Settings “📁 Browse…” no longer crashes
 
 - Symptom: picking a folder with ⚙ Settings → Cloud data sync → 📁 Browse…
