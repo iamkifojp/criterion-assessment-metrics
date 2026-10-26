@@ -9403,6 +9403,8 @@ def reporting_snapshot():
     """Capture report inputs, excluding device preferences, API keys and widgets."""
     state = deepcopy(build_session_payload())
     state["unit_plans"] = deepcopy(st.session_state["unit_plans"])
+    # The payload stores date overrides as ISO strings; report helpers expect dates.
+    state["date_override"] = dict(st.session_state["date_override"])
     return state, deepcopy(gb())
 
 

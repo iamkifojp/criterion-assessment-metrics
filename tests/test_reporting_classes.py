@@ -214,6 +214,16 @@ class ReportingTests(unittest.TestCase):
         self.assertIn('Classroom Entry', wb.sheetnames)
         self.assertEqual(wb['Classroom Entry']['A3'].value, 'Sato Alice')
 
+    def test_excel_with_date_override(self):
+        from datetime import date
+        from openpyxl import load_workbook
+        self.ss['date_override']['Awaiting'] = date(2026, 5, 9)
+        scope = ReportScope('teaching', 'G1', self.term,
+                            tuple(ReportMember(r['key'], 'G1') for r in self.ss['rosters']['G1']))
+        wb = load_workbook(io.BytesIO(self.export(scope).excel()))
+        self.assertIn('Assignments', wb.sheetnames)
+        self.assertIsInstance(self.ss['date_override']['Awaiting'], date)
+
     def test_sort_order_applies_to_each_output_without_rewriting_manual_order(self):
         from openpyxl import load_workbook
         from docx import Document
