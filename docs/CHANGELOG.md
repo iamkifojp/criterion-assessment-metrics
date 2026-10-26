@@ -6,6 +6,26 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-26 — “Build Excel master” no longer crashes on hand-set dates
+
+- Symptom: System deliverables → Build Excel master stopped with
+  `TypeError: combine() argument 1 must be datetime.date, not str` (raised in
+  `assignment_table()`) for any class with an assignment whose date the teacher
+  had set by hand, e.g. a manually created assignment or an edited date. The
+  other tray exports use the same snapshot, so they could hit it too.
+- Cause: `reporting_snapshot()` copies the session through
+  `build_session_payload()`, which stores `date_override` as ISO strings for
+  the database file. The detached report helpers then handed those strings to
+  `datetime.combine()`, which only accepts dates.
+- Fix (`app.py`): `reporting_snapshot()` now puts the live `date_override`
+  dates (real `date` objects) back into the snapshot, the same way it already
+  does for `unit_plans`. Nothing is written to the database, and the saved
+  file format doesn't change.
+
+Validation: new `test_excel_with_date_override` errors without the fix and
+passes with it; full suite 325 passed, 1 skipped. No student database changes
+are included.
+
 ## 2026-10-16 — No-deadline exports keep one CSV across days
 
 - Symptom: grading an assignment with no deadline over two days, then clicking
