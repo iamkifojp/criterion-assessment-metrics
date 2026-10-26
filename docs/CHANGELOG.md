@@ -6,6 +6,29 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-26 — Running the tests no longer resets the database path
+
+- Symptom: after a full test run, CAM opened the repo's sample
+  `acm_database.json` instead of the cloud folder and showed “Database not
+  loaded — CAM is in read-only quarantine” (identity differs, found legacy v1).
+  `local_device_prefs.json` had a blank `db_custom_path` and an expectation
+  entry for a `/var/folders/.../T/tmp…` path. The cloud database itself was not
+  touched.
+- Cause: `tests/test_app_database_concurrency.py` mocked `save_prefs` only
+  around `init_state()`. Its later `persist()` calls record the test database's
+  identity via `_set_database_expectation()` → `save_prefs()`, which wrote the
+  test's default prefs over the real `local_device_prefs.json` beside `app.py`.
+- Fix (test only): the concurrency tests now patch `PREFS_PATH` into their temp
+  folder for the whole test. App code is unchanged.
+- Recovery on an affected device: ⚙ Settings → Cloud data sync → 📁 Browse… and
+  pick the cloud data folder again. Don't type USE THIS DATABASE on the
+  quarantine banner, because that binds the device to the sample file.
+
+Validation: in a throwaway copy of the repo with a sentinel prefs file, all 33
+test modules were run one at a time and then as a full suite (325 passed, 1
+skipped); none changed the prefs file. No student database changes are
+included.
+
 ## 2026-10-26 — “Build Excel master” no longer crashes on hand-set dates
 
 - Symptom: System deliverables → Build Excel master stopped with
