@@ -38,6 +38,11 @@ class AppDatabaseConcurrencyTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.env = mock.patch.dict(os.environ, {"CAM_DB_PATH": self.tmp.name})
         self.env.start()
+        # persist() can record a database expectation via save_prefs(); keep
+        # that write in the temp folder, never the real local_device_prefs.json.
+        self.prefs_path = mock.patch.object(
+            app, "PREFS_PATH", os.path.join(self.tmp.name, "prefs.json"))
+        self.prefs_path.start()
         self.path = os.path.join(self.tmp.name, "acm_database.json")
         with open(self.path, "w", encoding="utf-8") as handle:
             json.dump(_legacy_payload(), handle)
@@ -53,6 +58,7 @@ class AppDatabaseConcurrencyTests(unittest.TestCase):
 
     def tearDown(self):
         app.st = self.original_st
+        self.prefs_path.stop()
         self.env.stop()
         self.tmp.cleanup()
 
