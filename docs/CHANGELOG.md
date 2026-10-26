@@ -6,6 +6,38 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-27 — Classroom Entry tab: grades block, then comments block; drafts included
+
+- Symptom: the Excel master's Classroom Entry tab came out empty for a class
+  whose only assignment was a draft (e.g. *Draft Submission Crit A 8.1*: 18
+  feedback comments, no grades). The comments were also absent from Raw Scores
+  and the class comments .docx, so the teacher had nothing to paste back into
+  Google Classroom (which has no grade/comment import).
+- Cause: `_classroom_folder_assignment_names()` skipped every formative
+  assignment, and drafts count as formative. Draft feedback lives in
+  `Assignment.draft_feedback`, not in criterion scores.
+- Change (`app.py`):
+  - Folder drafts now qualify. Exams, Crit D reflections, other 0-criterion
+    events and non-folder assignments are still excluded.
+  - `_append_classroom_entry_sheet` now writes a **Grades** block (one column
+    per assignment, or per criterion for multi-criterion assignments,
+    `<name> – Crit X`) followed by a **Comments** block (one column per
+    assignment). It replaces the interleaved Mark/Comment pairs.
+  - A draft's grade column reads `NA`; its comment comes from `draft_feedback`.
+  - Scope stays whole-year. Rows stay in Latin first-name order and match on
+    student id. Custom reporting-class workbooks still omit the tab.
+  - The Build Excel master tooltip now mentions the tab.
+- Tests: new `tests/test_classroom_entry_layout.py` covers the block layout, NA
+  drafts, multi-criterion split, valid-over-invalid preference and the folder
+  filter. Existing Classroom Entry style/order tests pass unchanged.
+
+Validation: full suite 329 passed, 1 skipped, and `local_device_prefs.json` was
+unchanged afterwards. A read-only dry run on the live 8.1 data (nothing written
+to the database) produced one draft column with `NA` grades and all 18 comments
+filled.
+
+---
+
 ## 2026-10-26 — Running the tests no longer resets the database path
 
 - Symptom: after a full test run, CAM opened the repo's sample

@@ -5299,22 +5299,27 @@ def students_for_active_class() -> list:
 
 def _classroom_folder_assignment_names() -> list:
     """Names of the active class's Google-Classroom *folder* assignments, in
-    timeline (date) order.
+    timeline (date) order, across the whole year.
 
     A folder assignment is one CAM ingested FROM Google Classroom: it carries a
     grading-workspace CSV (``source_file``) or a watched-folder pin
-    (``folder_ref``), it is not an exam, and it produced at least one criterion
-    score. Crit D ``(Reflection)`` tasks are deliberately excluded — they are
-    graded separately, hold no per-student artwork comment, and are not the
-    folder submissions the teacher keys back into Classroom."""
+    (``folder_ref``) and it is not an exam. Graded assignments must target at
+    least one criterion; **drafts** are included too (they hold the per-student
+    feedback comments the teacher keys back into Classroom, but no grade), while
+    other 0-criterion formative events are not. Crit D ``(Reflection)`` tasks
+    are deliberately excluded — they are graded separately, hold no per-student
+    artwork comment, and are not the folder submissions the teacher keys back
+    into Classroom."""
     active = st.session_state.get("active_class", "")
     by_name = {a.name: a for a in gb().assignments
                if getattr(a, "class_name", "") == active}
     names = []
     for row in assignment_table():        # date-sorted, active class, unarchived
         asg = by_name.get(row["name"])
-        if asg is None or row["is_exam"] or row["is_formative"]:
+        if asg is None or row["is_exam"]:
             continue
+        if row["is_formative"] and not row["is_draft"]:
+            continue                      # 0-criterion event, nothing to key in
         if not (row["folder_ref"] or getattr(asg, "source_file", "")):
             continue                      # not from a Classroom folder / CGW CSV
         if row["name"].strip().lower().endswith("(reflection)"):
@@ -5391,15 +5396,21 @@ def _finish_sheet(ws, freeze=None, widths=None):
 
 
 def _append_classroom_entry_sheet(wb, students) -> None:
-    """Add the 'Classroom Entry' tab: one row per student with a paired
-    Mark/Comment column per folder assignment, so the teacher copies each
-    column straight back into Google Classroom without re-matching students.
+    """Add the 'Classroom Entry' tab: one row per student, a **Grades** block
+    (one column per folder assignment, or per criterion when an assignment
+    assessed several) followed by a **Comments** block (one column per
+    assignment), so the teacher copies each column straight back into Google
+    Classroom without re-matching students.
+
+    Draft assignments hold feedback but never a grade, so their grade column
+    reads ``NA`` for every student and only their comment column carries data.
 
     Rows are ordered in **Latin name order (first name, then surname)** to match
     how Google Classroom lists students — deliberately NOT the gojūon order the
     on-screen roster uses, so a pasted column lines up row-for-row. This is the
     one place we re-sort away from roster order; it is purely cosmetic, because
     the mark/comment lookup matches on ``student_id`` (below), never position."""
+    from openpyxl.styles import Alignment
     from openpyxl.utils import get_column_letter
 
     def _latin_key(student):
@@ -5415,77 +5426,112 @@ def _append_classroom_entry_sheet(wb, students) -> None:
     students = sorted(students, key=_latin_key)
 
     names = _classroom_folder_assignment_names()
+    active = st.session_state.get("active_class", "")
+    by_name = ({a.name: a for a in gb().assignments
+                if getattr(a, "class_name", "") == active} if names else {})
 
-    # (student_id, assignment) -> (band, comment, is_valid); prefer a valid score
-    # (a folder assignment is single-criterion, so this is one row per student).
+    # Grade columns: (assignment, criterion-or-None, header, is_draft). A
+    # single-criterion assignment keeps its plain name; a multi-criterion one
+    # gets a column per criterion in A-D order.
+    grade_cols = []
+    for name in names:
+        asg = by_name.get(name)
+        is_draft = bool(getattr(asg, "is_draft", False))
+        crits = [c for c in CRIT_ORDER if c in (getattr(asg, "criteria", None) or [])]
+        if len(crits) <= 1:
+            grade_cols.append((name, crits[0] if crits else None, name, is_draft))
+        else:
+            grade_cols.extend((name, c, f"{name} – Crit {c}", is_draft)
+                              for c in crits)
+
+    # (student_id, assignment, criterion) -> (band, comment, is_valid); prefer a
+    # valid score where two records exist for one key.
     marks: dict = {}
-    wanted = set(names)
+    wanted = {n for n in names if not getattr(by_name.get(n), "is_draft", False)}
     for student, sc in all_scores():
         if sc.assignment not in wanted:
             continue
-        key = (student.student_id, sc.assignment)
+        key = (student.student_id, sc.assignment, sc.criterion.value)
         prev = marks.get(key)
         if prev is None or (not prev[2] and sc.is_valid):
             marks[key] = (sc.value, sc.comment or "", sc.is_valid)
 
+    def _grade(sid, name, crit, is_draft):
+        if is_draft:
+            return "NA"
+        if crit is None:
+            hits = [v for (s, a, _c), v in marks.items() if s == sid and a == name]
+            return hits[0][0] if hits else None
+        return marks.get((sid, name, crit), (None, "", False))[0]
+
+    def _comment(sid, name):
+        asg = by_name.get(name)
+        if getattr(asg, "is_draft", False):
+            return (asg.draft_feedback.get(sid) or {}).get("comment") or None
+        # One comment per assignment: the distinct per-criterion comments, in
+        # A-D order (CGW usually writes the same text to every criterion row).
+        parts = [marks[(sid, name, c)][1] for c in CRIT_ORDER
+                 if (sid, name, c) in marks and marks[(sid, name, c)][1]]
+        return " ".join(dict.fromkeys(parts)) or None
+
     ws = wb.create_sheet("Classroom Entry")
-    # Same structure as before; colours now come from the shared brick-red kit
-    # so this tab matches tabs 1-3 (was a standalone navy palette).
     kit = _xl_style_kit()
-    hdr_fill = kit.header_fill
-    sub_fill = kit.sub_fill
-    name_fill = kit.label_fill
-    white_bold = kit.header_font
-    blue_bold = kit.sub_font
-    base = kit.base_font
     border = kit.border
-    center = kit.center
-    left = kit.left
-    wrap = kit.wrap
+    head_wrap = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     fixed = ["Name", "Student ID"]
     nfix = len(fixed)
     for i, h in enumerate(fixed, start=1):
         ws.merge_cells(start_row=1, end_row=2, start_column=i, end_column=i)
         c = ws.cell(row=1, column=i, value=h)
-        c.font, c.fill, c.alignment, c.border = white_bold, hdr_fill, center, border
+        c.font, c.fill, c.alignment, c.border = (kit.header_font, kit.header_fill,
+                                                 kit.center, border)
         low = ws.cell(row=2, column=i)
-        low.fill, low.border = hdr_fill, border
+        low.fill, low.border = kit.header_fill, border
 
-    col = nfix + 1
-    for name in names:
-        ws.merge_cells(start_row=1, start_column=col, end_row=1, end_column=col + 1)
-        c = ws.cell(row=1, column=col, value=name)
-        c.font, c.fill, c.alignment, c.border = white_bold, hdr_fill, center, border
-        pad = ws.cell(row=1, column=col + 1)
-        pad.fill, pad.border = hdr_fill, border
-        for off, label in ((0, "Mark"), (1, "Comment")):
-            sc = ws.cell(row=2, column=col + off, value=label)
-            sc.font, sc.fill, sc.alignment, sc.border = blue_bold, sub_fill, center, border
-        col += 2
+    # Row 1: a "Grades" band over the grade block, a "Comments" band over the
+    # comment block. Row 2: one sub-header per column naming the assignment.
+    gstart = nfix + 1
+    cstart = gstart + len(grade_cols)
+    blocks = ((gstart, [h for _a, _c, h, _d in grade_cols], "Grades"),
+              (cstart, list(names), "Comments"))
+    for start, headers, band in blocks:
+        if not headers:
+            continue
+        end = start + len(headers) - 1
+        if end > start:
+            ws.merge_cells(start_row=1, start_column=start,
+                           end_row=1, end_column=end)
+        _style_header_row(ws, 1, len(headers), kit, start_col=start)
+        ws.cell(row=1, column=start, value=band)
+        for off, h in enumerate(headers):
+            sc = ws.cell(row=2, column=start + off, value=h)
+            sc.font, sc.fill, sc.alignment, sc.border = (kit.sub_font, kit.sub_fill,
+                                                         head_wrap, border)
 
     for ri, student in enumerate(students, start=3):
+        sid = student.student_id
         nm = ws.cell(row=ri, column=1, value=student_label(student))
-        sid = ws.cell(row=ri, column=2, value=student.student_id)
-        for cc in (nm, sid):
-            cc.font, cc.fill, cc.alignment, cc.border = base, name_fill, left, border
-        col = nfix + 1
-        for name in names:
-            band, comment, _ = marks.get(
-                (student.student_id, name), (None, "", False))
-            m = ws.cell(row=ri, column=col, value=band)
-            m.font, m.alignment, m.border = base, center, border
-            cm = ws.cell(row=ri, column=col + 1, value=comment or None)
-            cm.font, cm.alignment, cm.border = base, wrap, border
-            col += 2
+        idc = ws.cell(row=ri, column=2, value=sid)
+        for cc in (nm, idc):
+            cc.font, cc.fill, cc.alignment, cc.border = (kit.base_font, kit.label_fill,
+                                                         kit.left, border)
+        for off, (name, crit, _h, is_draft) in enumerate(grade_cols):
+            m = ws.cell(row=ri, column=gstart + off,
+                        value=_grade(sid, name, crit, is_draft))
+            m.font, m.alignment, m.border = kit.base_font, kit.center, border
+        for off, name in enumerate(names):
+            cm = ws.cell(row=ri, column=cstart + off, value=_comment(sid, name))
+            cm.font, cm.alignment, cm.border = kit.base_font, kit.wrap, border
 
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 11
-    col = nfix + 1
-    for _ in names:
-        ws.column_dimensions[get_column_letter(col)].width = 6
-        ws.column_dimensions[get_column_letter(col + 1)].width = 46
-        col += 2
+    for off in range(len(grade_cols)):
+        ws.column_dimensions[get_column_letter(gstart + off)].width = 14
+    for off in range(len(names)):
+        ws.column_dimensions[get_column_letter(cstart + off)].width = 46
+    if names:
+        ws.row_dimensions[2].height = 42   # room for wrapped assignment names
     ws.freeze_panes = "C3"
     ws.sheet_view.showGridLines = False
 
@@ -5592,8 +5638,9 @@ def build_excel_bytes() -> bytes:
     _finish_sheet(ws3, freeze="A7",
                   widths=[26, 14, 12, 12, 10, 8, 7] + [8] * len(TERMS))
 
-    # Tab 4: Classroom Entry — grades + comments per student for each folder
-    # (Google Classroom) assignment. This tab re-sorts to Latin name order
+    # Tab 4: Classroom Entry — a grades block then a comments block, one
+    # column per folder (Google Classroom) assignment, drafts included with NA
+    # grades. This tab re-sorts to Latin name order
     # (first name, surname) to match Classroom's own student order, so the marks
     # can be copy-pasted straight back into Classroom without re-matching by
     # email/ID (the on-screen roster stays in gojūon order).
@@ -9762,7 +9809,9 @@ def render_tray() -> None:
             f"CAM_master_{safe_cls}_{date_tag}.xlsx", mime_xlsx,
             ctx=(fingerprint,),
             help_text="Multi-tab workbook: final suggestions, raw scores, "
-                      "assignment analytics (with class/subject/term).")
+                      "assignment analytics (with class/subject/term), and "
+                      "Classroom Entry — every assignment's grades, then its "
+                      "comments, ready to paste back into Google Classroom.")
         _export_slot(
             cols[1], "pack", f"Build report-card pack — {active}",
             report.docx,

@@ -1372,9 +1372,9 @@ are analytics-facing — **Final Suggestions** (per-student criterion finals +
 Effort/MYP/School, §9), **Raw Scores** (the full score ledger), and
 **Assignments** (per-assignment analytics headed by class/subject/term). A
 fourth tab, **Classroom Entry**, exists purely to close the loop back to Google
-Classroom: it lays the grades and comments out so the teacher can copy each
-column straight into a Classroom folder assignment without re-matching students
-by hand.
+Classroom: it lists every folder assignment's grades and then its comments,
+one column each, so the teacher can copy each column straight into a Classroom
+folder assignment without re-matching students by hand.
 
 ### The problem it solves
 
@@ -1384,7 +1384,8 @@ Classroom, by contrast, sorts by surname / first name / status / group — so th
 two orders rarely line up, and pasting a column of marks from CAM into Classroom
 would mis-file every row. The Classroom Entry tab removes the manual re-matching
 by emitting students in **Latin name order (first name, then surname)** to match
-Classroom's own list, and pairing each mark with the assignment it belongs to.
+Classroom's own list, and heading each grade and comment column with the
+assignment it belongs to.
 (This is a deliberate divergence from the on-screen roster, which is stored in
 gojūon order — see "Classroom Entry order" below.)
 
@@ -1418,36 +1419,54 @@ sorts before `Kato`; in gojūon か precedes さ, so it is the reverse). See the
 2026-07-07 CHANGELOG entries and `engine/collation.py` for the mora-key
 algorithm.
 
-### Which assignments count — "folder" assignments only
+### Which assignments count — "folder" assignments, drafts included
 
 `_classroom_folder_assignment_names()` selects the assignments to emit, in
-timeline (date) order via `assignment_table()`. An assignment qualifies when it
-is one CAM ingested **from Google Classroom** — it carries a CGW grading CSV
-(`source_file`) or a watched-folder pin (`folder_ref`) — **and** it is not an
-exam **and** it fed at least one criterion score. Crit D `(Reflection)` tasks
-are excluded by name: they are graded separately, hold no per-student artwork
-comment, and are not the folder submissions the teacher keys back into
-Classroom. The set is dynamic — sync a new folder assignment and it appears as
-its own column pair on the next export automatically.
+timeline (date) order via `assignment_table()`, across the **whole year** (every
+unarchived assignment of the active class, any term). An assignment qualifies
+when it is one CAM ingested **from Google Classroom** — it carries a CGW grading
+CSV (`source_file`) or a watched-folder pin (`folder_ref`) — **and** it is not
+an exam. Graded assignments must target at least one criterion. **Draft**
+assignments qualify too (since 2026-10-27): their CGW CSV has no Grade column,
+but they hold the per-student feedback comment the teacher pastes back into
+Classroom. Other 0-criterion formative events are still skipped. Crit D
+`(Reflection)` tasks are excluded by name: they are graded separately, hold no
+per-student artwork comment, and are not the folder submissions the teacher
+keys back into Classroom. The set is dynamic — sync a new folder assignment and
+it appears in both blocks on the next export automatically.
 
 ### Layout and matching (`_append_classroom_entry_sheet`)
 
-Two frozen header rows: fixed `Name` / `Student ID` columns, then a merged
-assignment header over a paired **Mark** / **Comment** sub-header for each
-qualifying assignment. One data row per student, in Latin name order (first
-name, then surname — see "Classroom Entry order" above). Marks are the
-raw 0–8 MYP bands (the number the teacher types into Classroom), and the comment
-is the per-submission comment verbatim.
+Two frozen header rows over fixed `Name` / `Student ID` columns, then two
+blocks (changed 2026-10-27 from interleaved Mark/Comment pairs):
 
-The mark/comment lookup is built once from `all_scores()`, keyed on
-`(student_id, assignment)` — matching on the id, never the name, so a
-misspelled or lower-cased surname on the roster never breaks alignment. A folder
-assignment is single-criterion, so this is one score per student; where two
-records exist for a key, a **valid** score is preferred over an invalid one. A
-student with no record for an assignment (e.g. a non-submitter) leaves that
-Mark/Comment pair blank rather than inventing a 0 — this tab is a transcription
-aid, not part of the grade math, so the Missing = 0 policy (§8) does not apply
-here.
+1. **Grades** — a merged "Grades" band in row 1; row 2 names one column per
+   qualifying assignment, or, when an assignment assessed several criteria, one
+   column per criterion in A–D order (`<assignment> – Crit B`). Cells hold the
+   raw 0–8 MYP band (the number the teacher types into Classroom). A draft's
+   grade column reads **`NA`** for every student, because drafts never carry a
+   grade.
+2. **Comments** — a merged "Comments" band; one column per assignment, in the
+   same order as the grades block. A graded assignment's comment is the
+   per-submission comment verbatim (for a multi-criterion assignment, the
+   distinct per-criterion comments joined with a space, as CGW usually writes
+   the same text to each criterion row). A draft's comment is
+   `draft_feedback[student_id]["comment"]`.
+
+Grouping all grades before all comments keeps each block contiguous, so the
+teacher works through the grade columns and then the comment columns. One data
+row per student, in Latin name order (first name, then surname — see
+"Classroom Entry order" above).
+
+The mark lookup is built once from `all_scores()`, keyed on
+`(student_id, assignment, criterion)`, and drafts are read from
+`draft_feedback` by student id. Both match on the id, never the name, so a
+misspelled or lower-cased surname on the roster never breaks alignment. Where
+two records exist for one key, a **valid** score is preferred over an invalid
+one. A student with no record for a graded assignment (e.g. a non-submitter)
+leaves that grade/comment blank rather than inventing a 0 — this tab is a
+transcription aid, not part of the grade math, so the Missing = 0 policy (§8)
+does not apply here.
 
 
 ## 12. Custom reporting classes (2026-10-09)
