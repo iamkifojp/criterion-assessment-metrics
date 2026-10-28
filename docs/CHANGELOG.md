@@ -6,6 +6,32 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-10-29 — Class selector follows the active class; no Session State warning
+
+- Symptom: when a database was loaded on a second device, the terminal printed
+  `The widget with key "class_sel" was created with a default value but also
+  had its value set via the Session State API` with a stack trace through
+  `_render_top_bar`. Nothing showed in the UI, and no data was affected.
+- Cause: the top-bar selectbox passed both `key="class_sel"` and
+  `index=names.index(active)`. If the browser still remembered a class that the
+  loaded database doesn't have, Streamlit 1.58 reset the key through Session
+  State. A script-triggered `st.rerun()` keeps that value, so the next run saw a
+  key with both a default and a Session State value, and Streamlit warned.
+  Related latent bug: once the widget had a value, `index=` was ignored, so when
+  other code changed `active_class` (DB load, Add class, rename, delete, report
+  scope), the old widget value won and switched the class back.
+- Fix: `active_class` is now the only source of truth. `_render_top_bar` re-seeds
+  `class_sel` whenever `active_class` was changed by other code (tracked in
+  `_class_sel_synced`) or the remembered pick isn't a class in this database, and
+  it no longer passes `index=`. A teacher's own pick in the selector still
+  updates `active_class` and persists as before.
+
+Validation: a sandboxed AppTest (`CAM_DB_PATH` set to a temp folder, `persist`
+mocked) covered three cases: a remembered class that isn't in this database, a
+programmatic switch, and a teacher's pick. All three passed with no warning.
+The same test against the old code failed the programmatic-switch case. No
+student database changes are included.
+
 ## 2026-10-27 — Classroom Entry tab: grades block, then comments block; drafts included
 
 - Symptom: the Excel master's Classroom Entry tab came out empty for a class
