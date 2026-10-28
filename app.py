@@ -10468,15 +10468,26 @@ def _render_top_bar() -> None:
     ctrl = st.columns([2.4, 1.2, 1.4, 1.2, 2.2], vertical_alignment="center")
     names = class_names()
     active = st.session_state["active_class"]
+    # active_class is the source of truth; the widget key only mirrors it. Re-seed
+    # the key whenever something else moved active_class (DB load, Add class,
+    # rename, delete, report scope) or the browser's remembered pick is not a
+    # class in this database — otherwise the stale widget value would win and
+    # flip the class back. No index= alongside the key: Streamlit warns when a
+    # keyed widget has both a default and a Session State value.
+    if (st.session_state.get("_class_sel_synced") != active
+            or st.session_state.get("class_sel") not in names):
+        st.session_state["class_sel"] = (active if active in names
+                                         else (names[0] if names else None))
+        st.session_state["_class_sel_synced"] = active
     sel = ctrl[0].selectbox(
         "Class / level", names,
-        index=names.index(active) if active in names else 0,
         format_func=lambda n: class_label(next((c for c in st.session_state["classes"]
                                                  if c["name"] == n), {"name": n})),
         key="class_sel", label_visibility="collapsed",
     )
     if sel != active:
         st.session_state["active_class"] = sel
+        st.session_state["_class_sel_synced"] = sel
         st.session_state["focus_sid"] = None
         persist()
         st.rerun()
