@@ -6,6 +6,28 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-11-01 — CAM2 runs from the Windows bundle (convergence Stage 5)
+
+- What: the portable bundle ships CAM2 Exam Grading (`exam_grading/`,
+  without its tests and plans) and its requirements, and the zip audit now
+  requires it.
+- Fix: CAM2 could not have started from the bundle. The embedded Python
+  ignores the script's folder and lists CAM's root and the grading
+  workspace, so CAM2's launcher imported the workspace's `app.py` and failed.
+  CAM now starts the launcher with `exam_grading/` put first on `sys.path`
+  (`exam_bridge.launch_command`). CAM2's Windows picker child had the same
+  problem (Browse opened nothing); fixed in CAM2 `5e67ba4` and pulled in.
+- If CAM2 does not open, CAM shows why; the full log is
+  `%TEMP%\cam_exam_handoffs\cam2_launch.log`.
+
+Validation: CAM 267 tests + CAM2 216. A test runs the launch command with
+`python -P` and a decoy `engine` / `app.py` on `PYTHONPATH` (the old plain
+command fails it). A full bundle was built and run on its own embedded
+Python: CAM booted on sandbox data, CAM2 started in host mode from a CAM
+handoff, and the picker child ran from an unrelated folder.
+
+---
+
 ## 2026-11-01 — The old exam grader is gone (convergence Stage 4)
 
 - What: the grading workspace's exam code is removed: `exam_engine.py`, the

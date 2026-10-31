@@ -684,6 +684,18 @@ rubrics, rubric → criterion map, paper ids) lives in the persisted
 still loads the database. Window 2's 🧩 tiles and Window 1's name-crop check use
 the session's `crops/__name__/<paper id>.png`.
 
+**In the portable bundle.** `tools/build_windows_bundle.py` ships
+`exam_grading/` (without CAM2's tests, tools and plans) and installs its
+`requirements.txt` with CAM's; the final zip audit requires CAM2's launcher,
+app and engine. The embedded Python's `python314._pth` lists CAM's root and
+`cam_grading_workspace` and never the script's folder, and it deliberately does
+not list `exam_grading`, whose own `engine` and `app` would clash with CAM's.
+So `exam_bridge.launch_command` starts the launcher through a short `-c` boot
+that puts `exam_grading/` first on `sys.path`, and CAM2's Windows picker child
+does the same (CAM2 `5e67ba4`). CAM2 runs on the bundle's `runtime\python.exe`
+(`sys.executable`); its start-up output goes to
+`%TEMP%\cam_exam_handoffs\cam2_launch.log`.
+
 **Deleting.** Permanent delete moves the session folder to
 `exams/_deleted/<YYYYMMDD-HHMMSS> <exam>/` (`exam_bridge.retire_session`) and
 forgets its `exam_sessions` entry and 🧩 pool. Removing it for good is the

@@ -1,7 +1,7 @@
 # Bringing CAM2's exam grading back into CAM: assessment and staged plan
 
 **Status:** v3, 2026-10-31. All decisions (D1–D9, §4) are locked.
-**Stages 0–4 are done** (see the ✅ notes in §5); Stage 5 (bundle) is next.
+**All stages (0–5) are done** (see the ✅ notes in §5).
 **Repos:** CAM = `C:\Project\criterion-assessment-metrics-public`;
 CAM2 = `C:\Project\cam2-exam-grading` (`iamkifojp/cam2-exam-grading`, 4 commits,
 187 tests, Phases 1–4c done, Phase 5 packaging next).
@@ -334,10 +334,26 @@ building:*
 - Rewrite the USER_MANUAL "Grading exam papers" section and ARCHITECTURE §4.
   Expected result: CGW `app.py` loses roughly 2,000 lines.
 
-### Stage 5 — Bundle (CAM) · S
-- `tools/build_windows_bundle.py` copies `exam_grading/` and starts it from the
-  bridge. Extend `test_windows_bundle.py`. The dependencies are the same
-  (Flask, Pillow, PyMuPDF, openpyxl), so nothing new is installed.
+### Stage 5 — Bundle (CAM) · S — ✅ done
+*CAM `f87234c` (with CAM2 `5e67ba4` pulled in). A full bundle was built
+(236 MB) and checked on its own embedded Python: CAM boots and renders on
+sandbox data, and CAM2 starts in host mode from a CAM handoff and serves its
+page and state. Changed while building:*
+- *`exam_grading/` was already in the bundle (`git archive HEAD` includes the
+  subtree), but it could not run there. The embedded Python's `._pth` adds
+  neither the script's folder nor the working folder, and lists CAM's root and
+  `cam_grading_workspace`, so `python launcher.py` imported CGW's `app.py`
+  (checked: `ImportError: cannot import name 'create_app'`). CAM now starts
+  the launcher through a `-c` boot that puts `exam_grading/` first on
+  `sys.path` (`exam_bridge.launch_command`). `exam_grading` is deliberately
+  kept out of `._pth`, where its `engine` would shadow CAM's.*
+- *CAM2's Windows picker child had the same problem (`-m engine.pickers`
+  found no module, so Browse opened nothing). Fixed in CAM2 (`5e67ba4`) and
+  pulled in.*
+- *The dependencies were already covered; `requirements.txt` now pulls in
+  `exam_grading/requirements.txt` explicitly so a future CAM2 dependency is not
+  missed. CAM2's tests, tools, `doc/`, `PLAN.md` and `AGENTS.md` are left out
+  of the bundle, and the zip audit requires CAM2's launcher, app and engine.*
 
 ---
 

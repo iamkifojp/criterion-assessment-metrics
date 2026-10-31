@@ -21,6 +21,12 @@ workflow and troubleshooting, open `CAM Quick Guide.pdf` in the bundle. If CAM
 does not start, run **Start CAM (troubleshooting).bat** and inspect
 `logs\cam.log`.
 
+Exams are graded in **CAM2 Exam Grading**, which is included: Window 1's
+**🛠 Exam setup / Grade** opens it in its own browser tab, and it stops by
+itself when no CAM2 tab has been open for 10 minutes. If it does not open, CAM
+shows the reason; the full start-up log is
+`%TEMP%\cam_exam_handoffs\cam2_launch.log`.
+
 When updating, extract the new bundle into a new app folder and select the same
 data folder on first start. Never replace or delete your data folder. The
 release also provides a `SHA256SUMS.txt` file: advanced users can compare it
