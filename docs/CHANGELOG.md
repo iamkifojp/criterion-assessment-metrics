@@ -6,6 +6,20 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-11-01 — v2026.11.01 Windows portable release
+
+**What this changes** — the first release since v2026.07.14.1, published as
+`CAM-portable-v2026.11.01.zip` with `SHA256SUMS.txt`. Highlights, the update
+steps and a warning are in
+[RELEASE_NOTES_v2026.11.01.md](RELEASE_NOTES_v2026.11.01.md).
+
+- **Update every computer on a shared data folder.** v2026.07.14.x can open
+  the schema-2 database but saves only the fields it knows: it writes schema 1
+  back and drops draft feedback, reporting classes and `exam_sessions`, after
+  which the new version quarantines the file. The release notes, SETUP and the
+  bundle's `READ ME FIRST.txt` now say so.
+- README and SETUP point to the new ZIP and release notes.
+
 ## 2026-11-01 — CAM2 runs from the Windows bundle (convergence Stage 5)
 
 - What: the portable bundle ships CAM2 Exam Grading (`exam_grading/`,

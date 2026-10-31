@@ -276,6 +276,10 @@ Download and extract the new app folder, then use that folder instead of the
 old one. Your gradebook remains in the separate data folder you selected, so
 replacing the app folder does not replace your data. Select the same data
 folder when the updated app first opens.
+
+If several computers use the same data folder, update all of them. An older
+CAM can open a database saved by a newer one, but saving from it loses what
+it does not know about.
 """
     (bundle / "READ ME FIRST.txt").write_text(text, encoding="utf-8-sig")
 

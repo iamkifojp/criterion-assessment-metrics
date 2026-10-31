@@ -5,7 +5,7 @@ connected to your own data.
 
 ## For colleagues on Windows: use the portable bundle
 
-Download `CAM-portable-v2026.07.14.zip` from the
+Download `CAM-portable-v2026.11.01.zip` from the
 [latest GitHub release](https://github.com/iamkifojp/criterion-assessment-metrics/releases/latest),
 or use the same file if you received it from your school or CAM maintainer. It
 needs no administrator access, Python installation, Git, or terminal:
@@ -30,11 +30,13 @@ shows the reason; the full start-up log is
 When updating, extract the new bundle into a new app folder and select the same
 data folder on first start. Never replace or delete your data folder. The
 release also provides a `SHA256SUMS.txt` file: advanced users can compare it
-with `Get-FileHash .\CAM-portable-v2026.07.14.zip -Algorithm SHA256` in
+with `Get-FileHash .\CAM-portable-v2026.11.01.zip -Algorithm SHA256` in
 PowerShell to confirm the download is unchanged.
 
-See the [v2026.07.14 release notes](RELEASE_NOTES_v2026.07.14.md) for the main
-changes and a short update checklist.
+See the [v2026.11.01 release notes](RELEASE_NOTES_v2026.11.01.md) for the main
+changes and a short update checklist. If several computers share your data
+folder, update all of them: an older CAM that saves the database drops what it
+does not know about.
 
 ## For developers and maintainers: run from source
 

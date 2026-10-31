@@ -59,7 +59,7 @@ bundle from **[GitHub Releases](https://github.com/iamkifojp/criterion-assessmen
 It includes Python and all required packages, so teachers do not need Git,
 administrator access, a Python installation, or a terminal.
 
-1. Download `CAM-portable-v2026.07.14.zip` and choose **Extract All**.
+1. Download `CAM-portable-v2026.11.01.zip` and choose **Extract All**.
 2. Open the extracted `CAM-portable` folder and double-click **Start CAM.vbs**.
 3. On first start, choose a separate data folder or start with the fictional
    sample class in `Documents\CAM Data`.
@@ -68,7 +68,7 @@ Do not run CAM from inside the zip. The app folder and data folder are kept
 separate, so installing an update never replaces the gradebook. The bundle also
 contains **CAM Quick Guide.pdf**, a visible troubleshooting launcher, and a log
 file for startup problems. See the
-[v2026.07.14 release notes](docs/RELEASE_NOTES_v2026.07.14.md) for highlights,
+[v2026.11.01 release notes](docs/RELEASE_NOTES_v2026.11.01.md) for highlights,
 upgrade guidance, and verification details.
 
 ## Run from source
@@ -115,7 +115,8 @@ live in a local or cloud folder you point CAM at via
 - [CAM Quick Guide](docs/QUICK_GUIDE.md) — task-based first steps included as a PDF in the Windows bundle.
 - [Setup guide](docs/SETUP.md) — install, run, connect your data and API keys.
 - [User manual](docs/USER_MANUAL.md) — illustrated walkthrough of daily use.
-- [v2026.07.14 release notes](docs/RELEASE_NOTES_v2026.07.14.md) — Windows bundle highlights and upgrade notes.
+- [v2026.11.01 release notes](docs/RELEASE_NOTES_v2026.11.01.md) — what's new, and updating every computer that shares a data folder.
+- [v2026.07.14 release notes](docs/RELEASE_NOTES_v2026.07.14.md) — the first Windows bundle.
 - [Architecture](docs/ARCHITECTURE.md) — how the pieces fit together.
 - [Data dictionary](docs/DATA_DICTIONARY.md) — the database schema.
 
