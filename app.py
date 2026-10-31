@@ -118,6 +118,7 @@ from engine import (
 from engine.aggregation import METHOD_60_40, METHOD_WEIGHTED_MEDIAN
 from engine.folder_dialog import documents_folder, pick_folder
 from engine import rubrics
+from engine import exam_bridge
 
 # --------------------------------------------------------------------------
 # Constants
@@ -147,6 +148,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # spawns it on its own port so it never blocks the Streamlit server.
 GRADING_WORKSPACE_DIR = os.path.join(BASE_DIR, "cam_grading_workspace")
 GRADING_PORT = 5001
+# CAM2 host-mode handoffs (convergence Stage 3) hold the class list, so they
+# stay on this computer, never in the cloud class folder.
+CAM2_HANDOFF_DIR = os.path.join(tempfile.gettempdir(), "cam_exam_handoffs")
 
 # CGW slices exam pages into <cloud class folder>/exam_crops/<exam>/<Q or
 # __name__>/<student>.png (the Phase-6 cloud root) — older installs used an
@@ -193,6 +197,26 @@ def exam_crop_path(class_name: str, exam_name: str, label: str,
 def exam_name_crop_path(class_name: str, exam_name: str, student_key: str) -> str:
     """Absolute path to a student's name-box crop, or "" when none exists."""
     return exam_crop_path(class_name, exam_name, EXAM_NAME_BOX_DIR, student_key)
+
+
+def cam2_session_dir(class_name: str, exam_name: str) -> str:
+    """The CAM2 session folder of an exam (``<class>/exams/<folder>/``), from
+    the folder recorded at launch/Sync, else the exam's default folder name.
+    Resolved on this computer, so a cloud folder synced to a different path
+    on another computer still works."""
+    meta = st.session_state["exam_sessions"].get(class_name, {}).get(exam_name) or {}
+    base = meta.get("folder") or exam_bridge.folder_name(exam_name)
+    return os.path.join(class_data_dir(class_name), exam_bridge.EXAMS_DIR, base)
+
+
+def cam2_name_crop(class_name: str, exam_name: str, student_key: str) -> str:
+    """A roster student's handwritten-name crop in the exam's CAM2 session
+    (``crops/__name__/<paper id>.png``), or "" when none."""
+    meta = st.session_state["exam_sessions"].get(class_name, {}).get(exam_name) or {}
+    sid = (meta.get("papers") or {}).get(student_key)
+    if not sid:
+        return ""
+    return exam_bridge.name_crop(cam2_session_dir(class_name, exam_name), sid)
 
 
 def exam_has_name_crops(class_name: str, exam_name: str) -> bool:
@@ -817,6 +841,11 @@ def init_state() -> None:
         #     is (re)ingested (purge-replace, like scores). Never mints phantoms.
         "work_aliases": {},      # class -> {csv_key -> roster_key} (durable)
         "unmatched_works": {},   # class -> {assignment -> [pool-row dicts]}
+        # CAM2 exams (convergence Stage 3): class -> {exam -> {"folder" (the
+        # session folder's name under <class>/exams/), "mode", "rubrics"
+        # [{id, name, max}], "criteria" {rubric id -> CAM letter, the
+        # teacher's mapping}, "papers" {roster key -> CAM2 paper id}}.
+        "exam_sessions": {},
         "session_sync_done": False,  # one-shot guard: session-start global sync
         # Post-🖌-launch marker (Phase 1): {class, assignment, folder_ref,
         # launched_at, last_probe} while a grading session is open, else None.
@@ -1017,6 +1046,7 @@ def build_session_payload() -> dict:
         # per-assignment unmatched-works pools (see init_state).
         "work_aliases": ss["work_aliases"],
         "unmatched_works": ss["unmatched_works"],
+        "exam_sessions": ss["exam_sessions"],
         # Parsed unit plans per class (previously session-only, now durable).
         "unit_plans": {cls: unit_plan_to_dict(p)
                        for cls, p in ss["unit_plans"].items() if p},
@@ -1072,6 +1102,12 @@ def restore_session(session: dict) -> None:
             str(cls): {str(asg): [r for r in rows if isinstance(r, dict)]
                        for asg, rows in m.items() if isinstance(rows, list)}
             for cls, m in uw.items() if isinstance(m, dict)}
+    es = session.get("exam_sessions")
+    if isinstance(es, dict):
+        ss["exam_sessions"] = {
+            str(cls): {str(exam): dict(meta) for exam, meta in m.items()
+                       if isinstance(meta, dict)}
+            for cls, m in es.items() if isinstance(m, dict)}
     # Parsed unit plans per class. Parse each entry defensively so one malformed
     # plan is skipped rather than aborting the whole restore; the class-context
     # pass (ensure_class_context) later repoints the ``unit_plan`` alias.
@@ -2534,7 +2570,7 @@ def rename_class(old: str, new: str) -> bool:
         if c["name"] == old:
             c["name"] = new
     # Containers keyed by class name.
-    for store in ("rosters", "archived_students", "unit_plans"):
+    for store in ("rosters", "archived_students", "unit_plans", "exam_sessions"):
         if old in ss[store]:
             ss[store][new] = ss[store].pop(old)
     for definition in ss.get("reporting_classes", []):
@@ -3116,22 +3152,83 @@ def launch_grading_workspace(assignment_name: str) -> str:
 
 
 def launch_exam_setup(exam_name: str) -> str:
-    """Open the grading workspace's Exam Setup page for the active class,
-    pre-filled with ``exam_name``. Returns the URL opened ('' on failure)."""
-    if not _ensure_workspace_running():
+    """Open one exam of the active class in CAM2 (convergence Stage 3).
+
+    The exam's session lives in ``<class folder>/exams/<exam>/`` (D6). CAM
+    writes a handoff (exam, class, folder, roster) on this computer and starts
+    CAM2's launcher in host mode; CAM2 opens or starts that session and opens
+    the browser itself (a CAM2 that is already running is handed the exam).
+    CAM never writes inside the session folder. Returns a status message
+    ('' on failure, with the reason in ``save_status``)."""
+    cls = st.session_state["active_class"]
+    if not os.path.isfile(exam_bridge.CAM2_LAUNCHER):
+        st.session_state["save_status"] = (
+            "error", f"CAM2 exam grading not found at {exam_bridge.CAM2_LAUNCHER}.")
         return ""
-    # Best-effort seeding only: exams are keyed by class name and run on local
-    # folders (no OAuth), so a local or unset master directory never blocks
-    # Exam Setup — the Drive mapping is just a bonus for Drive-backed classes.
-    _seed_workspace_class()
-    params = {"class": st.session_state["active_class"], "exam": exam_name}
-    url = f"http://127.0.0.1:{GRADING_PORT}/exam_setup?{urlencode(params)}"
+    class_dir = class_data_dir(cls, create=True)
+    metas = st.session_state["exam_sessions"].setdefault(cls, {})
+    meta = metas.get(exam_name) or {}
+    folder_base = meta.get("folder") or ""
+    if not folder_base:
+        # Two exam names can sanitise to one folder name ("Mid:1", "Mid_1");
+        # the second gets "(2)" rather than opening the first one's session.
+        taken = {m.get("folder") for e, m in metas.items() if e != exam_name}
+        stem = folder_base = exam_bridge.folder_name(exam_name)
+        n = 1
+        while folder_base in taken:
+            n += 1
+            folder_base = f"{stem} ({n})"
+    folder = os.path.join(class_dir, exam_bridge.EXAMS_DIR, folder_base)
     try:
-        webbrowser.open(url)
-    except Exception:
-        pass
-    st.session_state["save_status"] = ("ok", f"Exam setup launched → {url}")
-    return url
+        os.makedirs(os.path.dirname(folder), exist_ok=True)
+        handoff_path = exam_bridge.write_handoff(
+            CAM2_HANDOFF_DIR,
+            exam_bridge.handoff(exam_name, cls, folder,
+                                st.session_state["rosters"].get(cls, [])))
+        log_path = os.path.join(CAM2_HANDOFF_DIR, "cam2_launch.log")
+        was_running = bool(exam_bridge.running_url())
+        with open(log_path, "w", encoding="utf-8", errors="replace") as log:
+            proc = subprocess.Popen(
+                exam_bridge.launch_command(handoff_path),
+                cwd=exam_bridge.CAM2_DIR,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                stdout=log, stderr=subprocess.STDOUT)
+    except OSError as exc:
+        st.session_state["save_status"] = ("error", f"Could not start CAM2: {exc}")
+        return ""
+    # Started: a new CAM2 answers its ping, or the launcher handed the exam to
+    # the CAM2 that was already running and exited 0 (that CAM2 answering its
+    # ping proves nothing until the hand-over is done). Anything else is a
+    # failed start; the log's last line usually names it.
+    started = False
+    for _ in range(60):                # max ~15 s
+        code = proc.poll()
+        if code is not None:
+            started = code == 0
+            break
+        if not was_running and exam_bridge.running_url():
+            started = True
+            break
+        time.sleep(0.25)
+    if not started:
+        detail = ""
+        try:
+            with open(log_path, encoding="utf-8", errors="replace") as fh:
+                lines = [ln.strip() for ln in fh if ln.strip()]
+            if lines:
+                detail = " — " + lines[-1]
+        except OSError:
+            pass
+        st.session_state["save_status"] = (
+            "error", f"CAM2 did not start{detail} (see {log_path})")
+        return ""
+    if meta.get("folder") != folder_base:
+        metas[exam_name] = dict(meta, folder=folder_base)
+        persist()
+    msg = (f"'{exam_name}' opened in CAM2 (session folder: {folder}). When "
+           "grading is done, click Send to CAM there, then 🔄 Sync here.")
+    st.session_state["save_status"] = ("ok", msg)
+    return msg
 
 
 def launch_drive_signin() -> str:
@@ -3540,6 +3637,7 @@ def assignment_table():
         # raw average (and count raw submissions) alongside any banded scores.
         is_exam = bool(getattr(asg, "is_exam", False))
         raw_totals = []
+        n_rubric = 0     # CAM2 rubric-mode papers: levels per criterion, no total
         if is_exam:
             # Section-aware (Phase 5D): use each student's *resolved* total and
             # drop students whose choice section is still pending (`?`) from the
@@ -3549,7 +3647,10 @@ def assignment_table():
                 if asg.name not in getattr(s, "exam_results", {}):
                     continue
                 r = s.exam_results[asg.name]
-                if exam_is_pending(r, secs):
+                if r.mode == "rubric":
+                    n_rubric += 1
+                    continue
+                if exam_is_pending(r, secs) or not r.complete:
                     continue
                 raw_totals.append(resolved_total(r, secs))
         rows.append({
@@ -3562,11 +3663,12 @@ def assignment_table():
             "grading_complete": bool(getattr(asg, "grading_complete", False)),
             "max_total": int(getattr(asg, "max_total", 0)),
             "raw_avg": round(mean(raw_totals), 1) if raw_totals else None,
+            "is_rubric": bool(n_rubric),
             "term": assignment_term(asg),
             "date": when,
             "submissions": max(len(asg.draft_feedback) if asg.is_draft else 0,
                                len({s.student_id for s, _ in pairs}),
-                               len(raw_totals)),
+                               len(raw_totals), n_rubric),
             "avg": round(mean(valid), 2) if valid else None,
             "spread": round(pstdev(valid), 2) if len(valid) > 1 else 0.0,
             "lates": lates,
@@ -3908,6 +4010,17 @@ def _duplicate_file_kind(path: str, fname: str) -> str:
     return "canonical" if due_dt.date() == fname_dt.date() else "fallback"
 
 
+def _walk_class(class_path: str):
+    """``os.walk`` over a class folder for grading CSVs, skipping the
+    top-level ``exams/`` folder: CAM2 sessions live there (scans, crops,
+    reports) and Sync reads them as sessions, never as CSVs."""
+    top = os.path.abspath(class_path)
+    for dirpath, dirs, files in os.walk(class_path):
+        if os.path.abspath(dirpath) == top:
+            dirs[:] = [d for d in dirs if d != exam_bridge.EXAMS_DIR]
+        yield dirpath, dirs, files
+
+
 def _scan_class_duplicate_groups(class_path: str) -> dict:
     """Group a class subtree's grading CSVs by cleaned assignment name.
 
@@ -3917,7 +4030,7 @@ def _scan_class_duplicate_groups(class_path: str) -> dict:
     stem with a grading CSV. Unreadable files are left for the main loop to
     report; they never join a group."""
     groups: dict = {}
-    for dirpath, _dirs, files in os.walk(class_path):
+    for dirpath, _dirs, files in _walk_class(class_path):
         for fname in sorted(files):
             if not fname.lower().endswith(".csv"):
                 continue
@@ -3992,7 +4105,7 @@ def _assignment_csv_paths(class_name: str, assignment_name: str) -> list:
     if not os.path.isdir(class_path):
         return []
     out = []
-    for dirpath, _dirs, files in os.walk(class_path):
+    for dirpath, _dirs, files in _walk_class(class_path):
         for fname in sorted(files):
             if not fname.lower().endswith(".csv"):
                 continue
@@ -4023,7 +4136,7 @@ def _exam_csv_paths(class_name: str, exam_name: str) -> list:
     if not os.path.isdir(class_path):
         return []
     out = []
-    for dirpath, _dirs, files in os.walk(class_path):
+    for dirpath, _dirs, files in _walk_class(class_path):
         for fname in sorted(files):
             if not fname.lower().endswith(".csv"):
                 continue
@@ -4145,6 +4258,136 @@ def _sync_one_csv(path: str, fname: str, class_name: str,
     return (True, changed)
 
 
+def _cam2_exam_for_folder(class_name: str, folder: str) -> str:
+    """The CAM exam a session folder belongs to: the folder recorded at
+    launch (it survives renaming the exam), else an exam of the class whose
+    name gives that folder name, else "" (the session's own exam name is
+    used)."""
+    base = os.path.basename(folder)
+    for exam, meta in st.session_state["exam_sessions"].get(class_name, {}).items():
+        if meta.get("folder") == base:
+            return exam
+    for a in gb().assignments:
+        if (getattr(a, "is_exam", False)
+                and getattr(a, "class_name", "") == class_name
+                and exam_bridge.folder_name(a.name) == base):
+            return a.name
+    return ""
+
+
+def _ingest_cam2_session(class_name: str, exam: str, session, summary: dict) -> int:
+    """File one session's results under ``exam`` in ``class_name``.
+
+    Purge-replace, like a re-synced CSV: this exam's previous results are
+    dropped and the session's are filed (by ``external_id``, then alias /
+    prefix, else the 🧩 pool). Grades already applied in Window 1 are kept.
+    Returns the number of papers read."""
+    roster_keys = {e.get("key") for e in st.session_state["rosters"].get(
+        class_name, []) if e.get("key")}
+    aliases = dict(st.session_state["work_aliases"].get(class_name, {}))
+    matched, pool, auto_aliases = exam_bridge.route_session(
+        session, roster_keys, aliases)
+    for student in gb():
+        results = getattr(student, "exam_results", {})
+        prev = results.get(exam)
+        if prev is not None and (student.student_id in roster_keys
+                                 or prev.session_id == session.session_id):
+            results.pop(exam)
+    paper_of = {id(p.result): p.student_id for p in session.papers}
+    for key, result in matched.items():
+        gb().get_or_create(key).exam_results[exam] = result
+
+    pool_map = st.session_state["unmatched_works"].setdefault(class_name, {})
+    if pool:
+        pool_map[exam] = pool
+    else:
+        pool_map.pop(exam, None)
+    if auto_aliases:
+        st.session_state["work_aliases"].setdefault(class_name, {}).update(auto_aliases)
+        for ck, rk in sorted(auto_aliases.items()):
+            summary["messages"].append(
+                f"🔗 {exam}: matched `{ck}` → {rk} by prefix (recorded as an alias).")
+    if pool:
+        summary["messages"].append(
+            f"🧩 {exam}: {len(pool)} paper(s) need matching to a student "
+            "(Window 2).")
+
+    _ensure_class(class_name)
+    asg = next((a for a in gb().assignments if a.name == exam
+                and getattr(a, "class_name", "") == class_name), None)
+    if asg is None:
+        asg = gb().register_assignment(Assignment(
+            name=exam, criteria=[], ingested_at=datetime.now()))
+        asg.class_name = class_name
+        asg.term = current_term()
+        st.session_state["active"].setdefault(exam, True)
+    asg.is_exam = True
+    asg.source_file = session.folder
+    asg.max_total = session.max_total
+    asg.question_labels = list(session.question_labels)
+    asg.sections = None
+    asg.note = (f"exam — CAM2 {session.mode or 'session'}; confirm grades in "
+                "Window 1")
+    meta = st.session_state["exam_sessions"].setdefault(class_name, {}).setdefault(exam, {})
+    meta.update(folder=os.path.basename(session.folder), mode=session.mode,
+                session_id=session.session_id, rubrics=list(session.rubrics),
+                papers={key: paper_of.get(id(r), "") for key, r in matched.items()})
+    meta.setdefault("criteria", {})
+    return len(session.papers)
+
+
+def _sync_cam2_sessions(class_name: str, registry: dict, summary: dict,
+                        only_exam: str = "") -> tuple:
+    """Read the class's CAM2 sessions (``<class folder>/exams/*/``), read only.
+
+    A session is read once the teacher has clicked *Send to CAM* in CAM2
+    (``host_ready_at``) and again whenever its files change (fingerprint in
+    the ``ingested_files`` registry, keyed by folder). ``only_exam`` limits
+    the pass to one exam. Returns ``(ingested, changed)`` like
+    :func:`_sync_one_csv`."""
+    any_ingested = False
+    for folder in exam_bridge.find_sessions(class_data_dir(class_name)):
+        exam = _cam2_exam_for_folder(class_name, folder)
+        if only_exam and exam != only_exam:
+            continue
+        name = os.path.basename(folder)
+        try:
+            fingerprint = exam_bridge.session_fingerprint(folder)
+            mtime = os.path.getmtime(folder)
+        except OSError as exc:
+            summary["found"] += 1
+            summary["errors"] += 1
+            summary["messages"].append(f"Unreadable exam session: {name} ({exc})")
+            continue
+        prior = registry.get(folder)
+        if prior and prior.get("hash") == fingerprint:
+            summary["found"] += 1
+            summary["skipped"] += 1
+            continue
+        try:
+            session = exam_bridge.read_session(folder, assignment=exam or None)
+        except exam_bridge.ExamSessionError as exc:
+            summary["found"] += 1
+            summary["errors"] += 1
+            summary["messages"].append(f"Exam session {name}: {exc.code}")
+            continue
+        if not session.ready_at:
+            continue    # still being graded: Sync waits for "Send to CAM"
+        summary["found"] += 1
+        exam = exam or session.exam_name or name
+        n = _ingest_cam2_session(class_name, exam, session, summary)
+        summary["updated" if prior else "ingested"] += 1
+        summary["scores"] += n
+        summary["classes"].add(class_name)
+        registry[folder] = {
+            "hash": fingerprint, "mtime": mtime, "class": class_name,
+            "assignment": exam, "kind": "cam2",
+            "ingested_at": datetime.now().isoformat(),
+        }
+        any_ingested = True
+    return (any_ingested, any_ingested)
+
+
 def sync_assignment(class_name: str, assignment_name: str) -> dict:
     """Scoped Sync of one assignment's export CSV(s) in one class.
 
@@ -4219,8 +4462,10 @@ def sync_exam(class_name: str, exam_name: str) -> dict:
     (:func:`_sync_one_csv`), so an exam export surfaces without a full-tree
     ``sync_all``. ``_sync_one_csv`` -> ``_ingest_cloud_file`` already routes an
     exam header to the item-level exam pipeline, so no exam-specific ingest logic
-    is duplicated here. Returns the same summary shape as ``sync_from_cloud`` for
-    :func:`_report_sync`. A quiet no-op when no Custom Database Path is set."""
+    is duplicated here. The exam's CAM2 session, if any, is read too
+    (:func:`_sync_cam2_sessions`). Returns the same summary shape as
+    ``sync_from_cloud`` for :func:`_report_sync`. A quiet no-op when no Custom
+    Database Path is set."""
     summary = {"found": 0, "ingested": 0, "updated": 0, "skipped": 0,
                "errors": 0, "scores": 0, "duplicates": 0, "reconciled": 0,
                "classes": set(), "messages": [], "duplicate_messages": []}
@@ -4239,6 +4484,10 @@ def sync_exam(class_name: str, exam_name: str) -> dict:
             path, os.path.basename(path), class_name, registry, summary)
         any_ingested = any_ingested or ingested
         any_change = any_change or changed
+    ingested, changed = _sync_cam2_sessions(class_name, registry, summary,
+                                            only_exam=exam_name)
+    any_ingested = any_ingested or ingested
+    any_change = any_change or changed
 
     if any_ingested or any_change:
         if st.session_state["active_class"] not in class_names() and class_names():
@@ -4347,7 +4596,7 @@ def sync_from_cloud() -> dict:
             summary["duplicate_messages"].append(
                 _format_duplicate_message(
                     name, class_name, dup_groups[name], registry))
-        for dirpath, _dirs, files in os.walk(entry.path):
+        for dirpath, _dirs, files in _walk_class(entry.path):
             for fname in sorted(files):
                 if not fname.lower().endswith(".csv"):
                     continue
@@ -4366,6 +4615,11 @@ def sync_from_cloud() -> dict:
                     path, fname, class_name, registry, summary)
                 any_ingested = any_ingested or ingested
                 any_change = any_change or changed
+        # CAM2 exam sessions in <class>/exams/ (read only; see
+        # _sync_cam2_sessions).
+        ingested, changed = _sync_cam2_sessions(class_name, registry, summary)
+        any_ingested = any_ingested or ingested
+        any_change = any_change or changed
 
     if any_ingested or any_change:
         # Keep the active class valid and mirror everything to disk (the
@@ -4918,6 +5172,17 @@ def rename_assignment(old: str, new: str) -> bool:
             ef["||".join([parts[0], new])] = ef.pop(k)
     if st.session_state["sel_assignment"] == old:
         st.session_state["sel_assignment"] = new
+    # A CAM2 exam keeps its session folder; its record, 🧩 pool and Sync
+    # registry row follow the new name.
+    for cls, metas in st.session_state["exam_sessions"].items():
+        if old in metas:
+            metas[new] = metas.pop(old)
+            pools = st.session_state["unmatched_works"].get(cls, {})
+            if old in pools:
+                pools[new] = pools.pop(old)
+    for rec in st.session_state["ingested_files"].values():
+        if rec.get("kind") == "cam2" and rec.get("assignment") == old:
+            rec["assignment"] = new
     persist()
     return True
 
@@ -5081,6 +5346,29 @@ def _purge_exam_cgw_artifacts(name: str, classes) -> None:
                     print(f"[exam purge] dropped {exam!r} from {legacy_defs}")
 
 
+def _retire_cam2_sessions(name: str, classes) -> None:
+    """Permanent delete of an exam: move its CAM2 session folder into
+    ``exams/_deleted/<date-time> <exam>/`` (never deleted; removing it for
+    good is the teacher's own, separate step) and forget its CAM2 record and
+    🧩 pool."""
+    ss = st.session_state
+    for class_name in (classes or {""}):
+        folder = cam2_session_dir(class_name, name)
+        ss["exam_sessions"].get(class_name, {}).pop(name, None)
+        ss["unmatched_works"].get(class_name, {}).pop(name, None)
+        try:
+            moved = exam_bridge.retire_session(folder)
+        except OSError as exc:
+            ss["save_status"] = (
+                "error",
+                f"Could not move the CAM2 folder of '{name}' aside ({exc}). "
+                f"Move {folder} out of the exams folder by hand, or Sync will "
+                "bring the exam back.")
+            continue
+        if moved:
+            print(f"[exam delete] moved {folder} -> {moved}")
+
+
 def delete_assignment_permanent(name: str) -> None:
     """Hard-delete: purge the assignment record AND every score it produced.
 
@@ -5136,6 +5424,7 @@ def delete_assignment_permanent(name: str) -> None:
     # assignments carry no such artifacts and skip this entirely.
     if is_exam:
         _purge_exam_cgw_artifacts(name, classes)
+        _retire_cam2_sessions(name, classes)
     persist()
 
 
@@ -5200,6 +5489,7 @@ def delete_class(name: str) -> bool:
     # Remove the class container itself (roster, unit plan, class entry).
     ss["rosters"].pop(name, None)
     ss["unit_plans"].pop(name, None)
+    ss["exam_sessions"].pop(name, None)
     ss["classes"] = [c for c in ss["classes"] if c["name"] != name]
 
     # If the deleted class was active, fall back to a surviving one.
@@ -5240,6 +5530,7 @@ def wipe_database_full() -> None:
     ss["ingested_files"] = {}  # forget the cloud-sync registry -> full re-sync
     ss["work_aliases"] = {}    # Phase 3: durable alias map + unmatched pools
     ss["unmatched_works"] = {}
+    ss["exam_sessions"] = {}
     ss["staging"] = {}
     ss["focus_sid"] = None
     ss["sel_assignment"] = None
@@ -7293,7 +7584,8 @@ def _render_assignment_table() -> None:
         elif r.get("is_exam"):
             # Exams show their RAW class average (e.g. "raw ø 31.5/45"), not a
             # band — banding happens in the panel below the table.
-            raw = (f"raw ø {r['raw_avg']}/{r['max_total']}"
+            raw = ("rubric" if r.get("is_rubric")
+                   else f"raw ø {r['raw_avg']}/{r['max_total']}"
                    if r["raw_avg"] is not None else "raw · ungraded")
             crit = f" → Crit {r['criteria']}" if r["criteria"] != "—" else ""
             c[2].caption(f"📝 {raw}{crit}  ·  {r['date']:%b %d}")
@@ -7363,17 +7655,26 @@ def _render_exam_banding() -> None:
         if not results:
             st.caption("This exam's CSV carried no student rows.")
             return
+        if any(r.mode == "rubric" for _, r in results):
+            _render_cam2_rubric_banding(asg, results)
+            return
         # Section-aware raw marks (Phase 5D): every raw number shown here is the
         # *resolved* total; a student whose choice section is still pending (`?`)
         # is excluded from the class average and can't be banded until resolved
         # in Window 3.
         secs = getattr(asg, "sections", None)
+        # A CAM2 marks exam has no sections; a paper still being graded there
+        # (or with a "teacher picks" choice open) is held back the same way.
         counted = [resolved_total(r, secs) for _, r in results
-                   if not exam_is_pending(r, secs)]
+                   if not exam_is_pending(r, secs) and r.complete]
         avg = mean(counted) if counted else 0.0
         n_pending = sum(1 for _, r in results if exam_is_pending(r, secs))
+        n_unfinished = sum(1 for _, r in results if not r.complete)
         pending_note = (f" · ⚠ {n_pending} pending (`?`) — resolve in Window 3"
                         if n_pending else "")
+        if n_unfinished:
+            pending_note += (f" · ⏳ {n_unfinished} not finished in CAM2 — "
+                             "finish grading there, Send to CAM and Sync")
         st.caption(f"Raw marks out of **{resolved_max(results[0][1], secs) or '?'}** "
                    f"· class raw average **{avg:.1f}** · {len(results)} student(s)"
                    f"{pending_note} · questions: "
@@ -7407,6 +7708,17 @@ def _render_exam_banding() -> None:
                 row[0].write(student_label(s))
                 pending = exam_is_pending(r, secs)
                 rmax = resolved_max(r, secs) or asg.max_total or 0
+                if not r.complete:
+                    row[1].write(f"… / {rmax or '?'}")
+                    row[2].write("…")
+                    row[3].button("not finished",
+                                  key=f"band_unf_{sel}_{s.student_id}",
+                                  disabled=True, width="stretch",
+                                  help="This paper is not fully graded in "
+                                       "CAM2 yet (or a choice group is "
+                                       "waiting for you to pick). Finish it "
+                                       "there, Send to CAM and Sync.")
+                    continue
                 if pending:
                     row[1].write(f"? / {rmax or '?'}")
                     row[2].write("?")
@@ -7435,6 +7747,9 @@ def _render_exam_banding() -> None:
             if n_pending:
                 msg += (f" {n_pending} pending student(s) skipped — resolve "
                         "their `?` sections in Window 3.")
+            if n_unfinished:
+                msg += (f" {n_unfinished} paper(s) not finished in CAM2 "
+                        "skipped.")
             st.session_state["save_status"] = ("ok", msg)
             st.rerun()
 
@@ -7527,20 +7842,26 @@ def _render_banding_student_sectioned(sel, asg, secs, s, r, existing) -> None:
                  "gradebook. Suggested from the section levels; override freely.")
 
 
+def _exam_band_time(asg) -> datetime:
+    """When an exam's grades are dated: its date override, else its import."""
+    if asg.name in st.session_state["date_override"]:
+        return datetime.combine(
+            st.session_state["date_override"][asg.name], datetime.min.time())
+    return asg.ingested_at or datetime.now()
+
+
 def _apply_exam_bands(asg, crit_letter: str, results) -> int:
     """Write the chosen 0-8 bands as CriterionScores (replacing prior bands)."""
     crit = Criterion(crit_letter)
     secs = getattr(asg, "sections", None)
-    when = asg.ingested_at or datetime.now()
-    if asg.name in st.session_state["date_override"]:
-        when = datetime.combine(
-            st.session_state["date_override"][asg.name], datetime.min.time())
+    when = _exam_band_time(asg)
     applied = 0
     sectioned = _exam_has_real_sections(secs)
     for s, r in results:
         band = st.session_state.get(f"band_{asg.name}_{s.student_id}")
-        # Pending (`?`) students' final grade is disabled/empty — skip them.
-        if band is None or exam_is_pending(r, secs):
+        # Pending (`?`) students' final grade is disabled/empty — skip them,
+        # and CAM2 papers not finished there.
+        if band is None or exam_is_pending(r, secs) or not r.complete:
             continue
         # One band per student per exam: drop any earlier banding first.
         for c, bucket in list(s.scores.items()):
@@ -7578,6 +7899,131 @@ def _apply_exam_bands(asg, crit_letter: str, results) -> int:
     return applied
 
 
+def _render_cam2_rubric_banding(asg, results) -> None:
+    """Window 1 panel for a CAM2 rubric-mode exam (D4).
+
+    CAM2 has already worked out each student's final level per rubric (the
+    teacher's, or the suggested round-half-up average). Here each rubric is
+    mapped to a CAM criterion (defaulted from its name, remembered per exam)
+    and the levels are confirmed, one 0-8 dropdown per student and mapped
+    rubric. Applying writes one CriterionScore per mapped criterion."""
+    meta = st.session_state["exam_sessions"].setdefault(
+        getattr(asg, "class_name", ""), {}).setdefault(asg.name, {})
+    saved = meta.setdefault("criteria", {})
+    rubrics = list(meta.get("rubrics") or [])
+    known = {r.get("id") for r in rubrics}
+    for rid in sorted({rid for _, r in results for rid in r.final_levels} - known):
+        rubrics.append({"id": rid, "name": rid, "max": 8})
+    if not rubrics:
+        st.caption("This rubric exam has no rubrics yet.")
+        return
+    st.caption(f"Rubric exam from CAM2 · {len(results)} student(s) · each "
+               "rubric's final level becomes a grade on the criterion you map "
+               "it to.")
+
+    options = ["—"] + list(CRIT_ORDER)
+    mapping: dict = {}
+    cols = st.columns(len(rubrics))
+    for col, rub in zip(cols, rubrics):
+        rid = rub["id"]
+        default = (saved[rid] if rid in saved
+                   else exam_bridge.default_criterion(rub.get("name", "")))
+        pick = col.selectbox(
+            f"{rub.get('name') or rid} →", options,
+            index=options.index(default) if default in options else 0,
+            key=f"exam_rubcrit_{asg.name}_{rid}",
+            help="The CAM criterion this CAM2 rubric counts toward "
+                 "(— = not counted).")
+        if pick != "—":
+            mapping[rid] = pick
+    dupes = sorted(c for c, n in Counter(mapping.values()).items() if n > 1)
+    if dupes:
+        st.error(f"Two rubrics count toward Criterion {', '.join(dupes)} — "
+                 "map each criterion to one rubric.")
+    mapped = [r for r in rubrics if r["id"] in mapping]
+    scaled = [r for r in mapped if r.get("max") and r["max"] != 8]
+    if scaled:
+        st.caption("ⓘ " + "; ".join(f"{r.get('name') or r['id']} goes to "
+                                     f"{r['max']}" for r in scaled)
+                   + " — its levels are scaled to 0–8.")
+    if not mapped:
+        st.info("Map at least one rubric to a criterion to grade this exam.")
+        return
+
+    existing = {(s.student_id, sc.criterion.value): sc.value
+                for s, sc in scores_for_assignment(asg.name) if sc.is_valid}
+    widths = [2.2] + [1.2] * len(mapped)
+    head = st.columns(widths, vertical_alignment="center")
+    head[0].caption("Student")
+    for col, rub in zip(head[1:], mapped):
+        col.caption(f"Crit {mapping[rub['id']]} · {rub.get('name') or rub['id']}")
+    n_unfinished = 0
+    for s, r in results:
+        row = st.columns(widths, vertical_alignment="center")
+        row[0].write(student_label(s))
+        if not r.complete:
+            n_unfinished += 1
+            row[1].caption("⏳ not finished in CAM2")
+            continue
+        for col, rub in zip(row[1:], mapped):
+            final = r.final_levels.get(rub["id"])
+            if final is None:
+                col.caption("—")
+                continue
+            default = existing.get((s.student_id, mapping[rub["id"]]),
+                                   exam_bridge.to_band(final, rub.get("max") or 8))
+            col.selectbox(
+                " ", list(range(0, 9)), index=default if 0 <= default <= 8 else 0,
+                key=f"rband_{asg.name}_{s.student_id}_{rub['id']}",
+                label_visibility="collapsed",
+                help=f"CAM2 final level: {final}")
+
+    if st.button("Apply grades to gradebook", key=f"apply_bands_{asg.name}",
+                 type="primary", disabled=bool(dupes)):
+        for rub in rubrics:
+            saved[rub["id"]] = mapping.get(rub["id"], "—")
+        n = _apply_exam_rubric_levels(asg, mapping, results)
+        letters = ", ".join(sorted(set(mapping.values()), key=CRIT_ORDER.index))
+        msg = f"Graded {n} student(s) for '{asg.name}' → Criterion {letters}."
+        if n_unfinished:
+            msg += f" {n_unfinished} paper(s) not finished in CAM2 skipped."
+        st.session_state["save_status"] = ("ok", msg)
+        st.rerun()
+
+
+def _apply_exam_rubric_levels(asg, mapping: dict, results) -> int:
+    """Write a rubric exam's confirmed levels: one CriterionScore per mapped
+    criterion (``mapping`` = CAM2 rubric id → CAM letter), replacing the
+    exam's earlier grades for that student. Unfinished papers are skipped."""
+    when = _exam_band_time(asg)
+    applied = 0
+    for s, r in results:
+        if not r.complete:
+            continue
+        levels = []
+        for rid, letter in mapping.items():
+            band = st.session_state.get(f"rband_{asg.name}_{s.student_id}_{rid}")
+            if band is not None and rid in r.final_levels:
+                levels.append((letter, int(band), rid))
+        if not levels:
+            continue
+        for c, bucket in list(s.scores.items()):
+            s.scores[c] = [sc for sc in bucket if sc.assignment != asg.name]
+        for letter, band, rid in levels:
+            s.add_score(CriterionScore(
+                criterion=Criterion(letter), value=band, timestamp=when,
+                source=f"exam:{asg.name}", assignment=asg.name,
+                comment=r.comment,
+                note=f"CAM2 rubric {rid}: final level {r.final_levels[rid]}",
+            ))
+        applied += 1
+    asg.criteria = sorted(set(mapping.values()), key=CRIT_ORDER.index)
+    asg.score_count = applied
+    st.session_state["active"].setdefault(asg.name, True)
+    persist()
+    return applied
+
+
 @st.dialog("Assignment analytics", width="large")
 def show_analytics_dialog(name: str) -> None:
     """Pop-up modal: assignment metrics + a Plotly band-distribution chart.
@@ -7597,7 +8043,7 @@ def show_analytics_dialog(name: str) -> None:
     # Streamlit keeps running, passing the assignment's folder ref/name in the
     # URL so the workspace opens straight into it. Manually-created rows have
     # no submission folder to grade: a manual ASSIGNMENT is marked directly in
-    # Window 3, and a manual EXAM offers the workspace's Exam Setup instead.
+    # Window 3. Every EXAM opens in CAM2 instead (launch_exam_setup).
     cls = st.session_state.get("active_class", "")
     asg_rec = next((a for a in gb().assignments
                     if a.name == name and getattr(a, "class_name", "") == cls),
@@ -7605,7 +8051,6 @@ def show_analytics_dialog(name: str) -> None:
     folder_ref = getattr(asg_rec, "folder_ref", "") if asg_rec else ""
     has_folder = bool(folder_ref)
     is_exam_rec = bool(getattr(asg_rec, "is_exam", False)) if asg_rec else False
-    has_exam_data = any(name in getattr(s, "exam_results", {}) for s in gb())
 
     # A local assignment folder may be deleted after its CSV is exported (a
     # sanctioned workflow — the marks already live in CAM). When that happens
@@ -7644,22 +8089,22 @@ def show_analytics_dialog(name: str) -> None:
                 st.rerun()
 
     if is_exam_rec:
-        if st.button("🛠 Exam setup", key=f"examsetup_{name}",
+        # Every exam opens in CAM2 (convergence Stage 3, D5): scans, question
+        # boxes, grading and the exam's own reports all happen there.
+        if st.button("🛠 Exam setup / Grade", key=f"examsetup_{name}",
                      type="primary", width="stretch",
-                     help="Open the grading workspace's exam question "
-                          "programmer for this exam (scan pages, define "
-                          "questions, then grade item by item)."):
-            url = launch_exam_setup(name)
-            if url:
-                st.success(f"Exam setup opened in your browser — or click: "
-                           f"[{url}]({url})")
+                     help="Open this exam in CAM2 Exam Grading: bring in the "
+                          "scans, draw the question boxes, grade, then click "
+                          "Send to CAM and 🔄 Sync here."):
+            msg = launch_exam_setup(name)
+            if msg:
+                st.success(msg)
             else:
                 st.error(st.session_state.get("save_status", ("", ""))[1]
-                         or "Could not launch the exam setup.")
-    if (has_folder and not folder_missing) or has_exam_data:
+                         or "Could not open CAM2.")
+    elif has_folder and not folder_missing:
         if st.button("🖌 Grade this Assignment/Exam", key=f"bridge_{name}",
-                     type="primary" if not is_exam_rec else "secondary",
-                     width="stretch",
+                     type="primary", width="stretch",
                      help="Open the CAM Grading Workspace targeting this "
                           f"assignment (port {GRADING_PORT} — Streamlit is "
                           "never blocked)."):
@@ -7676,7 +8121,17 @@ def show_analytics_dialog(name: str) -> None:
                 f"**0 (missing)** cell under **{name}** to enter their grade "
                 "(with late/excused flags and a comment).")
 
-    if match.get("is_exam"):
+    if match.get("is_rubric"):
+        # A CAM2 rubric exam has levels per criterion, not raw marks; its
+        # question-by-question analysis lives in CAM2's own review step.
+        st.caption(f"📝 Rubric exam (CAM2)  ·  {match['date']:%b %d, %Y}  ·  "
+                   f"{match['submissions']} paper(s)")
+        if match["criteria"] == "—":
+            st.caption("Confirm each student's levels in Window 1's 📝 Exam "
+                       "grading panel to bring this exam into the criterion "
+                       "math.")
+            return
+    elif match.get("is_exam"):
         # Item-level exam analytics: raw totals + per-question averages.
         results = _exam_results_for(name)
         secs = getattr(asg_rec, "sections", None)
@@ -7718,15 +8173,17 @@ def show_analytics_dialog(name: str) -> None:
         # box, show each ingested row's handwritten-name crop beside its student
         # id so a mismatch is spottable at a glance. Re-keying stays the existing
         # manual flow (rename the source file, re-slice, re-sync).
-        if results and exam_has_name_crops(cls, name):
+        if results and (exam_has_name_crops(cls, name) or any(
+                cam2_name_crop(cls, name, s.student_id) for s, _r in results)):
             with st.expander("✍ Name-box crops — check for mis-named scripts",
                              expanded=False):
                 st.caption("Each row's handwritten name, cropped from the scan. "
-                           "If a crop doesn't match its student id, the source "
-                           "file was mis-named — fix it in the grading workspace "
-                           "and re-sync.")
+                           "If a crop doesn't match its student, fix the match "
+                           "in CAM2 (or the file name for an older exam) and "
+                           "re-sync.")
                 for s, _r in results:
-                    crop = exam_name_crop_path(cls, name, s.student_id)
+                    crop = (cam2_name_crop(cls, name, s.student_id)
+                            or exam_name_crop_path(cls, name, s.student_id))
                     ic = st.columns([1.4, 2.6], vertical_alignment="center")
                     ic[0].write(f"**{student_label(s)}**")
                     if crop:
@@ -8091,8 +8548,19 @@ def _exam_pool_thumbnail(cls: str, assignment: str, row: dict, width: int,
     an exam programmed without a name box falls back to the first question's
     crop that survives on disk (same directory layout). ``None`` + note when no
     crop exists under either root — the tile then identifies by filename stem
-    alone."""
+    alone.
+
+    A paper pooled from a CAM2 session shows its name crop from that session
+    (``crops/__name__/<paper id>.png``)."""
     key = row.get("csv_key", "")
+    if row.get("session_student_id"):
+        sid = row["session_student_id"]
+        path = (exam_bridge.name_crop(cam2_session_dir(cls, assignment), sid)
+                or exam_bridge.name_crop(row.get("session_folder", ""), sid))
+        if not path:
+            return None, "No name crop in the CAM2 session for this paper."
+        png = _render_work_png(path, width)
+        return (png, "") if png is not None else (None, "Crop could not be rendered.")
     path = exam_name_crop_path(cls, assignment, key)
     if not path:
         for lbl in question_labels:
@@ -8646,6 +9114,9 @@ def _render_exam_sections(student) -> None:
     for asg, r in records:
         secs = getattr(asg, "sections", None)
         st.markdown(f"**📝 {asg.name}**")
+        if r.mode:
+            _render_cam2_result(asg, r)
+            continue
         if secs:
             for section in secs:
                 stt = section_state(r, section)
@@ -8681,6 +9152,49 @@ def _render_exam_sections(student) -> None:
         else:
             tc[1].caption(f"**{resolved_total(r, secs)}/"
                           f"{resolved_max(r, secs) or asg.max_total or '?'}**")
+
+
+def _render_cam2_result(asg, r) -> None:
+    """Window 3 rows for an exam graded in CAM2: each question's mark (or
+    rubric levels), Not answered, which answers counted (choice groups) and
+    the comment written on it, then the total or final levels."""
+    meta = st.session_state["exam_sessions"].get(
+        getattr(asg, "class_name", ""), {}).get(asg.name) or {}
+    names = {x.get("id"): x.get("name") or x.get("id")
+             for x in meta.get("rubrics") or []}
+    labels = list(asg.question_labels) or list(dict.fromkeys(
+        [*r.questions, *r.levels, *r.not_answered]))
+    counted = set(r.counted)
+    for label in labels:
+        if label in r.not_answered:
+            value = "Not answered"
+        elif label in r.questions:
+            value = str(r.questions[label])
+        elif label in r.levels:
+            value = " · ".join(
+                f"{names.get(rid, rid)} "
+                f"{'n/a' if v == exam_bridge.EXAM_NOT_ANSWERED else v}"
+                for rid, v in r.levels[label].items())
+        else:
+            value = "not graded"
+        note = "  ·  not counted" if counted and label not in counted else ""
+        cc = st.columns([3, 1.6], vertical_alignment="center")
+        cc[0].caption(f"{label}{note}")
+        cc[1].caption(value)
+        comment = r.question_comments.get(label)
+        if comment:
+            st.caption(f"💬 {comment}")
+    tc = st.columns([3, 1.6], vertical_alignment="center")
+    if r.mode == "rubric":
+        tc[0].caption(f"{asg.name} — final levels")
+        total = ", ".join(f"{names.get(rid, rid)} {lvl}"
+                          for rid, lvl in r.final_levels.items()) or "—"
+    else:
+        tc[0].caption(f"{asg.name} — total")
+        total = f"{r.total}/{r.max_total or asg.max_total or '?'}"
+    if not r.complete:
+        total += " · ⏳ not finished"
+    tc[1].caption(f"**{total}**")
 
 
 @st.dialog("Resolve choice section")

@@ -203,8 +203,8 @@ class ReadSessionTests(_SessionBase):
                     ("s001", "q2", 6, "r1"), ("s001", "q3", NA)],
             overall={"s001": {"final_levels": {"r2": 4}}})
         session = read_session(folder)
-        self.assertEqual(session.rubrics, [{"id": "r1", "name": "Criterion A"},
-                                           {"id": "r2", "name": "Criterion B"}])
+        self.assertEqual(session.rubrics, [{"id": "r1", "name": "Criterion A", "max": 8},
+                                           {"id": "r2", "name": "Criterion B", "max": 8}])
         r = session.papers[0].result
         self.assertEqual((r.mode, r.total, r.max_total, r.questions), ("rubric", 0, 0, {}))
         self.assertEqual(r.levels, {"Q1": {"r1": 5, "r2": 3}, "Q2": {"r1": 6}})

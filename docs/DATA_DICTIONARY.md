@@ -207,7 +207,7 @@ still loads the file (it would drop these keys on its next save).
 | `counted` | [label] | Questions that count after CAM2's choice groups (best N or teacher picks). |
 | `complete` | `false` | Present only when a question is ungraded or a teacher-picks choice is open. |
 | `levels` | {label: {rubric id: level \| `"not_answered"`}} | Rubric mode: each question's level per criterion. |
-| `final_levels` | {rubric id: int} | Rubric mode: final level per rubric (teacher's, else CAM2's round-half-up suggestion). Not range-checked to 0–8, since a CAM2 rubric may run to 100; mapping a rubric to a CAM criterion is Stage 3. |
+| `final_levels` | {rubric id: int} | Rubric mode: final level per rubric (teacher's, else CAM2's round-half-up suggestion). Not range-checked to 0–8, since a CAM2 rubric may run to 100. Window 1 maps each rubric to a CAM criterion (C.8) and scales a rubric whose maximum is not 8. |
 | `question_comments` | {label: str} | The comment written on each question. |
 
 In rubric mode `total` and `max_total` are 0. Labels are CAM2 question labels
@@ -786,6 +786,13 @@ layer** applied over **purge-replace** ingest.
   `ExamResult` under the roster id (preserving any prior `chosen` picks) and
   record the durable alias, so a re-sync routes it silently. Plain JSON, so the
   extra fields ride the existing session persistence unchanged.
+- **CAM2 pool rows** (convergence Stage 3). A paper read from a CAM2 session
+  that matches no roster student pools with `is_exam: true`, the shared
+  `csv_key` (the paper's class-list, typed or scan name), the whole result under
+  `result` (an `ExamResult` dict, attached as read on a match), and
+  `session_folder` + `session_student_id` (CAM2's paper id, `s001`, …). The 🧩
+  tile shows `crops/__name__/<session_student_id>.png` from the session,
+  resolved through C.8 so another computer's sync path still works.
 - **Rosterless classes** never populate either store — `ingest_csv` skips routing
   when `roster_keys` is empty, and the score-only "folder-graded before a roster"
   path (ARCHITECTURE §10) stays intact. **Pre-Phase-3 phantom students** from
@@ -828,6 +835,43 @@ this release or newer; older apps can discard unknown session fields.
 fingerprints are ephemeral UI/cache state and are not persisted. Reporting
 classes are never included in grading workspace seeding, source folders,
 ownership indexes or class mirrors.
+
+### C.8 `exam_sessions` (persisted) — CAM2 exams (convergence Stage 3)
+
+```jsonc
+"exam_sessions": {
+  "8A": {
+    "Unit 3 Test": {
+      "folder": "Unit 3 Test",          // <class folder>/exams/<folder>/
+      "mode": "rubric",                 // "marks" | "rubric"
+      "session_id": "f3f0…",
+      "rubrics": [{"id": "r1", "name": "Criterion A", "max": 8}],
+      "criteria": {"r1": "A", "r2": "—"},   // teacher's mapping, "—" = not counted
+      "papers": {"100001": "s001"}          // roster key -> CAM2 paper id
+    }
+  }
+}
+```
+
+- **`folder`** is recorded when the exam is first opened in CAM2 (or first
+  synced) and never changes, so renaming the exam in CAM keeps its session.
+  Two exam names that sanitise to one folder name get `"<name> (2)"`.
+- **`mode`, `session_id`, `rubrics`, `papers`** are rewritten by every Sync
+  that reads the session. `papers` drives the Window 1 name-crop preview.
+- **`criteria`** is the teacher's: written when a rubric exam's levels are
+  applied in Window 1, and used as the dropdowns' defaults afterwards. Before
+  that, each rubric defaults from its name ("Criterion B", "Crit. B", "基準B",
+  "B" → B).
+- The Sync registry (`ingested_files`) holds one row per session folder with
+  `"kind": "cam2"` and a hash of `cam2_session.json` + `grades.json`; a
+  session is read again only when that hash changes, and only while
+  `host_ready_at` is set (the teacher clicked *Send to CAM*).
+- Permanent delete of the exam drops its entry and moves the session folder to
+  `exams/_deleted/<YYYYMMDD-HHMMSS> <folder>/`. Renaming the class moves the
+  class key; deleting the class drops it.
+
+An older CAM ignores this key and drops it on its next save; the next Sync
+writes it again (apart from `criteria`, which falls back to the name default).
 
 ---
 

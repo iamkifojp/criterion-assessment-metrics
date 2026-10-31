@@ -1,8 +1,8 @@
 # Bringing CAM2's exam grading back into CAM: assessment and staged plan
 
 **Status:** v3, 2026-10-31. All decisions (D1–D9, §4) are locked.
-**Stages 0–2 are done** (see the ✅ notes in §5); Stage 3 is next, once
-every computer runs the Stage 2 build.
+**Stages 0–3 are done** (see the ✅ notes in §5); Stage 4 (retire the CGW
+exam code) is next.
 **Repos:** CAM = `C:\Project\criterion-assessment-metrics-public`;
 CAM2 = `C:\Project\cam2-exam-grading` (`iamkifojp/cam2-exam-grading`, 4 commits,
 187 tests, Phases 1–4c done, Phase 5 packaging next).
@@ -247,7 +247,27 @@ to 0–8. Fields are listed in DATA_DICTIONARY.md.*
 - Ship this stage, and let the other computers update, **before** Stage 3 writes
   anything new.
 
-### Stage 3 — Exams open in CAM2 (CAM) · M–L
+### Stage 3 — Exams open in CAM2 (CAM) · M–L — ✅ done
+*CAM `launch_exam_setup` → CAM2 host mode, `_sync_cam2_sessions`, the rubric
+panel and the C.8 `exam_sessions` map; bridge helpers in `exam_bridge.py`;
+19 tests in `test_exam_cam2_host.py`. Checked end to end in a sandbox: the real
+CAM2 launcher opened two exams from CAM handoffs (the second handed to the
+running CAM2), both graded through CAM2's API with sample scans, sent to CAM,
+then a sandboxed CAM synced, banded the marks exam, confirmed the rubric exam
+onto A and C, and showed Window 2/3; Sync left the session folders
+byte-identical. Changed while building:*
+- *The per-exam CAM2 state (folder, rubric names, rubric → criterion mapping,
+  paper ids) is a new persisted session map, `exam_sessions`, rather than new
+  `Assignment` fields, so an older CAM loads the database unchanged.*
+- *A paper not finished in CAM2 (`complete` false) is held back from banding,
+  like a `?` section.*
+- *A rubric whose maximum is not 8 is scaled to 0–8 (round half up), with a
+  note in the panel.*
+- *CAM2 is not tied to CAM's lifetime (unlike CGW): it stops itself when idle,
+  and closing CAM should not cut off a grading tab.*
+- *The CGW **🖌 Grade** button is gone for exams; CGW's exam code stays until
+  Stage 4.*
+
 - Window 1 **🛠 Exam setup / Grade** writes the handoff, starts CAM2 in host
   mode at `<class folder>/exams/<exam>/` and opens the browser. Every exam goes
   this way; there is no CGW fallback (D5).

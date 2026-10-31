@@ -30,6 +30,19 @@ suites. Inside CAM, `engine/exam_bridge.py` loads CAM2's engine under the name
 `ExamResult`s, with totals and final levels from CAM2's own `grading_summary`.
 It never writes to the session folder.
 
+Since Stage 3 every exam opens in CAM2. Window 1's **🛠 Exam setup / Grade**
+(`launch_exam_setup`) writes a `cam2-host` handoff (exam, class, session
+folder `<class folder>/exams/<exam>/`, roster as `external_id` + name) into
+the local temp folder and starts `exam_grading/launcher.py --host <handoff>`;
+CAM2 opens the browser itself, and a CAM2 that is already running is handed
+the exam. **Sync** (`_sync_cam2_sessions`, from both the global scan and
+`sync_exam`) reads every session under `exams/` that the teacher has sent to
+CAM, files papers by `external_id` (then alias / prefix, else 🧩), and
+registers the exam. Class-folder CSV walks skip `exams/` (`_walk_class`).
+Per-exam CAM2 state lives in the persisted `exam_sessions` map
+(DATA_DICTIONARY C.8). Permanent delete moves the session folder to
+`exams/_deleted/`.
+
 `main.py` is **not** a fourth app — it is a UI-free verification harness that
 drives the `engine/` pipeline against the sample data (`Y7_Changing_View_Unit_Plan_v2.docx`,
 `Changing Views (Crit B)_Grades.csv`) and prints results for sanity-checking

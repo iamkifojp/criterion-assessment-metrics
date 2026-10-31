@@ -10,8 +10,8 @@ CAM2's package is also called ``engine``, so it is loaded here under the name
 ``cam2_engine``. Its modules import each other relatively, so nothing inside
 ``exam_grading/`` changes.
 
-Two steps, kept apart so Sync (Stage 3) can report a broken folder without
-touching the gradebook:
+Two steps, kept apart so Sync can report a broken folder without touching
+the gradebook:
 
 * :func:`read_session` turns a folder into an :class:`ExamSession`, one
   :class:`ExamResult` per paper.
@@ -19,25 +19,41 @@ touching the gradebook:
   ``external_id`` CAM handed over in host mode (exact), then the usual
   :func:`resolve_identity` (alias, unambiguous prefix) on the paper's name,
   and otherwise the 🧩 pool.
+
+Stage 3 adds what CAM needs around those two: where an exam's session lives
+(``<class folder>/exams/<exam>/``), the handoff file and command that open it
+in CAM2's host mode, finding sessions at Sync, and moving a deleted exam's
+folder aside instead of deleting it.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
+import json
 import os
+import re
+import shutil
 import sys
+import unicodedata
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from .ingestion import resolve_identity
 from .models import EXAM_NOT_ANSWERED, ExamResult
 from .persistence import exam_result_to_dict
 
-CAM2_ENGINE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "exam_grading", "engine")
+CAM2_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "exam_grading")
+CAM2_ENGINE_DIR = os.path.join(CAM2_DIR, "engine")
+CAM2_LAUNCHER = os.path.join(CAM2_DIR, "launcher.py")
 CAM2_PACKAGE = "cam2_engine"
+
+EXAMS_DIR = "exams"          # <class folder>/exams/<exam>/ holds each session (D6)
+DELETED_DIR = "_deleted"     # exams/_deleted/<stamp> <exam>/: permanently deleted exams
+NAME_BOX_ID = "__name__"     # CAM2's handwritten-name box: crops/__name__/<paper id>.png
 
 
 class ExamSessionError(Exception):
@@ -84,7 +100,7 @@ class ExamSession:
     mode: str                           # "marks" or "rubric" ("" before Step 2)
     ready_at: Optional[str]             # host_ready_at: "Send to CAM" was clicked
     question_labels: List[str]
-    rubrics: List[Dict[str, str]]       # [{"id": "r1", "name": "Criterion A"}]
+    rubrics: List[dict]                 # [{"id": "r1", "name": "Criterion A", "max": 8}]
     max_total: int                      # marks mode; 0 in rubric mode
     papers: List[SessionPaper] = field(default_factory=list)
 
@@ -98,6 +114,7 @@ def read_session(folder: str, assignment: Optional[str] = None) -> ExamSession:
     summary_mod = cam2_module("grading_summary")
     workflow = cam2_module("workflow")
     errors = cam2_module("errors")
+    rubrics_mod = cam2_module("rubrics")
     try:
         _session, config, grades = storage.open_session(folder)
     except errors.UserError as exc:
@@ -155,7 +172,8 @@ def read_session(folder: str, assignment: Optional[str] = None) -> ExamSession:
         mode=mode,
         ready_at=config.get("host_ready_at"),
         question_labels=[labels[q["id"]] for q in questions],
-        rubrics=[{"id": r["id"], "name": r.get("name", "")}
+        rubrics=[{"id": r["id"], "name": r.get("name", ""),
+                  "max": rubrics_mod.rubric_max(r)}
                  for r in config.get("rubrics") or []],
         max_total=max_total,
         papers=papers,
@@ -196,3 +214,156 @@ def route_session(session: ExamSession, roster_keys,
             auto_aliases[key] = auto
         matched[target] = paper.result
     return matched, pool, auto_aliases
+
+
+# --------------------------------------------------------------------------
+# Stage 3: opening exams in CAM2, finding them at Sync, retiring them
+# --------------------------------------------------------------------------
+
+def folder_name(exam_name: str) -> str:
+    """The session folder's name for an exam: CAM's class-folder sanitizer,
+    with the trailing dots and spaces Windows refuses also removed."""
+    name = re.sub(r'[\\/*?:"<>|]', "_", str(exam_name or "").strip())
+    return name.rstrip(". ").strip() or "Exam"
+
+
+def session_folder(class_dir: str, exam_name: str) -> str:
+    """``<class folder>/exams/<exam>/``: where CAM hosts an exam's session."""
+    return os.path.join(class_dir, EXAMS_DIR, folder_name(exam_name))
+
+
+def handoff(exam_name: str, class_name: str, folder: str, roster) -> dict:
+    """The ``cam2-host`` handoff (format in ``exam_grading/engine/host.py``).
+    ``roster`` is CAM's class list, ``[{"key", "name"}]``; the key travels as
+    ``external_id`` so Sync files each paper without matching names again."""
+    entries = []
+    for entry in roster or []:
+        key = str(entry.get("key") or "").strip()
+        if key:
+            entries.append({"external_id": key,
+                            "name": str(entry.get("name") or "").strip() or key})
+    return {"format": "cam2-host", "version": 1, "host": "CAM",
+            "exam_name": exam_name, "class_name": class_name,
+            "session_folder": os.path.abspath(folder), "roster": entries}
+
+
+def write_handoff(directory: str, data: dict) -> str:
+    """Write a handoff into ``directory`` (on this computer, never the cloud
+    folder: it holds the class list). One file per session folder, replaced
+    on every launch. Returns its path."""
+    os.makedirs(directory, exist_ok=True)
+    digest = hashlib.sha1(os.path.normcase(data["session_folder"]).encode("utf-8")).hexdigest()
+    path = os.path.join(directory, f"handoff_{digest[:16]}.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    return path
+
+
+def launch_command(handoff_path: str, python: Optional[str] = None) -> List[str]:
+    """The command that opens one exam in CAM2's host mode. CAM2's launcher
+    is single-instance: a running CAM2 is handed the exam and the new process
+    exits at once."""
+    return [python or sys.executable, CAM2_LAUNCHER, "--host", handoff_path]
+
+
+def running_url() -> Optional[str]:
+    """URL of the CAM2 running on this computer, if any (found the way CAM2's
+    own launcher finds it: its ``server.json`` plus a ping)."""
+    import urllib.request
+    storage = cam2_module("storage")
+    try:
+        with open(os.path.join(storage.app_data_dir(), "server.json"), encoding="utf-8") as fh:
+            port = int(json.load(fh)["port"])
+        url = f"http://127.0.0.1:{port}/"
+        with urllib.request.urlopen(url + "api/ping", timeout=1.5) as resp:
+            if json.load(resp).get("app") == "cam2":
+                return url
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def find_sessions(class_dir: str) -> List[str]:
+    """Every CAM2 session folder under ``<class folder>/exams/``, by name.
+    ``_deleted`` and other ``_`` folders are skipped."""
+    root = os.path.join(class_dir, EXAMS_DIR)
+    if not os.path.isdir(root):
+        return []
+    storage = cam2_module("storage")
+    out = []
+    for entry in sorted(os.scandir(root), key=lambda e: e.name.lower()):
+        if entry.is_dir() and not entry.name.startswith("_") \
+                and storage.is_session_folder(entry.path):
+            out.append(os.path.abspath(entry.path))
+    return out
+
+
+def session_fingerprint(folder: str) -> str:
+    """Hash of the two files Sync reads; a session is re-read only when it
+    changes. Raises OSError when either file can't be read (mid-sync)."""
+    storage = cam2_module("storage")
+    digest = hashlib.sha256()
+    for name in (storage.SESSION_FILE, storage.GRADES_FILE):
+        with open(os.path.join(folder, name), "rb") as fh:
+            digest.update(fh.read())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+_CRITERION_RE = re.compile(r"(?:criterion|crit|基準|規準)\W*([A-D])(?![A-Za-z])", re.IGNORECASE)
+
+
+def default_criterion(rubric_name: str) -> Optional[str]:
+    """The CAM criterion a CAM2 rubric's name points to ("Criterion B",
+    "Crit. B", "基準Ｂ", or just "B" → ``"B"``), else None."""
+    text = unicodedata.normalize("NFKC", str(rubric_name or "")).strip()
+    m = _CRITERION_RE.search(text)
+    if m:
+        return m.group(1).upper()
+    if len(text) == 1 and text.upper() in "ABCD":
+        return text.upper()
+    return None
+
+
+def to_band(level: int, rubric_max: int) -> int:
+    """A CAM2 final level on CAM's 0-8 scale. A rubric that goes to 8 maps
+    one to one; any other maximum is scaled (round half up)."""
+    level = max(0, int(level))
+    if rubric_max and rubric_max != 8:
+        level = int(cam2_module("grading_summary").round_half_up(level * 8 / rubric_max))
+    return max(0, min(8, level))
+
+
+def name_crop(folder: str, student_id: str) -> str:
+    """A paper's handwritten-name crop in its session, or "" when none."""
+    if not folder or not student_id:
+        return ""
+    storage = cam2_module("storage")
+    path = os.path.join(folder, storage.CROPS_DIR, NAME_BOX_ID, f"{student_id}.png")
+    return path if os.path.isfile(path) else ""
+
+
+def retire_session(folder: str, when: Optional[datetime] = None) -> Optional[str]:
+    """Move a deleted exam's session folder to
+    ``exams/_deleted/<YYYYMMDD-HHMMSS> <name>/`` rather than deleting it.
+
+    Only a session folder directly inside an ``exams`` folder is moved.
+    Returns the new path, or None when there was nothing to move."""
+    folder = os.path.abspath(folder)
+    parent = os.path.dirname(folder)
+    if os.path.basename(parent) != EXAMS_DIR or not os.path.isdir(folder):
+        return None
+    if not cam2_module("storage").is_session_folder(folder):
+        return None
+    stamp = (when or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    target_root = os.path.join(parent, DELETED_DIR)
+    os.makedirs(target_root, exist_ok=True)
+    base = f"{stamp} {os.path.basename(folder)}"
+    target, n = os.path.join(target_root, base), 1
+    while os.path.exists(target):
+        n += 1
+        target = os.path.join(target_root, f"{base} ({n})")
+    shutil.move(folder, target)
+    return target
