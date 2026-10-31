@@ -1,7 +1,7 @@
 # Bringing CAM2's exam grading back into CAM: assessment and staged plan
 
-**Status:** v2, 2026-10-31. All decisions (D1–D9, §4) are locked. Nothing is
-implemented yet.
+**Status:** v3, 2026-10-31. All decisions (D1–D9, §4) are locked.
+**Stages 0 and 1 are done** (see the ✅ notes in §5); Stage 2 is next.
 **Repos:** CAM = `C:\Project\criterion-assessment-metrics-public`;
 CAM2 = `C:\Project\cam2-exam-grading` (`iamkifojp/cam2-exam-grading`, 4 commits,
 187 tests, Phases 1–4c done, Phase 5 packaging next).
@@ -186,13 +186,18 @@ then CAM's **reader** before anything writes the new shapes (an older CAM on
 another computer must not choke on a newer database; see
 `CROSS_DEVICE_AND_DB_SAFETY_PLAN.md`), then the switch, then the clean-up.
 
-### Stage 0 — Groundwork (CAM; no behaviour change) · S
+### Stage 0 — Groundwork (CAM; no behaviour change) · S — ✅ done
+*CAM `ee29083` (subtree add) and `d470e44` (`tools/run_all_tests.py`, ARCHITECTURE note).*
 - `git subtree add --prefix exam_grading <cam2 remote> main --squash`.
 - Make CAM's test run also discover `exam_grading/tests`. Both suites must pass.
 - Add to `docs/ARCHITECTURE.md`: `exam_grading/` is upstream code. Change it
   in the CAM2 repo, never in place.
 
-### Stage 1 — CAM2 features (CAM2 repo; also improve the standalone app) · M–L
+### Stage 1 — CAM2 features (CAM2 repo; also improve the standalone app) · M–L — ✅ done
+*CAM2 `bcd6eb0` (1a), `ee9ab6c` (1b), `ea66d13` + `c21f16e` (1c), `b146d25` (1d),
+`6ca9891` (1e); 209 tests; each checked in a browser with sample papers. Pulled
+into CAM as `84002e4`.*
+
 Each is a CAM2 phase with its own tests and a browser check, in this order:
 - **1a · Choice-group policy** (D2): Best N or Teacher picks per group, the
   Step 5 `?` and tick-to-choose, `grading_summary` totals, reports and the
@@ -205,12 +210,17 @@ Each is a CAM2 phase with its own tests and a browser check, in this order:
 - **1d · Adjust this box** (D7): re-slice one question (`slice_students`
   already exists; add a per-question variant) and return to the same paper.
 - **1e · Host hook:** `launcher.py --host <handoff.json>` with exam name, class
-  name, session folder, roster `[{external_id, name}]` and optional criterion
-  names for rubric cards. In host mode: the start screen is skipped, the exam
-  name is fixed, the matcher uses the given roster and stores `external_id` on
-  roster entries, a "Back to CAM" button appears, and a "Grading finished —
-  send to CAM" action writes `host_ready_at` into `cam2_session.json`. Step 5
-  export stays available (D9). Without `--host`, nothing changes.
+  name, session folder and roster `[{external_id, name}]` (format in
+  `exam_grading/engine/host.py`). In host mode: the exam opens straight away
+  (or the Step 1 form opens with the exam name and folder fixed), the matcher
+  uses the given roster and stores `external_id` on roster entries, the header
+  shows *CAM · <class>*, and a "Grading finished — send to CAM" action writes
+  `host_ready_at` into `cam2_session.json`. Step 5 export stays available (D9).
+  Without `--host`, nothing changes.
+  - *Changed while building:* no "Back to CAM" button, because CAM runs in its
+    own browser tab and a link would open a second CAM session. The handoff
+    carries no criterion names: CAM maps each CAM2 rubric to a criterion
+    itself (Stage 3).
 
 ### Stage 2 — CAM reads sessions (CAM; reader only) · M
 - Extend `ExamResult` in a tolerant way: per-question values that can be
@@ -220,7 +230,10 @@ Each is a CAM2 phase with its own tests and a browser check, in this order:
   dict code.
 - `engine/exam_bridge.py`: `read_session(folder)` → per-student results via the
   vendored `grading_summary`, routed by `external_id` (exact), then the
-  existing `resolve_identity` / 🧩 pool as the fallback.
+  existing `resolve_identity` / 🧩 pool as the fallback. CAM and CAM2 both
+  have a top-level `engine` package, so the bridge loads CAM2's under another
+  module name (`importlib`, e.g. `cam2_engine`); CAM2's engine modules import
+  each other relatively, so this works without changing CAM2.
 - Tests use fictional sessions built with CAM2's own test helpers. No real data.
 - Ship this stage, and let the other computers update, **before** Stage 3 writes
   anything new.
@@ -232,8 +245,10 @@ Each is a CAM2 phase with its own tests and a browser check, in this order:
 - **Sync** reads every hosted session that has `host_ready_at`, read only. It
   ingests or updates the `ExamResult`s.
 - **Window 1 panel:** rubric exams show the imported final level per
-  criterion to confirm (D4). Marks exams band from the total onto one
-  criterion, with no sections (D3).
+  criterion to confirm (D4). Each CAM2 rubric is mapped to a CAM criterion by
+  a dropdown, defaulted from its name ("Criterion B", "基準B" → B) and
+  remembered per exam. Marks exams band from the total onto one criterion,
+  with no sections (D3).
 - **Window 2/3:** name crops and the 🧩 thumbnails come from
   `crops/__name__/<sid>.png`; Window 3 shows each question's value,
   Not answered, which choice answers counted, and the comment.
