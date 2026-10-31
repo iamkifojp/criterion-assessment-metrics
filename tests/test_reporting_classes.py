@@ -359,7 +359,7 @@ else:
             next(b for b in at.button if b.label == 'Save reporting class').click().run()
             self.assertFalse(at.exception)
             self.assertFalse(at.error, [e.value for e in at.error])
-            self.assertTrue(any(d['name'] == 'New fictional list' for d in at.session_state['reporting_classes']), str(at.session_state.filtered_state))
+            self.assertTrue(any(d['name'] == 'New fictional list' for d in at.session_state['reporting_classes']), [d['name'] for d in at.session_state['reporting_classes']])
             definition = next(d for d in at.session_state['reporting_classes'] if d['name'] == 'New fictional list')
             self.assertEqual({m['student_id'] for m in definition['members']}, {'s1', 'empty', 'draft'})
             at.selectbox(key='report_manager_id').set_value(definition['id']).run()
