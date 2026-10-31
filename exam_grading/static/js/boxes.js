@@ -88,15 +88,34 @@ function initialCurrent(d) {
   return d.questions[d.questions.length - 1].id;
 }
 
+// A deleted question's grades are kept, so its id is never handed out again:
+// a new question would inherit them.
 function addQuestion(d) {
-  const used = new Set(d.questions.map((q) => q.id));
+  const used = new Set([...d.questions.map((q) => q.id),
+    ...Object.values(app.session?.grades?.grades || {}).flatMap((per) => Object.keys(per || {}))]);
   let n = 1;
   while (used.has(`q${n}`)) n++;
   const c = config();
-  const q = { id: `q${n}`, label: `Q${d.questions.length + 1}`, boxes: [], max: null,
+  const number = nextQuestionNumber(d);
+  const q = { id: `q${n}`, label: `Q${number}`, boxes: [], max: null,
     rubric_ids: (c.rubrics || []).length === 1 ? [c.rubrics[0].id] : [] };
-  d.questions.push(q);
+  const at = d.questions.findIndex((x) => autoNumber(x) > number);
+  if (at < 0) d.questions.push(q);
+  else d.questions.splice(at, 0, q);
   return q;
+}
+
+// Deleting a question leaves its number free (it is often redrawn), so a new
+// question takes the lowest free Qn and goes back in that place.
+function nextQuestionNumber(d) {
+  const taken = new Set(d.questions.map((q) => q.label));
+  let n = 1;
+  while (taken.has(`Q${n}`)) n++;
+  return n;
+}
+
+function autoNumber(q) {
+  return /^Q\d+$/.test(q.label) ? Number(q.label.slice(1)) : 0;
 }
 
 export const saveQuestions = debounce(async () => {
@@ -214,7 +233,7 @@ async function onBox(range) {
 
   if (!app.draft.adjust && !app.draft.addMode && idx >= 0 && !overlaps(parseRange(boxes[idx]), drawn)) {
     const target = nextTarget(d, item.id);
-    const nextLabel = target ? target.label : `Q${d.questions.length + 1}`;
+    const nextLabel = target ? target.label : `Q${nextQuestionNumber(d)}`;
     const answer = await askNewOrMove(item, nextLabel);
     if (answer === null) { render(); return; }
     if (answer === "next") {
@@ -437,7 +456,7 @@ function sidePanel(d, c, drawingOn) {
     if (boxes.length) actions.append(button(t("step2.boxes.name_done"), () => gotoNextQuestion(d), "primary"));
     else actions.append(button(t("step2.boxes.skip_name"), () => { d.name_box_skipped = true; saveQuestions(); gotoNextQuestion(d); }, "ghost"));
   } else {
-    const n = d.questions.length + 1;
+    const n = nextQuestionNumber(d);
     actions.append(
       button(t("step2.boxes.save_and_next", { label: item.label || "?", n }), () => {
         if (!item.boxes.length) { toast(t("step2.boxes.draw_first"), "error"); return; }

@@ -39,7 +39,7 @@ This describes how CAM2 is built. For what it should do and why, see
 | `keywords.py` | Quick comments: the exam's list (`keywords` in the config, or five defaults in the app language), and `apply()`, which ticks keywords on one answer and rebuilds the generated first line of its comment. The line last written is kept as `keyword_text`, so it is replaced exactly and the teacher's own text below it is kept. |
 | `host.py` | Host mode (CAM opening one of its exams): reads and checks the handoff file, gives the session the host's class list keyed by `external_id` (ids stay put when a name changes), and stamps `host_ready_at` when the teacher sends the results. |
 | `i18n.py` | Looks up text in `i18n/en.json` / `i18n/ja.json`; translates `UserError`s. |
-| `pickers.py` | Native folder / PDF dialogs: Windows IFileOpenDialog (in a child process) with a PowerShell fallback, macOS `osascript`. Finds the Documents folder. |
+| `pickers.py` | Native folder / PDF dialogs: Windows IFileOpenDialog (in a child process: `python -m engine.pickers`, or `CAM2.exe --pick` when packaged) with a PowerShell fallback, macOS `osascript`. Finds the Documents folder. |
 | `pages.py` | Turning scans into one PDF per paper: a page is a `Ref` (file, page, turn). It joins several PDFs or page photos into one stack and groups it into papers. It also unfolds booklets scanned open: each side is cut in half with `show_pdf_page(clip=…)`, so quality is kept, and pages are put in reading order by `booklet_layout`. A page with a stored rotation is first baked upright with `remove_rotation`. Photos are turned upright from their phone orientation and reduced to about 200 dpi. Also makes the Step 1 preview of paper 1. |
 | `workflow.py` | Steps 1–3 as operations on an open session: check and import scans (`check_source`, `import_scans`), late papers (`add_papers`), page fixes (`edit_pages`), choose the real session folder, layout/mode/rubric/question set-up, `check_ready`, slicing (all papers, or `slice_students` for some), class list and matching, display names. |
 
@@ -52,7 +52,7 @@ Phase 5 adds the package builders.
 
 | File | Job |
 |---|---|
-| `launcher.py` | `--host <handoff.json>`: opened by CAM for one exam (a running CAM2 is handed it through `POST /api/host/handoff`). **Single instance:** if CAM2 is already running on this computer, it just opens the browser on it (`server.json` in app data records the port). Otherwise it serves on `127.0.0.1`, on the first free port from 5182. It stops 10 minutes after the last heartbeat, or on **Quit**. Without a console (`pythonw`), output goes to `<app data>/logs/cam2.log`. |
+| `launcher.py` | `--host <handoff.json>`: opened by CAM for one exam (a running CAM2 is handed it through `POST /api/host/handoff`). **Single instance:** if CAM2 is already running on this computer, it just opens the browser on it (`server.json` in app data records the port). Otherwise it serves on `127.0.0.1`, on the first free port from 5182. It stops 10 minutes after the last heartbeat, or on **Quit**; after the computer wakes from sleep the 10 minutes start again, so an open tab can check in first. Without a console (`pythonw`), output goes to `<app data>/logs/cam2.log`. |
 | `appstate.py` | **What the server remembers:** the one open session (config, grades, save-failure flag) and background **jobs** for importing and slicing (one at a time; the browser polls their progress). `save_config()` keeps a change in memory even when the save fails, so the browser can show the red banner and retry. |
 | `app.py` | **JSON routes**, grouped by screen (see below). Errors come back as `{"error", "message", "params", "save_error"}`, with status 400, or 409 for save problems. It also stops the browser keeping old scripts after an upgrade (`Cache-Control: no-cache`). |
 | `templates/index.html`, `static/app.css` | **The page:** one HTML shell and one stylesheet. Light and dark themes, large click targets, and the Japanese system fonts listed first. |
@@ -267,7 +267,8 @@ python -m unittest discover -s tests -t .
 | `test_grading_summary.py` | Validation, round-half-up, choice groups (ported from CAM's `test_exam_sections.py`) with best N and teacher picks, rubric averages, overrides, class statistics |
 | `test_keywords.py` | Quick-comment list defaults and clean-up, rebuilding the generated line while keeping typed text, language changes |
 | `test_i18n.py` | Key and placeholder parity, error coverage |
-| `test_pickers.py` | Picker launching on Windows and macOS (ported from CAM's `test_folder_dialog.py`) |
+| `test_pickers.py` | Picker launching on Windows and macOS (ported from CAM's `test_folder_dialog.py`), the packaged app's `--pick`, UTF-8 output |
+| `test_launcher.py` | The idle watchdog: stopping with no tab open, and starting the wait again after the computer sleeps |
 | `test_workflow.py` | Import from a folder and a combined PDF, re-import, set-up drafts vs. `check_ready`, layout changes, slicing a two-page question, matching names |
 | `test_app.py` | The server through Flask's test client: the whole Steps 1–3 flow, translated errors, a save failure kept in memory and then retried, the other-computer prompt, emergency restore, file-serving safety |
 

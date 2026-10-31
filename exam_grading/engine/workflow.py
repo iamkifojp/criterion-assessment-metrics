@@ -307,9 +307,16 @@ SHEET_ACTIONS = ("turn_sheet", "swap_sheet", "reverse_sheets")
 
 def _has_work(grades_data: Optional[dict], student_id: str) -> bool:
     per = ((grades_data or {}).get("grades") or {}).get(student_id) or {}
-    return any(isinstance(e, dict) and (e.get("value") is not None
-                                        or str(e.get("comment") or "").strip())
-               for e in per.values())
+    return any(isinstance(e, dict) and (
+        e.get("value") is not None
+        or str(e.get("comment") or "").strip()
+        or any(v is not None for v in (e.get("levels") or {}).values()))
+        for e in per.values())
+
+
+def class_has_work(grades_data: Optional[dict]) -> bool:
+    """True once any paper has a grade, rubric level or comment."""
+    return any(_has_work(grades_data, sid) for sid in (grades_data or {}).get("grades") or {})
 
 
 def _refuse_if_graded(config: dict, grades_data: Optional[dict], students: List[dict]) -> None:
@@ -600,11 +607,12 @@ def _clean_boxes(ranges, layout: Layout) -> List[str]:
     return [slicer.format_range(slicer.parse_range(r, layout)) for r in ranges or []]
 
 
-def set_questions(config: dict, payload: dict) -> dict:
+def set_questions(config: dict, payload: dict, grades_data: Optional[dict] = None) -> dict:
     """Save the name box, questions and choice groups as drawn so far.
 
     Drafts may be incomplete (a question without a box yet); everything must
-    be complete only when slicing (:func:`check_ready`).
+    be complete only when slicing (:func:`check_ready`). A deleted question's
+    grades are kept, so a new question never reuses its id.
     """
     layout = Layout.from_config(config.get("layout"))
     rubric_ids = [r["id"] for r in config.get("rubrics") or []]
@@ -613,10 +621,11 @@ def set_questions(config: dict, payload: dict) -> dict:
 
     questions = []
     seen_ids = set()
+    graded = {qid for per in ((grades_data or {}).get("grades") or {}).values() for qid in per or {}}
     for raw in payload.get("questions") or []:
         qid = str(raw.get("id") or "").strip()
         if not qid or qid in seen_ids or qid == model.NAME_BOX_ID:
-            qid = new_question_id(config, seen_ids)
+            qid = new_question_id(config, seen_ids | graded)
         seen_ids.add(qid)
         label = str(raw.get("label") or "").strip()[:MAX_LABEL]
         max_marks = raw.get("max")

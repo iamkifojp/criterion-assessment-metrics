@@ -6,6 +6,7 @@ pickers are launched and how their output is read.
 Run:  python -m unittest tests.test_pickers
 """
 
+import io
 import os
 import subprocess
 import tempfile
@@ -42,6 +43,24 @@ class PickerTests(unittest.TestCase):
             self.assertEqual(command[1:5], ["-m", "engine.pickers", "--mode", "pdf"])
             self.assertIn("--initial", command)
             self.assertEqual(run.call_args.kwargs["cwd"], pickers.APP_ROOT)
+
+    def test_packaged_app_runs_itself_with_pick(self):
+        with mock.patch.object(pickers.os, "name", "nt"), \
+             mock.patch.object(pickers.sys, "frozen", True, create=True), \
+             mock.patch.object(pickers.subprocess, "run",
+                               return_value=completed("C:\\Scans\n")) as run:
+            self.assertEqual(pickers.pick_folder("Choose"), r"C:\Scans")
+            command = run.call_args.args[0]
+            self.assertEqual(command[1:4], [pickers.PICK_FLAG, "--mode", "folder"])
+            self.assertNotIn("-m", command)
+
+    def test_child_writes_utf8(self):
+        # A pipe on Japanese Windows is cp932 unless the child says otherwise.
+        out = io.TextIOWrapper(io.BytesIO(), encoding="cp932")
+        with mock.patch.object(pickers, "_pick_com", return_value="C:\\試験", create=True), \
+             mock.patch.object(pickers.sys, "stdout", out):
+            self.assertEqual(pickers._main(["--mode", "folder"]), 0)
+            self.assertEqual(out.buffer.getvalue(), "C:\\試験\n".encode("utf-8"))
 
     def test_cancel_returns_none(self):
         with mock.patch.object(pickers.os, "name", "nt"), \

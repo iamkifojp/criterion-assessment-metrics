@@ -117,6 +117,12 @@ class SetupTests(WorkflowTestCase):
             workflow.check_ready(self.config)
         self.assertEqual(ctx.exception.code, "question_needs_box")
 
+    def test_new_question_skips_a_deleted_questions_id(self):
+        grades = {"grades": {"s001": {"q1": {"value": 9}}}}       # q1 graded, then deleted
+        workflow.set_questions(self.config, {"questions": [
+            {"id": "q2", "label": "Q2", "boxes": []}, {"label": "Q3", "boxes": []}]}, grades)
+        self.assertEqual([q["id"] for q in self.config["questions"]], ["q2", "q3"])
+
     def test_questions_assessed_on_several_criteria(self):
         workflow.set_mode(self.config, "rubric")
         workflow.set_rubrics(self.config, [{"name": n, "bands": [{"levels": "0-8"}]}

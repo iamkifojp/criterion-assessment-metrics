@@ -24,6 +24,7 @@ import threading
 
 APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODES = ("folder", "pdf")
+PICK_FLAG = "--pick"
 
 
 def pick_folder(title: str, initial: str | None = None) -> str | None:
@@ -89,8 +90,16 @@ def _pick_macos(mode: str, title: str, initial: str | None) -> str | None:
 
 # --- Windows ------------------------------------------------------------------------
 
+def _frozen() -> bool:
+    """True in the packaged app (PyInstaller sets sys.frozen, Nuitka __compiled__)."""
+    return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+
+
 def _pick_windows_child(mode: str, title: str, initial: str | None) -> str | None:
-    command = [sys.executable, "-m", "engine.pickers", "--mode", mode, "--title", title]
+    # The packaged app has no Python to run "-m" with, so CAM2.exe itself is
+    # started with --pick and launcher.py hands that straight to _main().
+    entry = [PICK_FLAG] if _frozen() else ["-m", "engine.pickers"]
+    command = [sys.executable, *entry, "--mode", mode, "--title", title]
     if initial:
         command.extend(["--initial", initial])
     try:
@@ -293,18 +302,20 @@ def documents_folder() -> str:
     return os.path.join(os.path.expanduser("~"), "Documents")
 
 
-def _main() -> int:
+def _main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=MODES, default="folder")
     parser.add_argument("--title", default="Select")
     parser.add_argument("--initial")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         chosen = _pick_com(args.mode, args.title, args.initial)
     except (AttributeError, NameError, OSError):
         chosen = _pick_powershell(args.mode, args.title, args.initial)
     if chosen:
-        sys.stdout.write(chosen + "\n")
+        # UTF-8 to match the parent; a pipe would otherwise get the ANSI code
+        # page (cp932 on Japanese Windows) and mangle non-English folder names.
+        sys.stdout.buffer.write((chosen + "\n").encode("utf-8"))
     return 0
 
 
