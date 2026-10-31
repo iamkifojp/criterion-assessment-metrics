@@ -6,6 +6,33 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-11-01 — CAM can read CAM2 exam sessions (convergence Stage 2)
+
+- What: `ExamResult` accepts CAM2 results (Not answered, counted questions,
+  complete, rubric levels, final levels, per-question comments, mode, session
+  id), and `engine/exam_bridge.py` reads a CAM2 session folder into them.
+  Nothing calls the reader yet: Stage 3 wires it into Sync.
+- Why first: another computer running an older CAM must never choke on a
+  database written by a newer one. This build reads the new fields; the next
+  stage writes them. Update every computer before installing Stage 3.
+- Compatibility: CGW-era records load and save byte-for-byte as before (new
+  keys are written only when set, and `questions` keeps its label → whole-mark
+  shape). `final_levels` is not range-checked to 0–8, because a CAM2 rubric
+  may run to 100 and one such level must not stop the database loading.
+- Routing: a paper is filed by the `external_id` CAM hands over in host mode,
+  then by the usual alias/prefix match on its name, otherwise it goes to the
+  🧩 pool. Two papers resolving to one student never overwrite each other; the
+  second pools. A pooled paper keeps its whole result when matched in Window 2.
+- Also pulled CAM2's release-readiness fixes into `exam_grading/` (`df7c2f1`)
+  and fixed `test_reporting_classes`, whose failure message read a
+  `session_state` attribute Streamlit 1.66 no longer has.
+
+Validation: `tests/test_exam_bridge.py` (14 tests) builds fictional sessions
+with CAM2's own engine in temp folders (`CAM2_APP_DATA` redirected too); both
+suites pass via `tools/run_all_tests.py`.
+
+---
+
 ## 2026-10-29 — Class selector follows the active class; no Session State warning
 
 - Symptom: when a database was loaded on a second device, the terminal printed

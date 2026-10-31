@@ -193,6 +193,27 @@ Window 3 appends `· level N` to each section's subtotal. Serialized/deserialize
 exactly like `chosen` (absent ⇒ `{}`, round-tripped) and carried forward across
 re-ingest so a routed re-sync or a Window-2 match keeps the teacher's levels.
 
+**CAM2 session fields** (CAM2 convergence plan, Stage 2). An `ExamResult` read
+from a CAM2 session by `engine/exam_bridge.py` carries these extra keys. Each is
+optional and written **only when set**, so a CGW-era record saves exactly as
+before; `questions` keeps its old shape (label → whole mark), so an older CAM
+still loads the file (it would drop these keys on its next save).
+
+| Key | Shape | Meaning |
+|---|---|---|
+| `mode` | `"marks"` \| `"rubric"` | CAM2 grading mode (absent = CGW CSV). |
+| `session_id` | str | The CAM2 session the result was read from. |
+| `not_answered` | [label] | Questions marked *Not answered* (count as 0; not in `questions`). |
+| `counted` | [label] | Questions that count after CAM2's choice groups (best N or teacher picks). |
+| `complete` | `false` | Present only when a question is ungraded or a teacher-picks choice is open. |
+| `levels` | {label: {rubric id: level \| `"not_answered"`}} | Rubric mode: each question's level per criterion. |
+| `final_levels` | {rubric id: int} | Rubric mode: final level per rubric (teacher's, else CAM2's round-half-up suggestion). Not range-checked to 0–8, since a CAM2 rubric may run to 100; mapping a rubric to a CAM criterion is Stage 3. |
+| `question_comments` | {label: str} | The comment written on each question. |
+
+In rubric mode `total` and `max_total` are 0. Labels are CAM2 question labels
+(unique within an exam); rubric ids are CAM2's (`r1`, …), with names in the
+session's `rubrics`.
+
 ### A.5 File Count / Files — read-only completeness pass (the "Awaiting Grade" gate)
 
 Separate from ingestion, CAM's `sync_from_cloud()` reads each grading CSV a

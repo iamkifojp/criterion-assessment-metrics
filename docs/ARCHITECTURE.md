@@ -24,7 +24,11 @@ place: change CAM2 in its own repo, then
 `git subtree pull --prefix exam_grading <cam2 repo> main --squash`. CAM's glue
 code lives outside that folder. CAM2 also has a top-level `engine` package, so
 its tests run in their own process; `python tools/run_all_tests.py` runs both
-suites.
+suites. Inside CAM, `engine/exam_bridge.py` loads CAM2's engine under the name
+`cam2_engine` (`importlib`; CAM2's modules import each other relatively) and
+**reads** a session folder (`cam2_session.json` + `grades.json`) into
+`ExamResult`s, with totals and final levels from CAM2's own `grading_summary`.
+It never writes to the session folder.
 
 `main.py` is **not** a fourth app — it is a UI-free verification harness that
 drives the `engine/` pipeline against the sample data (`Y7_Changing_View_Unit_Plan_v2.docx`,

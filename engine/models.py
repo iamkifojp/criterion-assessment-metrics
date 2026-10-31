@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 # Valid MYP band range. Scores must fall within [MIN_BAND, MAX_BAND].
 MIN_BAND = 0
 MAX_BAND = 8
+# A CAM2 rubric level for a question the student did not answer.
+EXAM_NOT_ANSWERED = "not_answered"
 
 
 class Criterion(str, Enum):
@@ -133,6 +135,28 @@ class ExamResult:
     # enters the gradebook. Empty for legacy / single-section exams. Preserved
     # across re-ingest exactly like ``chosen``.
     section_bands: Dict[str, int] = field(default_factory=dict)
+    # --- CAM2 sessions (engine/exam_bridge.py) ------------------------------
+    # Results read from a CAM2 session folder. Every field defaults to "not
+    # from CAM2", so CGW-era records load and save exactly as before. CAM2 has
+    # already settled choice groups and final levels; these are kept as read.
+    #   mode: "" (CGW CSV), "marks" or "rubric"
+    #   not_answered: labels the student did not answer (counted as 0 and
+    #     left out of ``questions``)
+    #   counted: labels whose marks/levels count after choice groups
+    #   complete: False while a question is ungraded or a "teacher picks"
+    #     choice is still open in CAM2
+    #   levels: rubric mode, label -> {CAM2 rubric id: level or "not_answered"}
+    #   final_levels: rubric mode, CAM2 rubric id -> final 0-8 level (teacher's
+    #     or suggested); Stage 3 maps rubric ids to CAM criteria per exam
+    #   question_comments: label -> the comment written on that question
+    mode: str = ""
+    session_id: str = ""
+    not_answered: List[str] = field(default_factory=list)
+    counted: List[str] = field(default_factory=list)
+    complete: bool = True
+    levels: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    final_levels: Dict[str, int] = field(default_factory=dict)
+    question_comments: Dict[str, str] = field(default_factory=dict)
 
     @property
     def percent(self) -> float:

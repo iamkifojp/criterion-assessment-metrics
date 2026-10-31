@@ -41,6 +41,7 @@ from .models import (
     Assignment,
     Criterion,
     CriterionScore,
+    EXAM_NOT_ANSWERED,
     ExamResult,
     Gradebook,
     Student,
@@ -282,6 +283,40 @@ def _validate_exam_result(value: Any, path: str,
                 _add_issue(issues, f"{path}.section_bands.*", "expected-integer")
             elif not 0 <= band <= 8:
                 _add_issue(issues, f"{path}.section_bands.*", "band-out-of-range")
+    # CAM2 session fields (all optional; see ExamResult).
+    for field in ("mode", "session_id"):
+        if field in value and not isinstance(value[field], str):
+            _add_issue(issues, f"{path}.{field}", "expected-string")
+    if "complete" in value and not isinstance(value["complete"], bool):
+        _add_issue(issues, f"{path}.complete", "expected-boolean")
+    for field in ("not_answered", "counted"):
+        if field in value:
+            _validate_string_list(value[field], f"{path}.{field}", issues)
+    levels = value.get("levels", {})
+    if not isinstance(levels, dict):
+        _add_issue(issues, f"{path}.levels", "expected-object")
+    else:
+        for per in levels.values():
+            if not isinstance(per, dict):
+                _add_issue(issues, f"{path}.levels.*", "expected-object")
+                continue
+            for level in per.values():
+                if not (_is_int(level) or level == EXAM_NOT_ANSWERED):
+                    _add_issue(issues, f"{path}.levels.*.*", "expected-integer")
+    finals = value.get("final_levels", {})
+    if not isinstance(finals, dict):
+        _add_issue(issues, f"{path}.final_levels", "expected-object")
+    else:
+        # Not 0-8: a CAM2 rubric may run to 100. The 0-8 check happens when a
+        # level becomes a CriterionScore.
+        for level in finals.values():
+            if not _is_int(level):
+                _add_issue(issues, f"{path}.final_levels.*", "expected-integer")
+    comments = value.get("question_comments", {})
+    if not isinstance(comments, dict):
+        _add_issue(issues, f"{path}.question_comments", "expected-object")
+    elif not all(isinstance(c, str) for c in comments.values()):
+        _add_issue(issues, f"{path}.question_comments.*", "expected-string")
 
 
 def _validate_sections(value: Any, path: str,
@@ -854,7 +889,7 @@ def _assignment_from_dict(d: Dict[str, Any]) -> Assignment:
 
 
 def _exam_result_to_dict(r: ExamResult) -> Dict[str, Any]:
-    return {
+    out = {
         "assignment": r.assignment,
         "total": r.total,
         "max_total": r.max_total,
@@ -864,6 +899,34 @@ def _exam_result_to_dict(r: ExamResult) -> Dict[str, Any]:
         "section_bands": {str(k): int(v)
                           for k, v in (r.section_bands or {}).items()},
     }
+    # CAM2 fields only when set, so CGW-era records save exactly as before.
+    if r.mode:
+        out["mode"] = r.mode
+    if r.session_id:
+        out["session_id"] = r.session_id
+    if r.not_answered:
+        out["not_answered"] = list(r.not_answered)
+    if r.counted:
+        out["counted"] = list(r.counted)
+    if not r.complete:
+        out["complete"] = False
+    if r.levels:
+        out["levels"] = {str(k): dict(v) for k, v in r.levels.items()}
+    if r.final_levels:
+        out["final_levels"] = {str(k): int(v) for k, v in r.final_levels.items()}
+    if r.question_comments:
+        out["question_comments"] = dict(r.question_comments)
+    return out
+
+
+def _exam_level(value: Any) -> Any:
+    """A stored rubric level: a whole number or "not_answered"; else None."""
+    if value == EXAM_NOT_ANSWERED:
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
@@ -879,6 +942,19 @@ def _exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
                 section_bands[str(k)] = int(v)
             except (TypeError, ValueError):
                 continue
+    raw_levels = d.get("levels") if isinstance(d.get("levels"), dict) else {}
+    levels: Dict[str, Dict[str, Any]] = {}
+    for label, per in raw_levels.items():
+        if isinstance(per, dict):
+            kept = {str(rid): _exam_level(v) for rid, v in per.items()}
+            levels[str(label)] = {rid: v for rid, v in kept.items() if v is not None}
+    raw_finals = d.get("final_levels") if isinstance(d.get("final_levels"), dict) else {}
+    final_levels: Dict[str, int] = {}
+    for rid, v in raw_finals.items():
+        level = _exam_level(v)
+        if isinstance(level, int):
+            final_levels[str(rid)] = level
+    raw_comments = d.get("question_comments")
     return ExamResult(
         assignment=d["assignment"],
         total=int(d.get("total", 0)),
@@ -887,6 +963,15 @@ def _exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
         comment=d.get("comment", ""),
         chosen=chosen,
         section_bands=section_bands,
+        mode=str(d.get("mode") or ""),
+        session_id=str(d.get("session_id") or ""),
+        not_answered=[str(x) for x in (d.get("not_answered") or [])],
+        counted=[str(x) for x in (d.get("counted") or [])],
+        complete=d.get("complete") is not False,
+        levels=levels,
+        final_levels=final_levels,
+        question_comments={str(k): str(v) for k, v in raw_comments.items()}
+        if isinstance(raw_comments, dict) else {},
     )
 
 

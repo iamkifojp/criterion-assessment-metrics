@@ -60,6 +60,7 @@ from .models import (
     Gradebook,
     section_max,
 )
+from .persistence import exam_result_from_dict
 
 
 # --- header -> criterion detection -----------------------------------------
@@ -820,7 +821,15 @@ class IngestionPipeline:
         (including the ``chosen`` / ``section_bands`` carry-forward, so a prior
         resolution or strand level made under the roster key survives a
         re-match) and attaches it to the roster student. Returns the result
-        created."""
+        created.
+
+        A row pooled from a CAM2 session (:mod:`engine.exam_bridge`) carries
+        the whole result under ``"result"``; it is attached as read, since
+        CAM2 has already settled every choice and level."""
+        if isinstance(pool_row.get("result"), dict):
+            result = exam_result_from_dict(dict(pool_row["result"], assignment=assignment))
+            self.gradebook.get_or_create(target_sid).exam_results[assignment] = result
+            return result
         questions: Dict[str, int] = {}
         for lbl, val in (pool_row.get("questions") or {}).items():
             try:

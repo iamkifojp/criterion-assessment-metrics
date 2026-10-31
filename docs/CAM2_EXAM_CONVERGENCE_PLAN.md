@@ -1,7 +1,8 @@
 # Bringing CAM2's exam grading back into CAM: assessment and staged plan
 
 **Status:** v3, 2026-10-31. All decisions (D1–D9, §4) are locked.
-**Stages 0 and 1 are done** (see the ✅ notes in §5); Stage 2 is next.
+**Stages 0–2 are done** (see the ✅ notes in §5); Stage 3 is next, once
+every computer runs the Stage 2 build.
 **Repos:** CAM = `C:\Project\criterion-assessment-metrics-public`;
 CAM2 = `C:\Project\cam2-exam-grading` (`iamkifojp/cam2-exam-grading`, 4 commits,
 187 tests, Phases 1–4c done, Phase 5 packaging next).
@@ -222,7 +223,15 @@ Each is a CAM2 phase with its own tests and a browser check, in this order:
     carries no criterion names: CAM maps each CAM2 rubric to a criterion
     itself (Stage 3).
 
-### Stage 2 — CAM reads sessions (CAM; reader only) · M
+### Stage 2 — CAM reads sessions (CAM; reader only) · M — ✅ done
+*CAM `exam_bridge.py` + tolerant `ExamResult`; 14 tests in `test_exam_bridge.py`.
+Changed while building: Not answered is a separate `not_answered` list rather
+than a value inside `questions`, so `questions` keeps its old label → whole-mark
+shape and even a pre-Stage-2 CAM still loads the file. Fields Stage 3 will show
+(`counted`, `complete`, `question_comments`) were added now, so Stage 3 needs no
+second schema change. `final_levels` is keyed by CAM2 rubric id and not limited
+to 0–8. Fields are listed in DATA_DICTIONARY.md.*
+
 - Extend `ExamResult` in a tolerant way: per-question values that can be
   `not_answered`; per-question criterion `levels`; `final_levels` per
   criterion; `mode`; `session_id`. Records already
