@@ -137,7 +137,7 @@ class WorkspaceTests(unittest.TestCase):
         self.module_patch = patch.dict(sys.modules)
         self.module_patch.start()
         self.addCleanup(self.module_patch.stop)
-        for name in ("exam_engine", "submission_identity", "pdf_view"):
+        for name in ("submission_identity", "pdf_view"):
             sys.modules.pop(name, None)
         spec = importlib.util.spec_from_file_location("sandbox_workspace", source / "app.py")
         self.ws = importlib.util.module_from_spec(spec)

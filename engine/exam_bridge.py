@@ -186,12 +186,11 @@ def route_session(session: ExamSession, roster_keys,
     """File each paper under a roster key.
 
     Returns ``(matched, pool, auto_aliases)``: ``matched`` maps roster key to
-    result; ``pool`` holds 🧩 rows (exam-flavoured, as from
-    :meth:`IngestionPipeline.ingest_exam_csv`, plus the whole ``result`` for
-    :meth:`IngestionPipeline.materialize_exam_row`); ``auto_aliases`` are
-    prefix matches to record. A paper is pooled, never guessed, when nothing
-    matches, when a second paper resolves to the same student, or when there
-    is no roster at all."""
+    result; ``pool`` holds 🧩 rows (``is_exam`` rows carrying the whole
+    ``result`` for :meth:`IngestionPipeline.materialize_exam_row`);
+    ``auto_aliases`` are prefix matches to record. A paper is pooled, never
+    guessed, when nothing matches, when a second paper resolves to the same
+    student, or when there is no roster at all."""
     matched: Dict[str, ExamResult] = {}
     pool: List[dict] = []
     auto_aliases: Dict[str, str] = {}

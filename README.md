@@ -8,10 +8,10 @@ minutes instead of evenings.
 
 CAM started life as a tool for grading **artworks** — images and video handed in
 through Google Classroom and its Drive folders — and has since grown to assess
-PDFs and Google Docs as well, and to slice and mark scanned exam papers. It now
-suits any MYP teacher who collects and grades student work in Google Classroom.
-In particular, the **exam-slicing** workflow is immediately useful to anyone who
-sets and marks exam papers, whatever their subject.
+PDFs and Google Docs as well, and to grade scanned exam papers. It now suits any
+MYP teacher who collects and grades student work in Google Classroom. In
+particular, the **exam grading** workflow (CAM2, below) is immediately useful to
+anyone who sets and marks exam papers, whatever their subject.
 
 > **Note on data:** This repository ships with **fictional sample data only**.
 > No real student information is included. See [Sample data](#sample-data).
@@ -35,11 +35,15 @@ sets and marks exam papers, whatever their subject.
 - **Grading workspace (sub-app).** An optional Flask companion app for marking
   student work synced from Google Classroom / a Google Drive (or OneDrive)
   folder: images and video (the original artwork use case), PDFs, and Google
-  Docs — with a thumbnail-grid matching view and an anonymous grading mode. It
-  also hosts **exam slicing**, which cuts a scanned exam PDF into per-student,
-  per-question pieces for fast marking — handy for any teacher who sets exam
-  papers, not just art teachers. Google Docs grading requires OAuth; pointed at
-  a plain local folder (no OAuth) the workspace grades PDFs.
+  Docs — with a thumbnail-grid matching view and an anonymous grading mode.
+  Google Docs grading requires OAuth; pointed at a plain local folder (no
+  OAuth) the workspace grades PDFs.
+- **Exam grading (CAM2).** Scanned exam papers are graded in CAM2 Exam Grading
+  (`exam_grading/`), which CAM opens with the class list filled in: booklets and
+  messy scans, a box drawn around each answer, one question at a time across
+  the class, marks or rubric levels, and per-student PDF reports. The results
+  come back into the gradebook — handy for any teacher who sets exam papers,
+  not just art teachers.
 - **Calm, dense UI.** A three-window "cockpit" layout (roster → evidence →
   report) built on Streamlit, themed for long grading sessions.
 
@@ -101,7 +105,8 @@ live in a local or cloud folder you point CAM at via
 |---|---|
 | `app.py` | The Streamlit dashboard (the main app). |
 | `engine/` | Framework-free core: models, ingestion, aggregation, persistence. |
-| `cam_grading_workspace/` | Optional Flask grading companion (Google Drive sync, PDF exams). |
+| `cam_grading_workspace/` | Optional Flask grading companion (Google Drive or local folders). |
+| `exam_grading/` | CAM2 Exam Grading, vendored with `git subtree` (change it in its own repo). |
 | `tools/generate_sample_data.py` | Rebuilds the fictional sample gradebook. |
 | `docs/` | Architecture, data dictionary, setup, and the user manual. |
 

@@ -103,7 +103,7 @@ def enable_site_packages(runtime: Path) -> None:
     # The embeddable runtime ignores cwd, PYTHONPATH, and the script directory
     # while a ._pth file is present. Streamlit executes app.py rather than
     # invoking it as Python's script, so CAM's root package would otherwise be
-    # invisible. The workspace also uses same-folder imports (exam_engine).
+    # invisible. The workspace also uses same-folder imports (pdf_view).
     for relative in ("..", r"..\cam_grading_workspace"):
         if relative not in lines:
             lines.insert(1, relative)

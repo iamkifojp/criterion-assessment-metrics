@@ -6,6 +6,34 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## 2026-11-01 — The old exam grader is gone (convergence Stage 4)
+
+- What: the grading workspace's exam code is removed: `exam_engine.py`, the
+  `/api/exam/*` routes, Exam Setup, exam mode and the exam CSV export (CGW
+  `app.py` 7,060 → 4,848 lines). On CAM's side the exam-CSV ingest
+  (`ingest_exam_csv`, `load_exam_sidecar`, `exam_question_columns`), the `?`
+  resolver dialog, the sectioned banding panel and the section-scoring helpers
+  went with it. Every exam is graded in CAM2.
+- Old data: exams graded before keep their results and grades. Their
+  `Assignment.sections`, `ExamResult.chosen` and `section_bands` still load and
+  save unchanged but are no longer read or written; such an exam bands from its
+  stored total. An old exam CSV left in a class folder is skipped by Sync
+  (without that guard it would be read as a grading CSV) and refused by
+  Upload & stage.
+- Fix found on the way: after *Send to CAM* in CAM2, a running CAM did not
+  notice until restarted, and its messages pointed at a 🔄 Sync button that no
+  longer exists. `_cam2_send_poller` now watches the active class's
+  `cam2_session.json` files every 3 s and syncs that class's sent exams.
+- Delete: permanent delete of an exam no longer hunts for old CGW crops,
+  definitions and CSVs; it moves the CAM2 session folder to `exams/_deleted/`.
+
+Validation: CAM 261 tests + CAM2 215 (`python tools/run_all_tests.py`); the
+CGW-only exam tests were deleted with the code they covered. Browser checks in
+sandboxes: CGW boots clean with no exam UI; CAM read, banded and displayed a
+sent CAM2 exam and picked up a re-send on its own.
+
+---
+
 ## 2026-11-01 — CAM can read CAM2 exam sessions (convergence Stage 2)
 
 - What: `ExamResult` accepts CAM2 results (Not answered, counted questions,

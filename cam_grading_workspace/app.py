@@ -3,7 +3,7 @@ CAM Grading Workspace — local Flask sub-app of Criterion Assessment Metrics
 (CAM) for visually grading art assignments stored in a Google Drive folder.
 
 Launched standalone (python app.py) or by the CAM Streamlit dashboard's
-"Grade this Assignment/Exam" bridge, which spawns it on a separate port and
+"Grade this Assignment" bridge, which spawns it on a separate port and
 passes the target class/assignment via URL query parameters
 (?class=..&assignment=..&aname=..) so it opens straight into grading.
 
@@ -42,15 +42,14 @@ import hashlib
 import datetime
 import threading
 import time
-import uuid
 
 from flask import (
     Flask, request, jsonify, Response, send_file, abort
 )
 
-import exam_engine
 from submission_identity import match_submission, unmatched_identity, has_shortened_school_ids
-from pdf_view import page_ranges, visible_pages, prune_pdf_cache
+from pdf_view import (page_ranges, visible_pages, prune_pdf_cache, fitz_module,
+                      IMAGE_EXTS, page_png_bytes)
 
 # ---- Google API imports -----------------------------------------------------
 from google.auth.transport.requests import Request, AuthorizedSession
@@ -393,7 +392,7 @@ def class_output_dir(create=False):
     return BASE_DIR
 
 
-def _write_export_beacon(class_name, assignment, is_exam, csv_path):
+def _write_export_beacon(class_name, assignment, csv_path):
     """Drop a one-line beacon in the cloud-dir root so CAM syncs on export.
 
     CAM (Streamlit) and CGW (Flask) are separate processes; CAM only reruns on
@@ -404,7 +403,7 @@ def _write_export_beacon(class_name, assignment, is_exam, csv_path):
     that file every few seconds and, on an mtime change, runs a *scoped* sync of
     just this class/assignment so the grades surface within seconds.
 
-    Atomic (write ``.tmp`` then ``os.replace``, like ``ExamStore._write``) so a
+    Atomic (write ``.tmp`` then ``os.replace``) so a
     concurrent CAM read never sees a torn file. Strictly best-effort: any failure
     is logged to stdout and swallowed — a beacon problem must never fail or
     block the teacher's export. Download-only exports (no cloud dir) route
@@ -417,7 +416,6 @@ def _write_export_beacon(class_name, assignment, is_exam, csv_path):
     payload = {
         "class_name": class_name or "",
         "assignment": assignment or "",
-        "is_exam": bool(is_exam),
         "csv_path": csv_path or "",
         "ts": time.time(),
     }
@@ -1761,7 +1759,7 @@ def _local_mime(path):
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
         return "application/pdf"
-    if ext in exam_engine.IMAGE_EXTS:
+    if ext in IMAGE_EXTS:
         return "image/" + ext.lstrip(".")
     if ext in VIDEO_EXTS:
         return "video/" + ext.lstrip(".")
@@ -1790,7 +1788,7 @@ class LocalProvider:
     (os.path.commonpath, not str.startswith) guards every file access. No Google
     import is ever touched on this path, so it works with token.json renamed away.
 
-    Supports PDFs and images (first-page/LANCZOS thumbnails via exam_engine);
+    Supports PDFs and images (first-page/LANCZOS thumbnails via pdf_view);
     video streams straight from disk (no Drive bandwidth concern locally) and
     office/other files fall back to a placeholder tile plus a download link.
     """
@@ -1933,10 +1931,9 @@ class LocalProvider:
                     return fh.read()
             except OSError:
                 pass
-        # exam_engine rasterises a PDF's first page (PyMuPDF) or opens an image,
-        # then LANCZOS-downscales to max_width — the same pipeline exam slicing
-        # uses for its browser previews.
-        png = exam_engine.page_png_bytes(path, 1, max_width=width)
+        # pdf_view rasterises a PDF's first page (PyMuPDF) or opens an image,
+        # then LANCZOS-downscales to max_width.
+        png = page_png_bytes(path, 1, max_width=width)
         try:
             os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
             tmp = cache_path + ".tmp"
@@ -2388,7 +2385,7 @@ def open_assignment_pdf(file_id):
                for s in STATE["students"].values() for f in s["files"]):
         abort(404)
     source = current_provider().pdf_path(file_id)
-    fitz = exam_engine._fitz()
+    fitz = fitz_module()
     if isinstance(source, str):
         return fitz.open(source)
     # A disk-cache failure may return bytes in a Flask response instead.
@@ -2422,7 +2419,7 @@ def api_pdf_page(file_id, page_number):
             page = doc[page_number - 1]
             # Bound both axes for unusual page dimensions and large originals.
             scale = min(width / max(page.rect.width, 1), 3000 / max(page.rect.height, 1))
-            pix = page.get_pixmap(matrix=exam_engine._fitz().Matrix(scale, scale), alpha=False)
+            pix = page.get_pixmap(matrix=fitz_module().Matrix(scale, scale), alpha=False)
             return Response(pix.tobytes("png"), mimetype="image/png",
                             headers={"Cache-Control": "private, max-age=300"})
     except (RuntimeError, ValueError) as exc:
@@ -2920,8 +2917,7 @@ def api_export():
         # Sync-on-export beacon: tell CAM's poller a fresh grading export for
         # this class/assignment just landed, so it scoped-syncs within seconds
         # instead of waiting for the teacher to click around. Best-effort.
-        _write_export_beacon(class_name, folder_name, is_exam=False,
-                             csv_path=dest)
+        _write_export_beacon(class_name, folder_name, csv_path=dest)
         # Warn about differently-dated sibling exports for THIS assignment. CAM
         # maps every "<name>_Grades_<date>.csv" back to one assignment and
         # refuses to sync when it finds more than one, so leaving an older
@@ -2943,575 +2939,6 @@ def api_export():
         })
 
     # No cloud directory configured -> behave as before and download the file.
-    return send_file(io.BytesIO(data_bytes), mimetype="text/csv",
-                     as_attachment=True, download_name=filename)
-
-
-# -----------------------------------------------------------------------------
-# Exam Slicing (setup + grading + item-level CSV export)
-# -----------------------------------------------------------------------------
-# Exam definitions are programmed in /exam_setup, stored in gcg_exams.json per
-# class. Processing slices every student PDF into per-question crops; the main
-# UI then grades an exam question-by-question. Grades persist to
-# exam_grades_<exam>.json inside the class output dir (cloud-synced when
-# configured) and export as an item-level CSV (one column per question before
-# Total Score) that ACM auto-ingests.
-#
-# Portable exam data (Phase 6, decision D5): when a class has a cloud folder,
-# both the crops and the exam definition live inside it so the exam can be
-# graded from any synced device —
-#     crops       -> <cloud>/<class>/exam_crops/<exam>/<Q>/<student>.png
-#     definitions -> <cloud>/<class>/gcg_exams.json  (via ExamStore)
-# Cloud-less classes keep the legacy app-local layout
-# (BASE_DIR/exam_crops/<class>/... and BASE_DIR/gcg_exams.json). Reads try the
-# cloud root first, then the legacy root, so pre-Phase-6 crops keep serving.
-# EXAM_STORE.class_dir is wired below, once exam_output_dir is defined.
-
-EXAM_STORE = exam_engine.ExamStore(BASE_DIR)
-EXAM_CROPS_DIR = os.path.join(BASE_DIR, "exam_crops")
-
-# Background exam-slicing jobs. process_exam runs on a daemon thread so large
-# student stacks don't hit browser gateway timeouts; the front end polls
-# /api/exam/status/<job_id> for progress. Guarded by its own lock (independent
-# of STATE_LOCK — process_exam only touches the filesystem, never STATE).
-EXAM_JOBS = {}
-EXAM_JOBS_LOCK = threading.Lock()
-
-# Active exam grading session (parallel to STATE, which stays Drive-only).
-EXAM_STATE = {
-    "class_name": None,
-    "exam_name": None,
-    "config": None,      # the saved exam definition
-    "students": {},      # student -> {"scores": {label: int}, "comment", "keywords"}
-    "checklist": [],     # editable keyword rubric, persisted with the grades
-}
-
-
-def exam_output_dir(class_name, create=False):
-    """Where an exam's grades + CSV belong: the class cloud subfolder, else root."""
-    cloud = SETTINGS.get("cloud_dir", "").strip()
-    if cloud and class_name and os.path.isdir(cloud):
-        d = os.path.join(cloud, _safe_dirname(class_name))
-        if create:
-            try:
-                os.makedirs(d, exist_ok=True)
-            except Exception as e:
-                print("Warning: could not create class subfolder:", e)
-                return BASE_DIR
-        return d
-    return BASE_DIR
-
-
-def _exam_class_dir(class_name, create=False):
-    """A class's portable cloud folder for exam definitions, or None (cloud-less).
-
-    Wraps ``exam_output_dir`` so ``ExamStore`` can decide between the portable
-    per-class ``gcg_exams.json`` and the legacy app-local one without importing
-    any app state. ``BASE_DIR`` (the cloud-less fallback) maps to ``None`` so the
-    store keeps its legacy behaviour there.
-    """
-    d = exam_output_dir(class_name, create=create)
-    return d if d != BASE_DIR else None
-
-
-# Wire the portable-store resolver now that exam_output_dir exists (Phase 6).
-EXAM_STORE.class_dir = _exam_class_dir
-
-
-def _legacy_exam_crop_dir(class_name):
-    return os.path.join(EXAM_CROPS_DIR, exam_engine._safe_name(class_name or "Unsorted"))
-
-
-def exam_crop_dir(class_name, create=False):
-    """Where slicing WRITES a class's crops (Phase 6, decision D5).
-
-    ``<cloud>/<class>/exam_crops/`` when the class has a cloud folder (so crops
-    travel with the synced class folder), else the legacy
-    ``BASE_DIR/exam_crops/<class>/`` for cloud-less setups. ``process_exam``
-    creates the per-question subdirs, so ``create`` only needs to guarantee the
-    root when a fresh cloud class folder is being populated.
-    """
-    out = exam_output_dir(class_name, create=create)
-    if out != BASE_DIR:
-        d = os.path.join(out, "exam_crops")
-        if create:
-            try:
-                os.makedirs(d, exist_ok=True)
-            except OSError as e:
-                print("Warning: could not create exam crop root:", e)
-        return d
-    return _legacy_exam_crop_dir(class_name)
-
-
-def exam_crop_roots(class_name):
-    """Candidate crop roots for READS: cloud root first, then the legacy root.
-
-    Both are always returned (callers skip the ones that don't exist) so a class
-    that has moved to the cloud still serves any crops sliced before Phase 6.
-    """
-    roots = []
-    out = exam_output_dir(class_name)
-    if out != BASE_DIR:
-        roots.append(os.path.join(out, "exam_crops"))
-    legacy = _legacy_exam_crop_dir(class_name)
-    if legacy not in roots:
-        roots.append(legacy)
-    return roots
-
-
-@app.route("/exam_setup")
-def exam_setup():
-    return Response(EXAM_SETUP_PAGE, mimetype="text/html")
-
-
-@app.route("/api/exams")
-def api_exams():
-    """List saved exam definitions for one class (drives the exam dropdowns)."""
-    class_name = (request.args.get("class_name") or "").strip()
-    exams = EXAM_STORE.list_exams(class_name)
-    return jsonify({"class_name": class_name, "exams": exams})
-
-
-@app.route("/api/exam/scan_folder", methods=["POST"])
-def api_exam_scan_folder():
-    """Inspect a student-PDF folder: file count + the first student's pages.
-
-    The setup screen previews the FIRST student's exam while the teacher
-    programs the questions; processing later runs over every file found here.
-    """
-    data = request.get_json(force=True, silent=True) or {}
-    folder = (data.get("folder") or "").strip()
-    if not folder or not os.path.isdir(folder):
-        return jsonify({"error": f"Folder not found: {folder or '(blank)'}"}), 400
-    try:
-        files = exam_engine.list_student_files(folder)
-        if not files:
-            return jsonify({"error": "No PDF or image files in that folder."}), 404
-        first_name, first_path = files[0]
-        pages = exam_engine.page_count(first_path)
-        # Per-file page counts feed the Students panel's booklet-scan outlier
-        # flag (Phase 5, D5): the panel highlights any stem whose count differs
-        # from the class majority ("Scan_0003 · 11 pages ⚠ others have 12").
-        counts = exam_engine.page_counts(files)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-    return jsonify({
-        "folder": folder,
-        "file_count": len(files),
-        "students": [n for n, _ in files],
-        "first_student": first_name,
-        "page_count": pages,
-        "page_counts": counts,
-    })
-
-
-@app.route("/api/exam/preview")
-def api_exam_preview():
-    """PNG preview of the first student's page N, for the setup grid overlay."""
-    folder = (request.args.get("folder") or "").strip()
-    page = request.args.get("page", default=1, type=int)
-    if not folder or not os.path.isdir(folder):
-        abort(404)
-    try:
-        files = exam_engine.list_student_files(folder)
-        if not files:
-            abort(404)
-        png = exam_engine.page_png_bytes(files[0][1], page)
-    except Exception:
-        abort(404)
-    return Response(png, mimetype="image/png",
-                    headers={"Cache-Control": "private, max-age=60"})
-
-
-@app.route("/api/exam/save", methods=["POST"])
-def api_exam_save():
-    """Persist one exam definition (name, paper size, folder, questions)."""
-    data = request.get_json(force=True, silent=True) or {}
-    class_name = (data.get("class_name") or "").strip()
-    if not class_name:
-        return jsonify({"error": "Pick a class before saving the exam."}), 400
-    try:
-        clean = EXAM_STORE.save_exam(class_name, data.get("config") or {})
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    return jsonify({"ok": True, "class_name": class_name, "config": clean})
-
-
-def _run_exam_job(job_id, config, out_dir, labels=None):
-    """Worker body: slice student PDFs, streaming progress into the job.
-
-    ``labels`` (Phase 6) restricts the slice to those question labels — the
-    "re-slice one question" path — so only the touched question's crops are
-    rewritten; ``None`` slices the whole exam.
-    """
-    def report(done, total):
-        with EXAM_JOBS_LOCK:
-            job = EXAM_JOBS.get(job_id)
-            if job:
-                job["done"], job["total"] = done, total
-    try:
-        summary = exam_engine.process_exam(config, out_dir, progress=report,
-                                           labels=labels)
-    except Exception as e:                  # noqa: BLE001 — surface to the poller
-        with EXAM_JOBS_LOCK:
-            job = EXAM_JOBS.get(job_id)
-            if job:
-                job["state"], job["error"] = "error", str(e)
-        return
-    with EXAM_JOBS_LOCK:
-        job = EXAM_JOBS.get(job_id)
-        if job:
-            job["state"] = "done"
-            job["result"] = {"exam_name": config["name"], **summary}
-
-
-@app.route("/api/exam/process", methods=["POST"])
-def api_exam_process():
-    """Kick off background slicing of every student PDF (saves config first).
-
-    Returns a job id immediately; poll /api/exam/status/<job_id> for progress
-    and the final summary. Large stacks used to block the request thread long
-    enough to hit browser gateway timeouts (ARCHITECTURE §4)."""
-    data = request.get_json(force=True, silent=True) or {}
-    class_name = (data.get("class_name") or "").strip()
-    if not class_name:
-        return jsonify({"error": "Pick a class before processing."}), 400
-    try:
-        # Saving first means the processed crops always match a stored config.
-        config = EXAM_STORE.save_exam(class_name, data.get("config") or {})
-        if not config.get("pdf_folder"):
-            return jsonify({"error": "Load a student PDF folder first."}), 400
-        # pdf_folder is an absolute per-device path (Phase 6 caveat): grading
-        # from synced crops works anywhere, but re-slicing needs the scans on
-        # THIS device. Say so plainly when the folder isn't here.
-        if not os.path.isdir(config["pdf_folder"]):
-            return jsonify({"error":
-                f"This device can't see the scan folder ({config['pdf_folder']!r}) "
-                "— grading still works from the synced crops, but re-slicing "
-                "needs the scan PDFs present on this computer."}), 400
-        # Validate the folder and learn the class size up front so the initial
-        # response seeds a progress total (process_exam re-scans as it works).
-        students = exam_engine.list_student_files(config["pdf_folder"])
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    if not students:
-        return jsonify({"error": f"No PDF/image files found in "
-                                 f"{config['pdf_folder']!r}."}), 400
-
-    job_id = uuid.uuid4().hex
-    with EXAM_JOBS_LOCK:
-        EXAM_JOBS[job_id] = {
-            "state": "running", "done": 0, "total": len(students),
-            "class_name": class_name, "exam_name": config["name"],
-            "result": None, "error": None,
-        }
-    threading.Thread(target=_run_exam_job,
-                     args=(job_id, config, exam_crop_dir(class_name, create=True)),
-                     daemon=True).start()
-    return jsonify({"ok": True, "job_id": job_id, "exam_name": config["name"],
-                    "students": len(students),
-                    "questions": len(config["questions"])})
-
-
-@app.route("/api/exam/process_one", methods=["POST"])
-def api_exam_process_one():
-    """Re-slice ONE question for every student, during grading (Phase 6).
-
-    The teacher tweaks a single question's coordinate range in Exam Setup's
-    focus mode and re-slices just that question — far faster than re-processing
-    the whole stack, and every other question's crops stay byte-identical. Saves
-    the (possibly widened) config first, then kicks off a background job that
-    crops only ``label``. Entered marks are keyed by label and never touched.
-    """
-    data = request.get_json(force=True, silent=True) or {}
-    class_name = (data.get("class_name") or "").strip()
-    label = (data.get("label") or "").strip()
-    if not class_name:
-        return jsonify({"error": "Pick a class before re-slicing."}), 400
-    if not label:
-        return jsonify({"error": "No question label to re-slice."}), 400
-    try:
-        # Saving first keeps the crops matched to a stored config (as /process).
-        config = EXAM_STORE.save_exam(class_name, data.get("config") or {})
-        if not config.get("pdf_folder"):
-            return jsonify({"error": "Load a student PDF folder first."}), 400
-        if not os.path.isdir(config["pdf_folder"]):
-            return jsonify({"error":
-                f"This device can't see the scan folder ({config['pdf_folder']!r}) "
-                "— grading still works from the synced crops, but re-slicing "
-                "needs the scan PDFs present on this computer."}), 400
-        if label not in {q["label"] for q in config["questions"]}:
-            return jsonify({"error": f"Question '{label}' is not in this exam."}), 400
-        students = exam_engine.list_student_files(config["pdf_folder"])
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    if not students:
-        return jsonify({"error": f"No PDF/image files found in "
-                                 f"{config['pdf_folder']!r}."}), 400
-
-    job_id = uuid.uuid4().hex
-    with EXAM_JOBS_LOCK:
-        EXAM_JOBS[job_id] = {
-            "state": "running", "done": 0, "total": len(students),
-            "class_name": class_name, "exam_name": config["name"], "label": label,
-            "result": None, "error": None,
-        }
-    threading.Thread(target=_run_exam_job,
-                     args=(job_id, config, exam_crop_dir(class_name, create=True)),
-                     kwargs={"labels": [label]}, daemon=True).start()
-    return jsonify({"ok": True, "job_id": job_id, "exam_name": config["name"],
-                    "label": label, "students": len(students)})
-
-
-@app.route("/api/exam/status/<job_id>")
-def api_exam_status(job_id):
-    """Poll a background slicing job started by /api/exam/process."""
-    with EXAM_JOBS_LOCK:
-        job = EXAM_JOBS.get(job_id)
-        if not job:
-            return jsonify({"error": "Unknown or expired job id."}), 404
-        return jsonify(dict(job))
-
-
-@app.route("/api/exam/load", methods=["POST"])
-def api_exam_load():
-    """Open an exam for grading: questions + every sliced student + saved marks."""
-    data = request.get_json(force=True, silent=True) or {}
-    class_name = (data.get("class_name") or "").strip()
-    exam_name = (data.get("exam_name") or "").strip()
-    config = EXAM_STORE.get_exam(class_name, exam_name)
-    if not config:
-        return jsonify({"error": f"No exam '{exam_name}' saved for class "
-                                 f"'{class_name}'. Run Exam Setup first."}), 404
-
-    # The student list comes from the sliced crops (ground truth of what was
-    # processed); fall back to the source folder if slicing hasn't run yet.
-    # Scan both crop roots (cloud + legacy) so a class carries its pre-Phase-6
-    # crops after moving to the cloud (Phase 6 read fallback).
-    students = set()
-    for root in exam_crop_roots(class_name):
-        exam_dir = os.path.join(root, exam_engine._safe_name(exam_name))
-        for q in config["questions"]:
-            q_dir = os.path.join(exam_dir, exam_engine._safe_name(q["label"]))
-            if os.path.isdir(q_dir):
-                for f in os.listdir(q_dir):
-                    if f.lower().endswith(".png"):
-                        students.add(os.path.splitext(f)[0])
-    if not students and config.get("pdf_folder") and os.path.isdir(config["pdf_folder"]):
-        try:
-            students = {n for n, _ in
-                        exam_engine.list_student_files(config["pdf_folder"])}
-        except ValueError:
-            pass
-    if not students:
-        return jsonify({"error": "No sliced student answers found — run "
-                                 "'Process All PDFs' in Exam Setup first."}), 404
-
-    saved, checklist = exam_engine.load_exam_grades(
-        exam_output_dir(class_name), exam_name)
-    roster = {}
-    for name in sorted(students, key=str.lower):
-        prev = saved.get(name) or {}
-        roster[name] = {
-            "scores": {k: v for k, v in (prev.get("scores") or {}).items()},
-            "comment": prev.get("comment", ""),
-            "keywords": list(prev.get("keywords") or []),
-        }
-
-    with STATE_LOCK:
-        EXAM_STATE["class_name"] = class_name
-        EXAM_STATE["exam_name"] = exam_name
-        EXAM_STATE["config"] = config
-        EXAM_STATE["students"] = roster
-        EXAM_STATE["checklist"] = checklist
-
-    # Display-only real names (Phase 5, D5): the grading tab shows
-    # student_names[stem] in place of the raw file stem, but `key` stays the stem
-    # everywhere (crops, /api/exam/grade, the grades file) so nothing downstream
-    # re-keys. Absent name -> the stem itself.
-    student_names = config.get("student_names") or {}
-    # Anonymous grading (D6, YouMark-style): blank every display name; the real
-    # stem stays in `key` for the round-trip (crops, grades, export all read
-    # EXAM_STATE, which stays real). The client re-shuffles + numbers by
-    # position per question — see examView(). Same display-only doctrine as the
-    # assignment layer's present_students(); EXAM_STATE is never mutated here.
-    anon = anonymous_enabled()
-    return jsonify({
-        "class_name": class_name,
-        "exam_name": exam_name,
-        "questions": config["questions"],
-        "checklist": checklist,
-        "anonymous": anon,
-        "students": [{"key": k, "name": ("" if anon else student_names.get(k, k)), **v}
-                     for k, v in roster.items()],
-    })
-
-
-@app.route("/api/exam/grade", methods=["POST"])
-def api_exam_grade():
-    """Save one student's per-question scores + comment for the open exam."""
-    data = request.get_json(force=True, silent=True) or {}
-    key = data.get("key")
-    with STATE_LOCK:
-        if not EXAM_STATE["exam_name"]:
-            return jsonify({"error": "No exam is currently loaded."}), 400
-        st = EXAM_STATE["students"].get(key)
-        if st is None:
-            return jsonify({"error": "Unknown student."}), 404
-        if "scores" in data and isinstance(data["scores"], dict):
-            valid_labels = {q["label"] for q in EXAM_STATE["config"]["questions"]}
-            st["scores"] = {
-                str(k): int(v) for k, v in data["scores"].items()
-                if str(k) in valid_labels and str(v).strip() != ""
-            }
-        if "comment" in data:
-            st["comment"] = str(data["comment"])
-        if "keywords" in data and isinstance(data["keywords"], list):
-            st["keywords"] = [str(x) for x in data["keywords"]]
-        try:
-            exam_engine.save_exam_grades(
-                exam_output_dir(EXAM_STATE["class_name"], create=True),
-                EXAM_STATE["exam_name"], EXAM_STATE["students"],
-                EXAM_STATE["checklist"])
-        except OSError as e:
-            return jsonify({"error": f"Could not save exam grades: {e}"}), 500
-        return jsonify({"ok": True, "student": {"key": key, **st}})
-
-
-@app.route("/api/exam/checklist", methods=["POST"])
-def api_exam_checklist():
-    """Persist the keyword rubric for the currently-open exam.
-
-    Receives the FULL checklist array and stores it beside the marks in
-    exam_grades_<exam>.json (student scores/keywords/comments are untouched, so
-    a header edit can never disturb a saved mark). Mirrors /api/checklist for
-    the assignment layer.
-    """
-    data = request.get_json(force=True, silent=True) or {}
-    checklist = _normalize_checklist(data.get("checklist"))
-    with STATE_LOCK:
-        if not EXAM_STATE["exam_name"]:
-            return jsonify({"error": "No exam is currently loaded."}), 400
-        EXAM_STATE["checklist"] = checklist
-        try:
-            exam_engine.save_exam_grades(
-                exam_output_dir(EXAM_STATE["class_name"], create=True),
-                EXAM_STATE["exam_name"], EXAM_STATE["students"],
-                EXAM_STATE["checklist"])
-        except OSError as e:
-            return jsonify({"error": f"Could not save exam checklist: {e}"}), 500
-        return jsonify({"ok": True, "checklist": checklist})
-
-
-@app.route("/api/exam/crop")
-def api_exam_crop():
-    """Serve one sliced answer image: ?class=..&exam=..&q=..&student=.."""
-    class_name = request.args.get("class", "")
-    exam = request.args.get("exam", "")
-    q = request.args.get("q", "")
-    student = request.args.get("student", "")
-    # Try the cloud root first, then the legacy local root (Phase 6 read
-    # fallback). _safe_name strips path separators, so the join cannot escape a
-    # crops dir.
-    rel = os.path.join(exam_engine._safe_name(exam),
-                       exam_engine._safe_name(q),
-                       exam_engine._safe_name(student) + ".png")
-    for root in exam_crop_roots(class_name):
-        path = os.path.join(root, rel)
-        if os.path.isfile(path):
-            return send_file(path, mimetype="image/png")
-    abort(404)
-
-
-@app.route("/api/exam/export")
-def api_exam_export():
-    """Item-level CSV export of the open exam.
-
-    Headers expand dynamically to one column per programmed question — in the
-    teacher's grading order, BEFORE the Total Score column — rather than the
-    standard lump-sum format:
-
-        Student Name, Q1, Q2, ..., Total Score, Max Total, Due Date, Comment
-
-    ?download=1 always streams a browser download (the teacher's own backend
-    processing); otherwise, like /api/export, the file routes into the class
-    cloud subfolder where ACM's watch-folder sync picks it up automatically.
-    """
-    force = request.args.get("force") == "1"
-    download = request.args.get("download") == "1"
-    with STATE_LOCK:
-        if not EXAM_STATE["exam_name"]:
-            return jsonify({"error": "No exam is currently loaded."}), 400
-        exam_name = EXAM_STATE["exam_name"]
-        class_name = EXAM_STATE["class_name"]
-        config = EXAM_STATE["config"]
-        students = {k: {"scores": dict(v.get("scores") or {}),
-                        "comment": v.get("comment", ""),
-                        "keywords": list(v.get("keywords") or [])}
-                    for k, v in EXAM_STATE["students"].items()}
-
-    labels = [q["label"] for q in config["questions"]]
-    max_total = sum(q["max"] for q in config["questions"])
-    today = datetime.date.today().isoformat()
-    # Display-only real names (Phase 5, D5): write the mapped name into "Student
-    # Name" while the grades file on disk stays keyed by the file stem. Identity
-    # contract: once mapped names flow, CAM matches on those; earlier stem-keyed
-    # matches still route via their per-csv_key aliases (Phase 4), so both coexist.
-    student_names = config.get("student_names") or {}
-
-    # "Checked Keywords" (semicolon-joined) sits before Comment, matching the
-    # assignment CSV convention; ACM keys columns by header, so the extra column
-    # is ignored by its exam ingest until it wants it.
-    header = (["Student Name"] + labels +
-              ["Total Score", "Max Total", "Due Date", "Checked Keywords", "Comment"])
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(header)
-    for name in sorted(students, key=str.lower):
-        st = students[name]
-        cells = [st["scores"].get(lbl, "") for lbl in labels]
-        nums = [v for v in st["scores"].values() if isinstance(v, int)]
-        total = sum(nums) if nums else ""
-        keywords = "; ".join(st["keywords"])
-        writer.writerow([student_names.get(name, name)] + cells +
-                        [total, max_total, today, keywords, st["comment"]])
-
-    safe_name = re.sub(r'[\\/*?:"<>|]', "_", exam_name).strip() or "Exam"
-    filename = f"{safe_name}_Grades_{today}.csv"
-    data_bytes = ("﻿" + buf.getvalue()).encode("utf-8")   # BOM for Excel
-
-    out_dir = exam_output_dir(class_name, create=True)
-    routed = out_dir != BASE_DIR and not download
-    if routed:
-        dest = os.path.join(out_dir, filename)
-        if os.path.exists(dest) and not force:
-            return jsonify({"needs_confirm": True, "path": dest,
-                            "filename": filename})
-        # Definition sidecar (Phase 4C): write <csv>.meta.json BEFORE the CSV so
-        # a sync that sees the CSV also sees the structure. Atomic + best-effort;
-        # a sidecar failure must never fail the export (CAM tolerates absence).
-        try:
-            meta = exam_engine.build_sidecar(config)
-            meta_path = dest + ".meta.json"
-            meta_tmp = meta_path + ".tmp"
-            with open(meta_tmp, "w", encoding="utf-8") as f:
-                json.dump(meta, f, ensure_ascii=False, indent=2)
-            os.replace(meta_tmp, meta_path)
-        except Exception as e:
-            print("Warning: could not write exam sidecar:", e)
-        try:
-            with open(dest, "wb") as f:
-                f.write(data_bytes)
-        except Exception as e:
-            return jsonify({"error": f"Could not write CSV to {out_dir}: {e}"}), 500
-        # Sync-on-export beacon (exam variant): CAM's poller routes is_exam=True
-        # through its scoped exam sync. Best-effort — never fails the export.
-        _write_export_beacon(class_name, exam_name, is_exam=True,
-                             csv_path=dest)
-        return jsonify({"saved": True, "path": dest, "filename": filename,
-                        "class_name": class_name,
-                        "student_count": len(students)})
-
     return send_file(io.BytesIO(data_bytes), mimetype="text/csv",
                      as_attachment=True, download_name=filename)
 
@@ -3575,23 +3002,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
   #status { color:var(--muted); font-size:13px; }
   .slider-wrap { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
   .hidden { display:none !important; }
-  select#assignmentSelect, select#classSelect, select#questionSelect { padding:8px 10px;
+  select#assignmentSelect, select#classSelect { padding:8px 10px;
             border-radius:6px; border:1px solid var(--line); background:var(--panel2);
             color:var(--text); font-size:14px; max-width:280px; }
-  select#questionSelect { border-color:var(--accent); font-weight:600; }
-  /* Exam grading: current-question column + score chip on answer cards */
-  th.qcur, td.qcur { background:var(--row-hl); }
-  select.qscore { width:60px; padding:5px; background:var(--panel2); color:var(--text);
-                  border:1px solid var(--line); border-radius:5px; font-size:14px; }
-  /* ✎ region-adjust button on each exam question column header (Phase 6). */
-  button.qadjust { background:transparent; color:var(--muted); border:1px solid transparent;
-                   padding:0 4px; font-size:12px; line-height:1.4; border-radius:4px; }
-  button.qadjust:hover { background:var(--panel2); color:var(--accent);
-                         border-color:var(--line); filter:none; }
-  #examAdjustBtn { font-size:14px; line-height:1; padding:8px 11px; }
-  .scard .exam-img { width:100%; display:block; background:var(--imgbg); }
-  .qchip { position:absolute; top:8px; right:8px; background:var(--accent); color:#fff;
-           border-radius:8px; padding:2px 10px; font-size:13px; font-weight:700; }
   #settingsBtn { font-size:16px; line-height:1; padding:8px 11px; }
 
   /* Settings modal */
@@ -3859,9 +3272,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <option value="">Choose assignment…</option>
     </select>
     <button id="gradeBtn" class="hidden">Grade This</button>
-    <select id="questionSelect" class="hidden" title="Exam question being graded"></select>
-    <button id="examAdjustBtn" class="hidden secondary"
-            title="Adjust the current question's region during grading">✎ Adjust</button>
     <span id="folderName"></span>
     <span id="status"></span>
     <span style="flex:1"></span>
@@ -3870,11 +3280,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <input id="colSlider" type="range" min="2" max="5" value="3">
       <span id="colVal">3</span>
     </div>
-    <button id="examSetupBtn" class="secondary"
-            title="Program a scanned exam paper for the selected class">📝 Exam Setup</button>
     <button id="settingsBtn" class="secondary" title="Theme &amp; CAM link status">⚙</button>
-    <button id="examCsvBtn" class="hidden secondary"
-            title="Download this exam's item-level CSV for your own processing">⬇ Download CSV</button>
     <button id="exportBtn" class="secondary">Export CSV</button>
   </div>
 
@@ -3899,12 +3305,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
       </label>
       <div class="sm-note" style="margin-bottom:12px;">
         Hides student names, IDs and filenames and shuffles the grading order to
-        reduce bias. In exam grading, papers are numbered by position (01, 02, …)
-        and re-shuffled for every question, so a number never identifies a
-        student. It does not stop a student writing their name inside the work,
-        and the “↗ open” link still shows the real file. The exported CSV — for
-        both assignments and exams — keeps the real names either way. Reload the
-        assignment to apply a change.
+        reduce bias. It does not stop a student writing their name inside the
+        work, and the “↗ open” link still shows the real file. The exported CSV
+        keeps the real names either way. Reload the assignment to apply a change.
       </div>
       <label class="sm-field">
         <span>Cloud Sync Directory · managed by CAM</span>
@@ -4111,44 +3514,20 @@ async function loadClass(folderId) {
     sel.classList.remove("hidden");
     $("#gradeBtn").classList.remove("hidden");
     $("#folderName").textContent = data.class_folder_name;
-    // Locally-programmed exams for this class join the same dropdown.
-    await loadExamOptions(sel);
     setStatus(data.assignments.length + " assignment(s) found — pick one to grade.");
   } catch (e) { setStatus(""); alert("Error: " + e); }
 }
 
-/* Append this class's programmed exams (from Exam Setup) to the assignment
-   dropdown as an "Exams" group; their values are prefixed "exam::". */
-async function loadExamOptions(sel) {
-  if (!ACTIVE_CLASS_NAME) return;
-  try {
-    const res = await fetch("/api/exams?class_name=" + encodeURIComponent(ACTIVE_CLASS_NAME));
-    const d = await res.json();
-    const names = Object.keys(d.exams || {}).sort();
-    if (!names.length) return;
-    const og = document.createElement("optgroup"); og.label = "📝 Exams";
-    names.forEach(n => {
-      const o = document.createElement("option");
-      o.value = "exam::" + n; o.textContent = "📝 " + n;
-      og.appendChild(o);
-    });
-    sel.appendChild(og);
-  } catch (e) { console.warn("exam list failed", e); }
-}
-
-/* Route the dropdown: Drive assignment subfolders vs programmed exams. */
 function openSelectedAssignment() {
   const v = $("#assignmentSelect").value;
   if (!v) { alert("Choose an assignment from the dropdown first."); return; }
-  if (v.startsWith("exam::")) loadExam(v.slice(6));
-  else loadFolder();
+  loadFolder();
 }
 
 /* ---------- Step 2: load the chosen assignment subfolder ---------- */
 async function loadFolder() {
   const v = $("#assignmentSelect").value;
   if (!v) { alert("Choose an assignment from the dropdown first."); return; }
-  exitExamMode();
   setStatus("Loading…");
   try {
     const res = await fetch("/api/load", {
@@ -4318,10 +3697,7 @@ $("#anonToggle").addEventListener("change", async () => {
     });
   } catch (e) { console.warn("prefs save failed", e); }
   $("#settingsStatus").textContent = on ? "Anonymous grading on." : "Anonymous grading off.";
-  if (EXAM && EXAM.exam_name) {
-    loadExam(EXAM.exam_name);   // re-fetch the exam so names blank/unblank at once
-  } else if (STUDENTS.length && $("#assignmentSelect").value &&
-      !$("#assignmentSelect").value.startsWith("exam::")) {
+  if (STUDENTS.length && $("#assignmentSelect").value) {
     loadFolder();     // re-fetch the assignment so the new payload takes effect
   }
 });
@@ -5134,7 +4510,7 @@ async function save(st) {
 
 /* ---------- MODIFIED markers (grades changed in CAM since last export) ---- */
 function updateCamModNote() {
-  const any = !EXAM && STUDENTS.some(s => (s.cam_modified || []).length);
+  const any = STUDENTS.some(s => (s.cam_modified || []).length);
   $("#camModNote").style.display = any ? "block" : "none";
 }
 
@@ -5184,12 +4560,9 @@ function checklistPayload() {
     .filter(k => k.label);
 }
 async function pushChecklist() {
-  // Exam mode stores the rubric with the exam's grades; assignment mode stores
-  // it under the loaded folder. Either way the headers need an open target.
-  const url = EXAM ? "/api/exam/checklist" : "/api/checklist";
-  if (!EXAM && !STUDENTS.length) return;   // headers attach to a loaded folder
+  if (!STUDENTS.length) return;   // headers attach to a loaded folder
   try {
-    await fetch(url, {
+    await fetch("/api/checklist", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({checklist: checklistPayload()})
     });
@@ -5204,20 +4577,17 @@ function saveChecklistNow() {          // click-away / add / delete -> immediate
   pushChecklist();
 }
 
-/* Re-render whichever grading matrix is active so the checkbox column adopts
-   the latest rubric labels. */
+/* Re-render the grading matrix so the checkbox column adopts the latest
+   rubric labels. */
 function rerenderGradingTable() {
-  if (EXAM) renderExamTable(); else renderTable();
+  renderTable();
 }
 
 /* When a criteria is renamed, carry every student's existing checkbox mark and
-   any comment text over to the new label so nothing is silently dropped. Works
-   for both the assignment roster and the exam roster. */
+   any comment text over to the new label so nothing is silently dropped. */
 function remapKeywordLabel(oldLabel, newLabel) {
   if (!oldLabel || oldLabel === newLabel) return;
-  const roster = EXAM ? EXAM.students : STUDENTS;
-  const persist = EXAM ? saveExamStudent : save;
-  roster.forEach(st => {
+  STUDENTS.forEach(st => {
     let touched = false;
     if (Array.isArray(st.keywords) && st.keywords.includes(oldLabel)) {
       st.keywords = st.keywords.map(x => x === oldLabel ? newLabel : x);
@@ -5227,7 +4597,7 @@ function remapKeywordLabel(oldLabel, newLabel) {
       st.comment = st.comment.split(oldLabel).join(newLabel);  // literal replace
       touched = true;
     }
-    if (touched) persist(st);         // persist the migrated marks for this student
+    if (touched) save(st);            // persist the migrated marks for this student
   });
 }
 
@@ -5295,416 +4665,6 @@ function addKeyword() {
   renderTags(); rerenderGradingTable(); saveChecklistNow();
 }
 
-/* ---------- Exam mode (grading a sliced scanned exam) ----------
-   Programmed in /exam_setup, an exam is graded one question at a time: the
-   question dropdown picks which sliced answer image every student card shows,
-   and the right matrix carries one score column per question, each with its
-   own mark range (0..max), so different questions can be worth different
-   amounts. Everything autosaves to the per-exam grades file. */
-let EXAM = null;            // {exam_name, questions:[{label,range,max}], students:[...]}
-let EXAM_BY_KEY = {};
-let CURRENT_Q = null;       // label of the question currently on the left screen
-let examSelectedKey = null;
-let EXAM_ANON = false;      // anonymous grading on for this exam (server pref, D6)
-
-/* Anonymous exam order (decision D6, YouMark-style). The server blanks the
-   display names and the client re-orders + numbers per question so the same
-   student never carries a stable alias across questions. A deterministic
-   mulberry32 PRNG seeded on a string hash of class|exam|question gives an order
-   that is stable across reloads but different for every question. */
-function examStrHash(s) {
-  let h = 1779033703 ^ s.length;
-  for (let i = 0; i < s.length; i++) {
-    h = Math.imul(h ^ s.charCodeAt(i), 3432918353);
-    h = (h << 13) | (h >>> 19);
-  }
-  return h >>> 0;
-}
-function examMulberry32(a) {
-  return function () {
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-function examSeededShuffle(arr, seedStr) {
-  const rng = examMulberry32(examStrHash(seedStr));
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-/* The ordered (student, display-label) pairs the roster + sheet both iterate,
-   so the two screens always share one order. Anonymous on: shuffle per question
-   (seed = class|exam|CURRENT_Q) and label by POSITION — "01", "02", … — which
-   is a progress counter, not an identity (the same student gets a different
-   number on the next question). Anonymous off: today's order (as the server
-   sends it, alphabetical) with real names. */
-function examView() {
-  if (!EXAM) return [];
-  if (!EXAM_ANON) return EXAM.students.map(st => ({st, label: st.name}));
-  const seed = (ACTIVE_CLASS_NAME || "") + "|" + (EXAM.exam_name || "")
-             + "|" + (CURRENT_Q || "");
-  return examSeededShuffle(EXAM.students, seed)
-    .map((st, i) => ({st, label: String(i + 1).padStart(2, "0")}));
-}
-
-/* Cache-buster bumped when a question is re-sliced in the Exam Setup tab
-   (Phase 6). Appended to crop URLs so the browser refetches the new framing
-   instead of the cached image; empty until the first re-slice arrives. */
-let EXAM_CROP_BUST = "";
-function cropUrl(q, student) {
-  return "/api/exam/crop?class=" + encodeURIComponent(ACTIVE_CLASS_NAME)
-       + "&exam=" + encodeURIComponent(EXAM.exam_name)
-       + "&q=" + encodeURIComponent(q)
-       + "&student=" + encodeURIComponent(student)
-       + (EXAM_CROP_BUST ? "&t=" + encodeURIComponent(EXAM_CROP_BUST) : "");
-}
-
-/* Open Exam Setup focused on one question, to adjust its region mid-grading. */
-function openExamAdjust(label) {
-  if (!EXAM || !ACTIVE_CLASS_NAME) return;
-  // D3: one named setup tab — repeat clicks re-navigate it (re-running the
-  // ?focus deep-link) instead of stacking new _blank tabs.
-  const w = window.open("/exam_setup?class=" + encodeURIComponent(ACTIVE_CLASS_NAME)
-    + "&exam=" + encodeURIComponent(EXAM.exam_name)
-    + "&focus=" + encodeURIComponent(label), "cam_exam_setup");
-  if (w) w.focus();
-}
-
-/* The Exam Setup tab writes this localStorage key when a re-slice finishes;
-   the write fires a 'storage' event in THIS tab (same origin). Refresh the
-   affected exam's crops in place — marks are untouched, only pixels changed. */
-window.addEventListener("storage", (e) => {
-  if (e.key !== "cam_exam_resliced" || !e.newValue || !EXAM) return;
-  let sig;
-  try { sig = JSON.parse(e.newValue); } catch (_) { return; }
-  if (sig.class === ACTIVE_CLASS_NAME && sig.exam === EXAM.exam_name) {
-    EXAM_CROP_BUST = String(sig.ts || Date.now());
-    renderExamRoster();
-    // Empty label = a full Process-All re-process (D4); a label = one question.
-    setStatus(sig.label
-      ? "Re-sliced " + sig.label + " — crops refreshed."
-      : "Exam re-processed — crops refreshed.");
-  }
-});
-// No examTotal/examMaxTotal helpers: decision D3 keeps every running total out
-// of the grading UI (they belong only to the CSV export + CAM). Completion is
-// tracked per-question instead — see examFullyGraded and the roster progress.
-function examFullyGraded(st) {
-  return EXAM.questions.every(q => st.scores[q.label] !== undefined);
-}
-
-async function loadExam(examName) {
-  if (!ACTIVE_CLASS_NAME) {
-    alert("Pick a saved class first — exams are stored per class."); return;
-  }
-  setStatus("Loading exam…");
-  try {
-    const res = await fetch("/api/exam/load", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({class_name: ACTIVE_CLASS_NAME, exam_name: examName})
-    });
-    const data = await res.json();
-    if (!res.ok) { setStatus(""); alert(data.error || "Failed to load exam."); return; }
-    EXAM = data;
-    EXAM_ANON = !!data.anonymous;   // server blanked names; client numbers by position
-    EXAM_BY_KEY = {};
-    EXAM.students.forEach(st => {
-      st.scores = st.scores || {};
-      st.keywords = st.keywords || [];
-      EXAM_BY_KEY[st.key] = st;
-    });
-    CURRENT_Q = EXAM.questions.length ? EXAM.questions[0].label : null;
-    examSelectedKey = null;
-
-    // The exam's own keyword rubric (D4 default when the exam has none saved),
-    // editable per exam exactly like the assignment checklist.
-    KEYWORDS = (Array.isArray(data.checklist) && data.checklist.length)
-      ? data.checklist.map(k => ({
-          label: String(k.label || "").trim(),
-          type:  k.type === "growth" ? "growth" : "positive",
-        })).filter(k => k.label)
-      : [];
-
-    // Question selector drives which answer slice the left screen shows.
-    const qs = $("#questionSelect");
-    qs.innerHTML = "";
-    EXAM.questions.forEach(q => {
-      const o = document.createElement("option");
-      o.value = q.label; o.textContent = q.label;   // D1: bare label — the sheet header's qcol already shows (0–max)
-      qs.appendChild(o);
-    });
-    qs.classList.remove("hidden");
-    $("#examAdjustBtn").classList.remove("hidden");
-    $("#examCsvBtn").classList.remove("hidden");
-    $("#setupbar").classList.add("hidden");     // MYP criteria don't apply here
-    $("#kwEditor").classList.remove("hidden");  // keyword checklist works for exams too
-    $("#folderName").textContent = "📝 " + EXAM.exam_name;
-    // No running total here (decision D3): a visible total while later
-    // questions are still ungraded reinforces bias. Totals live only in the CSV.
-    setStatus(EXAM.students.length + " student(s) · " + EXAM.questions.length
-              + " question(s)");
-    renderTags();
-    renderExamTable();
-    renderExamRoster();
-    updateCamModNote();   // exam mode — folder MODIFIED note doesn't apply
-  } catch (e) { setStatus(""); alert("Error: " + e); }
-}
-
-function exitExamMode() {
-  if (!EXAM) return;
-  EXAM = null; EXAM_BY_KEY = {}; CURRENT_Q = null; examSelectedKey = null;
-  $("#questionSelect").classList.add("hidden");
-  $("#examAdjustBtn").classList.add("hidden");
-  $("#examCsvBtn").classList.add("hidden");
-  $("#kwEditor").classList.remove("hidden");
-}
-
-/* Left screen: one card per student showing their sliced answer to CURRENT_Q. */
-function renderExamRoster() {
-  roster.innerHTML = "";
-  if (!EXAM) return;
-  examView().forEach(({st, label}) => {
-    const card = document.createElement("div");
-    card.className = "scard" + (examFullyGraded(st) ? " graded" : "")
-                   + (st.key === examSelectedKey ? " selected" : "");
-    card.dataset.key = st.key;
-
-    const img = document.createElement("img");
-    img.className = "exam-img"; img.loading = "lazy";
-    img.src = cropUrl(CURRENT_Q, st.key); img.alt = label;
-    img.onerror = () => img.replaceWith(Object.assign(document.createElement("div"),
-      {className: "ph", textContent: "No slice for " + CURRENT_Q}));
-    attachExamZoom(img, cropUrl(CURRENT_Q, st.key));
-    card.appendChild(img);
-
-    const chk = document.createElement("div");
-    chk.className = "checkbadge"; chk.textContent = "✓"; card.appendChild(chk);
-    const sc = st.scores[CURRENT_Q];
-    if (sc !== undefined) {
-      const chip = document.createElement("div"); chip.className = "qchip";
-      chip.textContent = CURRENT_Q + ": " + sc; card.appendChild(chip);
-    }
-
-    const meta = document.createElement("div"); meta.className = "meta";
-    // Progress, not a total (decision D3): how many questions are graded, never
-    // a running score sum while grading is still in flight.
-    const done = EXAM.questions.filter(q => st.scores[q.label] !== undefined).length;
-    const nq = EXAM.questions.length;
-    meta.innerHTML = `<div class="nm">${escapeHtml(label)}</div>`
-      + `<div class="sub">${done ? done + "/" + nq + " questions" : "ungraded"}</div>`;
-    card.appendChild(meta);
-
-    card.addEventListener("click", () => selectExamStudent(st.key, true));
-    roster.appendChild(card);
-  });
-}
-
-/* Hover zoom for exam slices — same overlay as artwork thumbnails. */
-function attachExamZoom(img, url) {
-  img.addEventListener("mouseenter", () => {
-    if (videoZoomActive) return;
-    hoverEl = img; hoverScale = 2; hoverFid = null;
-    overlay.classList.remove("video-mode");
-    overlayImg.src = url;
-    overlayImg.style.transform = "";
-    overlay.style.display = "block";
-    positionOverlay(img);
-  });
-  img.addEventListener("mousemove", () => { if (hoverEl === img) positionOverlay(img); });
-  img.addEventListener("mouseleave", () => {
-    if (hoverEl === img) { hoverEl = null; overlay.style.display = "none"; }
-  });
-  img.addEventListener("wheel", (ev) => {
-    if (hoverEl !== img) return;
-    ev.preventDefault();
-    hoverScale += (ev.deltaY < 0 ? 0.35 : -0.35);
-    if (hoverScale < 1.2) hoverScale = 1.2;
-    positionOverlay(img);
-  }, {passive:false});
-}
-
-/* Right screen: one column for the CURRENT question only (decision D3) — no
-   other questions, and no running Total, so a visible sum can't bias grading
-   while later questions are unmarked. Keywords + Comment mirror the assignment
-   sheet. Switching #questionSelect re-renders to the next question's column. */
-function renderExamTable() {
-  if (!EXAM || !EXAM.students.length) {
-    tableWrap.innerHTML = '<div class="empty">No sliced students found.</div>';
-    return;
-  }
-  const q = EXAM.questions.find(x => x.label === CURRENT_Q) || EXAM.questions[0];
-  const t = document.createElement("table");
-  const qcol = q
-    ? `<th class="qcur" title="Range ${escapeHtml(q.range)}">`
-      + `${escapeHtml(q.label)}<br>(0–${q.max}) `
-      + `<button class="qadjust" type="button" data-q="${escapeHtml(q.label)}"`
-      + ` title="Adjust this question's region during grading">✎</button></th>`
-    : "";
-  t.innerHTML = `<thead><tr><th class="idcol">Student</th>${qcol}`
-              + `<th>Keywords</th><th>Comment</th></tr></thead>`;
-  const tb = document.createElement("tbody");
-  examView().forEach(({st, label}) => tb.appendChild(makeExamRow(st, label)));
-  t.appendChild(tb);
-  // The ✎ opens Exam Setup focused on this question (Phase 6).
-  t.querySelectorAll("button.qadjust").forEach(b =>
-    b.addEventListener("click", (e) => { e.stopPropagation(); openExamAdjust(b.dataset.q); }));
-  tableWrap.innerHTML = "";
-  tableWrap.appendChild(t);
-}
-
-function makeExamRow(st, label) {
-  const tr = document.createElement("tr");
-  tr.dataset.key = st.key;
-  if (st.key === examSelectedKey) tr.classList.add("selected");
-
-  const tdN = document.createElement("td"); tdN.className = "name idcol";
-  tdN.innerHTML = `<span class="sid">${escapeHtml(label != null ? label : st.name)}</span>`;
-  tr.appendChild(tdN);
-
-  // Only the current question's score column (D3): no running total anywhere.
-  const q = EXAM.questions.find(x => x.label === CURRENT_Q) || EXAM.questions[0];
-  if (q) {
-    const td = document.createElement("td"); td.classList.add("qcur");
-    const sel = document.createElement("select");
-    sel.className = "qscore"; sel.dataset.q = q.label;
-    const blank = document.createElement("option");
-    blank.value = ""; blank.textContent = "–"; sel.appendChild(blank);
-    for (let v = 0; v <= q.max; v++) {
-      const o = document.createElement("option");
-      o.value = String(v); o.textContent = String(v);
-      if (st.scores[q.label] !== undefined && String(st.scores[q.label]) === String(v))
-        o.selected = true;
-      sel.appendChild(o);
-    }
-    sel.addEventListener("change", () => {
-      if (sel.value === "") delete st.scores[q.label];
-      else st.scores[q.label] = Number(sel.value);
-      saveExamStudent(st);
-    });
-    td.appendChild(sel); tr.appendChild(td);
-  }
-
-  // Keyword checklist — same checkbox pills as assignment mode; ticking
-  // rebuilds the auto part of the comment while keeping any free text.
-  st.keywords = st.keywords || [];
-  const tdK = document.createElement("td");
-  const box = document.createElement("div"); box.className = "kw";
-  KEYWORDS.forEach(k => {
-    const lab = document.createElement("label");
-    const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = k.label;
-    cb.checked = st.keywords.includes(k.label);
-    cb.addEventListener("change", () => {
-      if (cb.checked) { if (!st.keywords.includes(k.label)) st.keywords.push(k.label); }
-      else st.keywords = st.keywords.filter(x => x !== k.label);
-      st.comment = autoComment(st);
-      const ta = tr.querySelector("textarea.comment"); if (ta) ta.value = st.comment;
-      saveExamStudent(st);
-    });
-    const span = document.createElement("span");
-    span.className = k.type === "growth" ? "grow" : "pos";
-    span.textContent = k.label;
-    lab.appendChild(cb); lab.appendChild(span);
-    box.appendChild(lab);
-  });
-  tdK.appendChild(box); tr.appendChild(tdK);
-
-  const tdC = document.createElement("td");
-  const ta = document.createElement("textarea"); ta.className = "comment";
-  ta.value = st.comment || "";
-  ta.addEventListener("input", () => { st.comment = ta.value; });
-  ta.addEventListener("blur", () => saveExamStudent(st));
-  tdC.appendChild(ta); tr.appendChild(tdC);
-
-  tr.addEventListener("click", () => selectExamStudent(st.key, false));
-  return tr;
-}
-
-async function saveExamStudent(st) {
-  try {
-    await fetch("/api/exam/grade", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({key: st.key, scores: st.scores,
-                            comment: st.comment || "", keywords: st.keywords || []})
-    });
-  } catch (e) { console.warn("exam save failed", e); }
-  const tr = tableWrap.querySelector(`tr[data-key="${cssEsc(st.key)}"]`);
-  if (tr) { tr.classList.remove("row-saved"); void tr.offsetWidth; tr.classList.add("row-saved"); }
-  renderExamRoster();       // score chip + graded tick follow the matrix
-}
-
-function selectExamStudent(key, focusScore) {
-  examSelectedKey = key;
-  roster.querySelectorAll(".scard").forEach(c =>
-    c.classList.toggle("selected", c.dataset.key === key));
-  let row = null;
-  tableWrap.querySelectorAll("tr[data-key]").forEach(r => {
-    const on = r.dataset.key === key; r.classList.toggle("selected", on);
-    if (on) row = r;
-  });
-  if (row) {
-    row.scrollIntoView({block:"center", behavior:"smooth"});
-    if (focusScore) {
-      const sel = row.querySelector(`select.qscore[data-q="${cssEsc(CURRENT_Q)}"]`)
-               || row.querySelector("select.qscore");
-      if (sel) sel.focus();
-    }
-  }
-}
-
-/* Exam CSV: routed export (cloud folder -> ACM auto-ingest) + direct download. */
-async function exportExamCsv(force = false) {
-  setStatus("Exporting exam CSV…");
-  try {
-    const res = await fetch("/api/exam/export" + (force ? "?force=1" : ""));
-    const ct = res.headers.get("Content-Type") || "";
-    if (ct.includes("application/json")) {
-      const d = await res.json();
-      if (!res.ok || d.error) { setStatus(""); alert(d.error || "Export failed."); return; }
-      if (d.needs_confirm) {
-        setStatus("");
-        if (confirm('"' + d.filename + '" already exists in the cloud folder.\n\nOverwrite it?'))
-          return exportExamCsv(true);
-        setStatus("Export cancelled.");
-        return;
-      }
-      setStatus("Saved exam CSV → " + d.path + "  (ACM will auto-ingest it)");
-    } else {
-      await streamCsvDownload(res);
-    }
-  } catch (e) { setStatus(""); alert("Export error: " + e); }
-}
-
-async function downloadExamCsv() {
-  if (!EXAM) return;
-  setStatus("Preparing download…");
-  try {
-    const res = await fetch("/api/exam/export?download=1");
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      setStatus(""); alert(d.error || "Download failed."); return;
-    }
-    await streamCsvDownload(res);
-  } catch (e) { setStatus(""); alert("Download error: " + e); }
-}
-
-async function streamCsvDownload(res) {
-  const blob = await res.blob();
-  const cd = res.headers.get("Content-Disposition") || "";
-  const m = cd.match(/filename="?([^"]+)"?/);
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = (m && m[1]) || "Grades.csv";
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(a.href);
-  setStatus("CSV downloaded.");
-}
-
 /* ---------- Resizable divider ---------- */
 (function(){
   const divider = $("#divider"), left = $("#left"), split=$("#split");
@@ -5726,7 +4686,6 @@ async function streamCsvDownload(res) {
 function setCols(n){
   roster.style.gridTemplateColumns = `repeat(${n}, 1fr)`;
   $("#colVal").textContent = n;
-  if (EXAM) { renderExamRoster(); return; }   // exam cards share the same grid
   // Re-render so any Group Work boxes adopt the same column count internally.
   if (STUDENTS.length) renderRoster();
 }
@@ -5741,24 +4700,6 @@ $("#gradeBtn").addEventListener("click", openSelectedAssignment);
 $("#assignmentSelect").addEventListener("change", () => {
   if ($("#assignmentSelect").value) openSelectedAssignment();
 });
-/* Exam wiring: setup opens per-class; the question dropdown swaps every
-   student card to that question's answer slice and re-highlights the matrix. */
-$("#examSetupBtn").addEventListener("click", () => {
-  if (!ACTIVE_CLASS_NAME) {
-    alert("Select a saved class first — the exam will be added to that class.");
-    return;
-  }
-  // D3: same named setup tab as the Adjust routes — never _blank.
-  const w = window.open("/exam_setup?class=" + encodeURIComponent(ACTIVE_CLASS_NAME), "cam_exam_setup");
-  if (w) w.focus();
-});
-$("#questionSelect").addEventListener("change", () => {
-  CURRENT_Q = $("#questionSelect").value;
-  renderExamRoster();
-  renderExamTable();
-});
-$("#examAdjustBtn").addEventListener("click", () => { if (CURRENT_Q) openExamAdjust(CURRENT_Q); });
-$("#examCsvBtn").addEventListener("click", downloadExamCsv);
 $("#deadlineInput").addEventListener("change", () => {
   DEADLINE = $("#deadlineInput").value || "";
   pushSettings();
@@ -5789,7 +4730,6 @@ $("#settingsOverlay").addEventListener("click", e => {
 
 /* ---------- Export: save into the class cloud subfolder, or download ---------- */
 async function exportCsv(force = false) {
-  if (EXAM) return exportExamCsv(force);          // exam mode -> item-level CSV
   if (!STUDENTS.length) { alert("Load an assignment before exporting."); return; }
   setStatus("Exporting…");
   try {
@@ -5840,44 +4780,26 @@ async function exportCsv(force = false) {
 }
 
 /* ---------- CAM bridge: auto-load from URL query parameters ----------
-   The CAM dashboard's "Grade this Assignment/Exam" button opens this app at
-   /?class=<name>&assignment=<Drive folder ID | exam::Name>&aname=<display name>.
+   The CAM dashboard's "Grade this Assignment" button opens this app at
+   /?class=<name>&assignment=<folder ID or path>&aname=<display name>.
    Once the settings are in, select the class, list its assignments, and open
-   the matching one automatically. Matching order: exact option value (Drive
-   folder ID / exam:: value), then exam::<target>, then option text against
-   the target or display name (📝 prefix ignored).
-   A class with no Drive mapping can still open its programmed EXAMS: exams
-   are stored locally by class name (no Drive, no OAuth), so only folder
-   grading needs the class saved in ⚙ Settings. */
+   the matching one automatically. Matching order: exact option value (folder
+   ID), then option text against the target or display name. */
 async function autoloadFromParams() {
   const p = new URLSearchParams(location.search);
   const cls = p.get("class") || "";
   const target = (p.get("assignment") || "").trim();
   const aname = (p.get("aname") || "").trim();
   if (!cls) return;
-  const norm = s => (s || "").replace(/^📝\s*/, "").trim().toLowerCase();
+  const norm = s => (s || "").trim().toLowerCase();
   const findHit = () => {
     const opts = [...$("#assignmentSelect").options].filter(o => o.value);
     return opts.find(o => o.value === target)
-        || opts.find(o => o.value === "exam::" + target)
         || opts.find(o => norm(o.textContent) === norm(target))
         || (aname && opts.find(o => norm(o.textContent) === norm(aname)));
   };
   if (!(SETTINGS.classes || {})[cls]) {
-    // Unmapped class: list its locally-stored exams and open the match.
-    ACTIVE_CLASS_NAME = cls;
-    const sel = $("#assignmentSelect");
-    sel.innerHTML = '<option value="">Choose assignment…</option>';
-    await loadExamOptions(sel);
-    const hit = findHit();
-    if (!hit) {
-      setStatus('CAM bridge: class "' + cls + '" is not saved here — add it in ⚙ Settings.');
-      return;
-    }
-    sel.classList.remove("hidden");
-    $("#gradeBtn").classList.remove("hidden");
-    sel.value = hit.value;
-    openSelectedAssignment();
+    setStatus('CAM bridge: class "' + cls + '" is not saved here — add it in ⚙ Settings.');
     return;
   }
   $("#classSelect").value = cls;
@@ -5898,1141 +4820,6 @@ renderTags();
 // Populate the class dropdown + settings from gcg_settings.json, then honour
 // any CAM-bridge query parameters.
 loadConfig().then(autoloadFromParams);
-</script>
-</body>
-</html>
-"""
-
-
-# -----------------------------------------------------------------------------
-# Exam Setup page (/exam_setup) — split-screen question programmer
-# -----------------------------------------------------------------------------
-EXAM_SETUP_PAGE = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Exam Setup — Criterion Assessment Metrics</title>
-<style>
-  /* Same CAM palette as the main grading screen. */
-  :root {
-    color-scheme: light;
-    --bg:#E9E7E2; --panel:#DDDAD3; --panel2:#DFDCD4; --line:#C6C2B9;
-    --text:#38352F; --muted:#6E695F; --accent:#B3554D; --green:#37c97a;
-    --surface:#F0EEE9; --btn-hover:#D5D1C7; --imgbg:#CBC7BE;
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --bg:#252423; --panel:#32312F; --panel2:#3A3835; --line:#4B4945;
-    --text:#D8D5CF; --muted:#A19C93; --accent:#C4675F;
-    --surface:#2E2D2B; --btn-hover:#454340; --imgbg:#1B1A19;
-  }
-  * { box-sizing:border-box; }
-  html,body { margin:0; height:100%; font-family:-apple-system,Segoe UI,Roboto,"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;
-              background:var(--bg); color:var(--text); accent-color:var(--accent); }
-  #app { display:flex; flex-direction:column; height:100vh; }
-  #topbar { display:flex; gap:10px; align-items:center; padding:10px 14px;
-            background:var(--panel); border-bottom:1px solid var(--line); flex:none; flex-wrap:wrap; }
-  #topbar h1 { font-size:16px; margin:0; }
-  #classTag { color:var(--muted); font-size:13px; }
-  #status { color:var(--muted); font-size:13px; flex:1; }
-  button { background:var(--accent); color:#fff; border:none; padding:8px 14px; border-radius:6px;
-           font-size:14px; cursor:pointer; }
-  button.secondary { background:var(--panel2); border:1px solid var(--line); color:var(--text); }
-  button:hover { filter:brightness(1.08); }
-  button.secondary:hover { background:var(--btn-hover); border-color:var(--accent); filter:none; }
-  input[type=text], select { padding:7px 9px; border-radius:6px; border:1px solid var(--line);
-            background:var(--panel2); color:var(--text); font-size:13px; }
-  a.backlink { color:var(--accent); font-size:13px; text-decoration:none; }
-
-  /* Split layout */
-  #split { display:flex; flex:1; min-height:0; }
-  #left { width:55%; flex:none; overflow:auto; background:var(--bg); padding:12px;
-          border-right:1px solid var(--line); }
-  #right { flex:1; overflow:auto; background:var(--panel); padding:14px; min-width:340px; }
-
-  /* Left: loader bar + page preview with the paper-size + density coordinate
-     grid overlay (legacy ~2cm, compact ~1.4cm, fine ~1cm — set inline by JS). */
-  #loaderBar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
-  #folderInput { flex:1; min-width:220px; }
-  #pageWrap { position:relative; background:var(--imgbg); border:1px solid var(--line);
-              border-radius:8px; overflow:hidden; }
-  /* Zoom-to-selection (Phase 6): the img + grid overlay live in this container
-     so a single CSS transform frames one question's cells ±2 without touching
-     layout (page height stays put, so #pageWrap keeps clipping to the page). */
-  #pageZoom { position:relative; transform-origin:0 0; transition:transform .15s ease; }
-  #pageImg { width:100%; display:block; }
-  /* Fit-page mode (Phase 3): constrain the sheet by height so the whole page is
-     visible at once, and centre it horizontally in the pane. #pageWrap goes flex
-     so #pageZoom shrink-wraps the image — the inset:0 grid overlay keeps tracking
-     the page box. The 150px offset budgets the topbar, loader row and the pane
-     padding sitting above the preview. */
-  #pageWrap.fitpage { display:flex; justify-content:center; }
-  #pageWrap.fitpage #pageImg { width:auto; max-height:calc(100vh - 150px); }
-  #gridOverlay { position:absolute; inset:0; display:grid;
-                 grid-template-columns:repeat(15,1fr); grid-template-rows:repeat(21,1fr); }
-  /* Grid lines take the teacher-chosen colour (--gridcol, set per device by JS)
-     at partial alpha — density, not weight, was the legibility complaint. */
-  .gcell { position:relative;
-           border:1px dashed color-mix(in srgb, var(--gridcol, #39FF14) 65%, transparent);
-           background:transparent; transition:background .1s; }
-  /* Coordinate labels: bold, centred, filling the cell, in the chosen grid
-     colour at ~40% opacity (no halo). Font size is computed from the live cell
-     height (JS sets --glabsize) so labels recentre/rescale with density + fit
-     mode instead of relying on per-density static rules. */
-  .gcell .glab { position:absolute; inset:0; display:flex;
-                 align-items:center; justify-content:center;
-                 font-size:var(--glabsize, 13px); font-weight:800; line-height:1;
-                 color:var(--gridcol, #39FF14); opacity:.4;
-                 pointer-events:none; user-select:none; }
-  .gcell.hl { outline:2px solid var(--hl, var(--accent)); outline-offset:-2px; }
-  #noPage { padding:60px 20px; text-align:center; color:var(--muted); font-size:14px; }
-
-  /* Right: setup form + question table */
-  .field { display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px;
-           color:var(--muted); flex-wrap:wrap; }
-  .field input[type=text] { color:var(--text); }
-  #examName { min-width:220px; font-weight:600; color:var(--text); }
-  table { border-collapse:collapse; width:100%; font-size:13px; margin-top:6px; }
-  th,td { border-bottom:1px solid var(--line); padding:6px 6px; text-align:left; vertical-align:middle; }
-  th { font-size:12px; color:var(--muted); }
-  td input.qlabel { width:74px; }
-  td input.qrange { width:130px; font-family:ui-monospace,Consolas,monospace; }
-  td input.qscore { width:64px; }
-  td input.bad { border-color:#d0556a; box-shadow:0 0 0 1px #d0556a inset; }
-  .swatch { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:4px;
-            vertical-align:-1px; }
-  /* Question swatches are clickable to zoom the preview to that question. */
-  tr[data-rowtype="question"] .swatch { cursor:zoom-in; }
-  tr.focusrow td { background:var(--row-hl, rgba(179,85,77,.14)); }
-  tr.focusrow td:first-child { box-shadow:inset 3px 0 0 var(--accent); }
-  #focusBar { display:flex; align-items:center; gap:10px; margin-top:12px; padding:10px 12px;
-              background:var(--surface); border:1px solid var(--accent); border-radius:8px;
-              flex-wrap:wrap; }
-  #focusNote { flex:1; font-size:13px; color:var(--text); min-width:180px; }
-  .rowbtn { background:var(--panel2); color:var(--muted); border:1px solid var(--line);
-            border-radius:5px; width:26px; height:26px; padding:0; font-size:13px; }
-  .rowbtn:hover { background:var(--btn-hover); color:var(--text); filter:none; }
-  .rowbtn.del:hover { background:#d0556a; color:#fff; border-color:#d0556a; }
-  /* ✎ adjust button shares the swatch cell — keep it snug and aligned. */
-  .rowbtn.adj { width:22px; height:22px; font-size:12px; vertical-align:middle; }
-  .rowbtn.adj:hover { color:var(--accent); border-color:var(--accent); }
-  tr.focusrow .rowbtn.adj { background:var(--accent); color:#fff; border-color:var(--accent); }
-  #actions { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
-  #addRowBtns { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
-  #procNote { margin-top:10px; font-size:12px; color:var(--muted); white-space:pre-wrap; }
-  .hint { font-size:12px; color:var(--muted); margin:4px 0 12px; line-height:1.5; }
-
-  /* Section header rows: a tinted band spanning the label/range/score columns,
-     with the section name + how-many-count control. Question rows below one
-     belong to it. */
-  tr.secrow td { background:var(--surface); border-top:1px solid var(--accent); }
-  tr.secrow .seclabel { font-size:12px; font-weight:600; color:var(--muted); margin-right:6px; }
-  tr.secrow .secname { width:150px; font-weight:600; color:var(--text); }
-  .secreqwrap { font-size:12px; color:var(--muted); margin-left:8px; }
-  .secreqwrap input[type=number] { width:52px; padding:5px 6px; border-radius:6px;
-            border:1px solid var(--line); background:var(--panel2); color:var(--text); }
-  .secreqwrap input:disabled { opacity:.4; }
-  .secreqwrap label { cursor:pointer; }
-  .swatch.secmark { background:var(--accent); color:#fff; width:14px; height:14px;
-            font-size:10px; line-height:14px; text-align:center; border-radius:3px; }
-  /* Name-box row: a fixed "Name" label, its own swatch colour, a range only. */
-  tr.namerow td { background:var(--accent-tint, rgba(179,85,77,.06)); }
-  tr.namerow .namelabel { font-weight:600; color:var(--text); }
-  .swatch.namemark { background:#2bb8b0; }
-
-  /* Students naming panel (Phase 5, D5): display-only real names + name-box
-     crops. The file stem stays the storage key; these names are display/export
-     only. One row per student file, collapsible below the question table. */
-  #namePanel { margin-top:16px; border:1px solid var(--line); border-radius:8px;
-               background:var(--surface); padding:8px 12px; }
-  #namePanel > summary { cursor:pointer; font-weight:600; color:var(--text); font-size:13px; }
-  #nameRows { margin-top:10px; display:flex; flex-direction:column; gap:8px; }
-  .stu-row { display:flex; align-items:center; gap:10px; }
-  .stu-crop { height:34px; max-width:150px; border:1px solid var(--line); border-radius:4px;
-              background:var(--imgbg); object-fit:contain; flex:none; }
-  .stu-meta { display:flex; flex-direction:column; gap:1px; min-width:120px; max-width:170px; }
-  .stu-stem { font-size:12px; color:var(--muted); font-family:ui-monospace,Consolas,monospace;
-              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .stu-flag { font-size:11px; color:#d0556a; font-weight:600; }
-  .stu-name { flex:1; min-width:120px; }
-</style>
-<script>
-(function(){
-  var pref = localStorage.getItem("gcg_theme") || "auto";
-  if (pref === "auto")
-    pref = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  document.documentElement.dataset.theme = pref;
-})();
-</script>
-</head>
-<body>
-<div id="app">
-  <div id="topbar">
-    <h1>📝 Exam Setup</h1>
-    <span id="classTag"></span>
-    <span id="status"></span>
-    <a class="backlink" id="backLink" href="/">← back to grading</a>
-  </div>
-
-  <div id="split">
-    <!-- LEFT: first student's exam page + paper/density coordinate grid -->
-    <div id="left">
-      <div id="loaderBar">
-        <input id="folderInput" type="text" autocomplete="off"
-               placeholder="Folder of student exam PDFs, e.g. C:\Scans\7A_Midterm">
-        <button id="loadFolderBtn">📂 Load Student Folder</button>
-        <select id="pageSelect" title="Page of the first student's PDF">
-          <option value="1">Page 1</option>
-        </select>
-        <button id="fitToggleBtn" class="secondary hidden"
-                title="Switch between fitting the page width and the whole page">↔ Fit width</button>
-        <button id="zoomToggleBtn" class="secondary hidden"
-                title="Clear the zoom-to-question view and return to the fit view">✕ Reset zoom</button>
-      </div>
-      <div id="pageWrap">
-        <div id="noPage">Load a student folder to preview the first exam paper.<br>
-          A coordinate grid sized for the selected paper and grid density
-          (Compact ≈1.4cm or Fine ≈1cm) is laid over the page; type coordinate
-          ranges on the right and the matching cells light up here.
-          Click a question's colour swatch to zoom the preview to its cells.</div>
-        <div id="pageZoom">
-          <img id="pageImg" alt="" style="display:none">
-          <div id="gridOverlay" style="display:none"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- RIGHT: paper size + question programming table -->
-    <div id="right">
-      <div class="field">
-        <span>Exam name</span>
-        <input id="examName" type="text" placeholder="e.g. Term 2 Midterm" autocomplete="off">
-        <span>Load saved:</span>
-        <select id="examLoadSelect"><option value="">— new exam —</option></select>
-      </div>
-      <div class="field">
-        <span>Paper size</span>
-        <select id="paperSelect">
-          <option value="A4" selected>A4 (210 × 297 mm)</option>
-          <option value="A3">A3 (297 × 420 mm)</option>
-          <option value="B5">B5 (176 × 250 mm)</option>
-        </select>
-        <span>Grid</span>
-        <select id="gridSelect" title="Cell size of the coordinate grid">
-          <option value="compact" selected>Compact (≈1.4 cm)</option>
-          <option value="fine">Fine (≈1 cm)</option>
-        </select>
-        <span>Grid colour</span>
-        <select id="gridColorSelect" title="Colour of the coordinate grid and its labels (saved on this device)">
-          <option value="#39FF14" selected>Neon green</option>
-          <option value="#00BFFF">Bright blue</option>
-          <option value="#FF00E5">Bright magenta</option>
-        </select>
-      </div>
-      <div class="hint">
-        One row per question, in the order they should be graded. Coordinate
-        ranges use the grid on the left: <b>A2:C5</b> (page 1) or
-        <b>page2!A2:C5</b>. Max mark is the highest score, e.g. <b>3</b>.
-        Use ↑/↓ to reorder. Questions belong to the <b>section header</b> above
-        them; an optional <b>name box</b> captures the handwritten name.
-        <span id="gridHint"></span>
-      </div>
-      <table>
-        <thead><tr>
-          <th></th><th>Question Label</th><th>Coordinate Range</th>
-          <th>Max mark</th><th colspan="3">Order</th>
-        </tr></thead>
-        <tbody id="qRows"></tbody>
-      </table>
-      <div id="addRowBtns">
-        <button id="addQBtn" class="secondary">+ Add question</button>
-        <button id="addSectionBtn" class="secondary">+ Add section</button>
-        <button id="addNameBtn" class="secondary">+ Add name box</button>
-      </div>
-      <div id="focusBar" class="hidden">
-        <span id="focusNote"></span>
-        <button id="resliceBtn">⚙ Re-slice this question</button>
-      </div>
-      <div id="actions">
-        <button id="saveBtn" class="secondary">💾 Save Setup</button>
-        <button id="processBtn">⚙ Process All PDFs</button>
-      </div>
-      <div id="procNote"></div>
-      <!-- Students naming panel (Phase 5, D5): real names are DISPLAY-ONLY. -->
-      <details id="namePanel" style="display:none">
-        <summary><span id="namePanelTitle">Students</span></summary>
-        <div class="hint" style="margin-top:8px">
-          Real names are <b>display only</b> — the grading tab and the exported
-          "Student Name" column use them, but crops and saved marks always key by
-          the file name. Leave a box blank to keep the file name.
-          If a name box is programmed and processed, its crop shows beside each
-          row so you can read the handwriting while typing.
-        </div>
-        <div id="nameRows"></div>
-      </details>
-    </div>
-  </div>
-</div>
-
-<script>
-const $ = s => document.querySelector(s);
-const CLASS_NAME = new URLSearchParams(location.search).get("class") || "";
-$("#classTag").textContent = CLASS_NAME ? ("Class: " + CLASS_NAME)
-                                        : "⚠ no class selected — open this from the main screen";
-
-/* Paper-size + density grids. Mirrors PAPER_GRIDS in exam_engine.py — that
-   Python table is the source of truth; keep this copy in sync. "legacy" (~2cm)
-   is what every pre-density exam means and the load-only third option; new
-   exams default to "compact" (~1.4cm); "fine" is ~1cm. */
-const PAPER_GRIDS = {
-  A4:{legacy:{cols:10,rows:15}, compact:{cols:15,rows:21}, fine:{cols:21,rows:30}},
-  B5:{legacy:{cols:9,rows:12},  compact:{cols:13,rows:18}, fine:{cols:18,rows:25}},
-  A3:{legacy:{cols:15,rows:21}, compact:{cols:21,rows:30}, fine:{cols:30,rows:42}},
-};
-const GRID_CM = { legacy:"≈2cm", compact:"≈1.4cm", fine:"≈1cm" };
-let NCOLS = 15, NROWS = 21;   // set from the paper + grid dropdowns below
-
-/* Excel-style column names — fine A3 reaches column AD (30 columns), so single
-   letters no longer suffice. Mirrors col_name/col_index in exam_engine.py. */
-function colName(i){
-  i = i | 0; let s = "";
-  while (true) { s = String.fromCharCode(65 + i % 26) + s; i = Math.floor(i / 26) - 1; if (i < 0) return s; }
-}
-function colIndex(letters){
-  const s = String(letters || "").toUpperCase();
-  if (!s || !/^[A-Z]+$/.test(s)) return -1;
-  let idx = 0;
-  for (const ch of s) idx = idx * 26 + (ch.charCodeAt(0) - 64);
-  return idx - 1;
-}
-const Q_COLORS = ["#e0843a","#3aa0e0","#37c97a","#b56ad0","#d0556a","#caa23a",
-                  "#2bb8b0","#7d8cf0","#c46fa0","#7fae3d"];
-const NAME_COLOR = "#2bb8b0";              // name-box highlight (matches its swatch)
-const DEFAULT_SECTION_NAME = "All Questions";  // mirrors exam_engine.DEFAULT_SECTION_NAME
-let FOLDER = "", PAGE_COUNT = 1;
-/* Students naming panel state (Phase 5, D5). STUDENT_NAMES is {stem -> display
-   name} and is the source of truth for what configPayload() saves — it survives
-   even when the panel can't render (e.g. the scan folder isn't on this device),
-   so re-saving a loaded exam never drops names. STUDENT_STEMS/PAGE_COUNTS come
-   from the last folder scan and drive the panel's rows + page-count flags. */
-let STUDENT_NAMES = {}, STUDENT_STEMS = [], PAGE_COUNTS = {};
-
-function setStatus(t){ $("#status").textContent = t; }
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g,
-    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-
-/* The #qRows tbody holds a mix of rows, distinguished by data-rowtype:
-   "name" (optional, pinned first), "section" (a header) and "question". */
-function allRows(){ return [...$("#qRows").children]; }
-function rowType(tr){ return tr.dataset.rowtype; }
-function nameRow(){ return $("#qRows tr.namerow"); }
-
-/* The live grid density — mirrors the #gridSelect value, which may be a
-   load-only "legacy" state when an old exam is open. */
-function currentDensity() { return $("#gridSelect").value || "compact"; }
-
-/* ---------- Grid colour + label sizing (Phase 1) ---------- */
-/* The grid colour is a per-device preference (localStorage), not part of the
-   exam definition — it only tints the overlay + labels while programming. All
-   grid colouring reads the --gridcol CSS variable set here. */
-const GRID_COLOR_KEY = "gcg_grid_color";
-const GRID_COLOR_DEFAULT = "#39FF14";
-
-function applyGridColor(col) {
-  $("#gridOverlay").style.setProperty("--gridcol", col || GRID_COLOR_DEFAULT);
-}
-
-/* Size the cell labels from the live cell height so they stay ~55% of a cell in
-   any density / window size / fit mode. Clamped to 9px so fine grids on a small
-   window stay renderable. Called after the page image lays out, on resize, and
-   whenever the grid matrix changes. */
-function sizeCellLabels() {
-  const ov = $("#gridOverlay");
-  const h = ov.clientHeight;
-  if (!h || !NROWS || !NCOLS) return;
-  // D2: size by BOTH axes so wide labels (D10, fine-A3's AD42) never bleed
-  // horizontally into a neighbouring cell.
-  const heightPx = (h / NROWS) * 0.55;
-  const cellW = ov.clientWidth / NCOLS;
-  const maxChars = (colName(NCOLS - 1) + NROWS).length;   // widest label on this grid
-  // 0.62 ≈ average glyph width in ems for the 800-weight UI font; 0.85 keeps a margin.
-  const widthCap = maxChars ? (cellW * 0.85) / (maxChars * 0.62) : heightPx;
-  const px = Math.max(9, Math.round(Math.min(heightPx, widthCap)));
-  ov.style.setProperty("--glabsize", px + "px");
-}
-
-/* Restore the saved grid colour (or the neon-green default) on load. A stored
-   value that isn't one of the three options leaves the select empty — fall back
-   so the overlay still colours consistently. */
-function initGridColor() {
-  let col = GRID_COLOR_DEFAULT;
-  try { col = localStorage.getItem(GRID_COLOR_KEY) || GRID_COLOR_DEFAULT; } catch (e) {}
-  $("#gridColorSelect").value = col;
-  if (!$("#gridColorSelect").value) { col = GRID_COLOR_DEFAULT; $("#gridColorSelect").value = col; }
-  applyGridColor(col);
-}
-
-/* ---------- Dynamic grid overlay (A1 top-left .. bottom-right) ---------- */
-function buildGrid() {
-  const ov = $("#gridOverlay"); ov.innerHTML = "";
-  for (let r = 1; r <= NROWS; r++) {
-    for (let c = 0; c < NCOLS; c++) {
-      const cell = document.createElement("div");
-      cell.className = "gcell";
-      cell.dataset.cell = colName(c) + r;
-      const lab = document.createElement("span");
-      lab.className = "glab"; lab.textContent = colName(c) + r;
-      cell.appendChild(lab);
-      ov.appendChild(cell);
-    }
-  }
-}
-
-/* Recompute the grid matrix from the Paper Size + Grid dropdowns, rebuild the
-   overlay cells + A1/B2/... labels, and re-validate every typed range. */
-function applyPaperGrid() {
-  const paper = $("#paperSelect").value;
-  const density = currentDensity();
-  const g = (PAPER_GRIDS[paper] || PAPER_GRIDS.A4)[density]
-         || (PAPER_GRIDS[paper] || PAPER_GRIDS.A4).legacy;
-  NCOLS = g.cols;
-  NROWS = g.rows;
-  const ov = $("#gridOverlay");
-  ov.dataset.density = density;
-  ov.style.gridTemplateColumns = "repeat(" + g.cols + ",1fr)";
-  ov.style.gridTemplateRows = "repeat(" + g.rows + ",1fr)";
-  buildGrid();
-  $("#gridHint").textContent = "Grid for " + paper + ": "
-    + g.cols + "×" + g.rows + " (A1–" + colName(g.cols - 1) + g.rows
-    + "), " + (GRID_CM[density] || "") + " cells.";
-  refreshHighlights();
-  sizeCellLabels();        // NROWS changed — recompute the translucent label size
-  applyZoom();             // grid dims changed — re-frame any active zoom
-}
-
-/* The load-only "Standard (legacy 2 cm)" density is offered only when an exam
-   saved on the old grid is loaded — new exams choose Compact or Fine. */
-function ensureLegacyOption() {
-  const sel = $("#gridSelect");
-  if (![...sel.options].some(o => o.value === "legacy")) {
-    const o = document.createElement("option");
-    o.value = "legacy"; o.textContent = "Standard (legacy 2 cm)";
-    sel.appendChild(o);
-  }
-}
-function dropLegacyOption() {
-  [...$("#gridSelect").options].forEach(o => { if (o.value === "legacy") o.remove(); });
-}
-
-/* Parse "page2!A2:C5" / "A2:C5" / "B7" / "AA5:AD9" -> {page,c1,r1,c2,r2} or
-   null. One or two letters are accepted syntactically; anything outside the
-   CURRENT paper + density grid is rejected so a stale range flags red after
-   switching paper size or density. */
-function parseRange(raw) {
-  const m = /^\s*(?:page\s*(\d+)\s*!\s*)?([A-Za-z]{1,2})\s*(\d{1,2})(?:\s*:\s*([A-Za-z]{1,2})\s*(\d{1,2}))?\s*$/.exec(raw || "");
-  if (!m) return null;
-  const page = m[1] ? parseInt(m[1], 10) : 1;
-  let c1 = colIndex(m[2]), r1 = parseInt(m[3], 10);
-  let c2 = m[4] ? colIndex(m[4]) : c1;
-  let r2 = m[5] ? parseInt(m[5], 10) : r1;
-  if (c1 < 0 || c2 < 0 || c1 >= NCOLS || c2 >= NCOLS) return null;
-  if (r1 < 1 || r1 > NROWS || r2 < 1 || r2 > NROWS) return null;
-  if (c1 > c2) [c1, c2] = [c2, c1];
-  if (r1 > r2) [r1, r2] = [r2, r1];
-  return {page, c1, r1, c2, r2};
-}
-
-/* Every coordinate-bearing row (the name box + each question), with the colour
-   it highlights in. Question colours track question index (stable by position);
-   the name box uses its own colour. */
-function highlightRegions() {
-  const out = [];
-  let qi = 0;
-  allRows().forEach(tr => {
-    const t = rowType(tr);
-    if (t === "name") {
-      out.push({inp: tr.querySelector(".qrange"), color: NAME_COLOR});
-    } else if (t === "question") {
-      out.push({inp: tr.querySelector(".qrange"), color: Q_COLORS[qi % Q_COLORS.length]});
-      qi++;
-    }
-  });
-  return out;
-}
-
-/* Re-paint the overlay from every region row's range (instant on typing).
-   Only ranges targeting the page currently shown are highlighted. */
-function refreshHighlights() {
-  const page = parseInt($("#pageSelect").value, 10) || 1;
-  const hl = {};                       // "A2" -> color
-  highlightRegions().forEach(({inp, color}) => {
-    const raw = inp.value.trim();
-    const rng = parseRange(raw);
-    inp.classList.toggle("bad", !!raw && !rng);
-    if (!rng || rng.page !== page) return;
-    for (let c = rng.c1; c <= rng.c2; c++)
-      for (let r = rng.r1; r <= rng.r2; r++)
-        hl[colName(c) + r] = color;
-  });
-  document.querySelectorAll(".gcell").forEach(cell => {
-    const color = hl[cell.dataset.cell];
-    cell.classList.toggle("hl", !!color);
-    cell.style.setProperty("--hl", color || "");
-    cell.style.background = color ? (color + "33") : "";
-  });
-}
-
-/* ---------- Zoom-to-selection (Phase 6) ---------- */
-/* Frame the preview on one range's cells ±2, so the teacher tweaks a single
-   question's coordinates up close. Pure CSS transform on #pageZoom; the page's
-   laid-out height is unchanged, so #pageWrap keeps clipping to the page box. */
-const ZOOM_PAD = 2;          // cells of margin kept around the framed range
-let ZOOM_RANGE = null;       // the range currently framed, or null (full page)
-// Focus-adjust state (Phase 6): the question opened from grading's ✎, its row,
-// and the preview page to land on once the folder loads.
-let FOCUS_LABEL = "", FOCUS_ROW = null, FOCUS_PAGE = 1;
-
-function clamp01(v){ return Math.max(0, Math.min(1, v)); }
-
-function applyZoom() {
-  const zoom = $("#pageZoom");
-  if (!ZOOM_RANGE) { zoom.style.transform = ""; $("#zoomToggleBtn").classList.add("hidden"); return; }
-  const img = $("#pageImg");
-  const W = img.clientWidth, H = img.clientHeight;   // laid-out (unscaled) page box
-  if (!W || !H) return;                              // image not ready yet
-  const rng = ZOOM_RANGE;
-  // parseRange carries 0-based columns but 1-based rows (the highlight
-  // convention: cell labels run 1..NROWS), so shift rows to 0-based here.
-  const r1 = rng.r1 - 1, r2 = rng.r2 - 1;
-  const fx0 = clamp01((rng.c1 - ZOOM_PAD) / NCOLS);
-  const fx1 = clamp01((rng.c2 + 1 + ZOOM_PAD) / NCOLS);
-  const fy0 = clamp01((r1 - ZOOM_PAD) / NROWS);
-  const fy1 = clamp01((r2 + 1 + ZOOM_PAD) / NROWS);
-  const regW = Math.max(1, (fx1 - fx0) * W), regH = Math.max(1, (fy1 - fy0) * H);
-  let s = Math.min(W / regW, H / regH);
-  s = Math.max(1, Math.min(s, 8));                   // never zoom out, cap zoom-in
-  const offX = (W - s * regW) / 2, offY = (H - s * regH) / 2;
-  const tx = -s * fx0 * W + offX, ty = -s * fy0 * H + offY;
-  zoom.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
-  $("#zoomToggleBtn").classList.remove("hidden");
-}
-
-/* Zoom the preview to a typed range string; switches to its page first. */
-function zoomToRangeStr(raw) {
-  const rng = parseRange(raw);
-  if (!rng) return;
-  ZOOM_RANGE = rng;
-  if ((parseInt($("#pageSelect").value, 10) || 1) !== rng.page && rng.page <= PAGE_COUNT)
-    showPage(rng.page);       // showPage's onload re-runs applyZoom via refreshHighlights
-  applyZoom();
-}
-
-function clearZoom() { ZOOM_RANGE = null; applyZoom(); }
-
-/* ---------- Fit width / fit page (Phase 3) ---------- */
-/* The left pane defaults to fitting the page WIDTH (the img is 100% wide, i.e.
-   today's behaviour). "Fit page" instead constrains the height so the whole
-   sheet is visible at once. A per-device preference; toggling it also clears any
-   active zoom-to-question, which lives independently on #pageZoom's transform. */
-const FIT_MODE_KEY = "gcg_fit_mode";
-let FIT_MODE = "width";     // "width" | "page"
-
-function applyFitMode() {
-  $("#pageWrap").classList.toggle("fitpage", FIT_MODE === "page");
-  $("#fitToggleBtn").textContent = FIT_MODE === "page" ? "⤢ Fit page" : "↔ Fit width";
-  sizeCellLabels();   // the cell pixel height changes with the fit mode
-  applyZoom();        // re-frame any active zoom to the new page box
-}
-
-function initFitMode() {
-  try { FIT_MODE = localStorage.getItem(FIT_MODE_KEY) === "page" ? "page" : "width"; } catch (e) {}
-  applyFitMode();
-}
-
-function toggleFitMode() {
-  FIT_MODE = (FIT_MODE === "page") ? "width" : "page";
-  try { localStorage.setItem(FIT_MODE_KEY, FIT_MODE); } catch (e) {}
-  clearZoom();        // the fit toggle also drops any zoom-to-question (Phase 3)
-  applyFitMode();
-}
-
-/* ---------- Row table (name box · sections · questions, reorderable) ------- */
-/* Reorder respects the pin: the name box stays first, so nothing moves above it
-   and the name row carries no ↑/↓. */
-function moveUp(tr) {
-  const prev = tr.previousElementSibling;
-  if (prev && rowType(prev) !== "name") tr.parentNode.insertBefore(tr, prev);
-  renumber();
-}
-function moveDown(tr) {
-  const next = tr.nextElementSibling;
-  if (next) tr.parentNode.insertBefore(next, tr);
-  renumber();
-}
-
-function addRow(label = "", range = "", score = "") {
-  const tb = $("#qRows");
-  const tr = document.createElement("tr");
-  tr.dataset.rowtype = "question";
-  tr.innerHTML = `
-    <td><span class="swatch"></span><button class="rowbtn adj" title="Adjust & re-slice this question">✎</button></td>
-    <td><input class="qlabel" type="text" placeholder="Q?" value="" autocomplete="off"></td>
-    <td><input class="qrange" type="text" placeholder="page1!A2:C5" value="" autocomplete="off"></td>
-    <td><input class="qscore" type="text" placeholder="3" value="" autocomplete="off"></td>
-    <td><button class="rowbtn up" title="Move up">↑</button></td>
-    <td><button class="rowbtn dn" title="Move down">↓</button></td>
-    <td><button class="rowbtn del" title="Remove">✕</button></td>`;
-  tr.querySelector(".qlabel").value = label;
-  tr.querySelector(".qrange").value = range;
-  tr.querySelector(".qscore").value = score;
-  tr.querySelectorAll("input").forEach(i => i.addEventListener("input", refreshHighlights));
-  tr.querySelector(".up").addEventListener("click", () => moveUp(tr));
-  tr.querySelector(".dn").addEventListener("click", () => moveDown(tr));
-  tr.querySelector(".del").addEventListener("click", () => { tr.remove(); renumber(); });
-  // Clicking the colour swatch zooms the preview to this question's cells.
-  tr.querySelector(".swatch").addEventListener("click", () =>
-    zoomToRangeStr(tr.querySelector(".qrange").value.trim()));
-  // ✎ moves the focus-adjust to this question (from inside Exam Setup — no
-  // deep-link needed). enterFocusMode clears .focusrow from every other row,
-  // so clicking it while another question is focused just moves the focus.
-  tr.querySelector(".adj").addEventListener("click", () => {
-    const lbl = tr.querySelector(".qlabel").value.trim();
-    if (!lbl) { setStatus("Give this question a label before adjusting it."); return; }
-    enterFocusMode(lbl);
-  });
-  tb.appendChild(tr);
-  renumber();
-}
-
-/* A section header. Questions below it (until the next header) belong to it.
-   "All required" (checked) means every question counts; unchecking reveals a
-   numeric "choose N of them" for an over-answered choice section. */
-function addSectionRow(name = "", required = null) {
-  const tb = $("#qRows");
-  const tr = document.createElement("tr");
-  tr.dataset.rowtype = "section";
-  tr.className = "secrow";
-  tr.innerHTML = `
-    <td><span class="swatch secmark">§</span></td>
-    <td colspan="3">
-      <span class="seclabel">Section:</span>
-      <input class="secname" type="text" placeholder="Section name" autocomplete="off">
-      <span class="secreqwrap">· choose
-        <input class="secrequired" type="number" min="1" step="1">
-        <label><input type="checkbox" class="secall" checked> all required</label>
-      </span>
-    </td>
-    <td><button class="rowbtn up" title="Move up">↑</button></td>
-    <td><button class="rowbtn dn" title="Move down">↓</button></td>
-    <td><button class="rowbtn del" title="Remove">✕</button></td>`;
-  tr.querySelector(".secname").value = name;
-  const reqInp = tr.querySelector(".secrequired");
-  const allChk = tr.querySelector(".secall");
-  const hasReq = (required !== null && required !== undefined && required !== "");
-  allChk.checked = !hasReq;
-  reqInp.value = hasReq ? required : "";
-  reqInp.disabled = allChk.checked;
-  allChk.addEventListener("change", () => {
-    reqInp.disabled = allChk.checked;
-    if (allChk.checked) reqInp.value = "";
-    refreshHighlights();
-  });
-  tr.querySelector(".up").addEventListener("click", () => moveUp(tr));
-  tr.querySelector(".dn").addEventListener("click", () => moveDown(tr));
-  tr.querySelector(".del").addEventListener("click", () => { tr.remove(); renumber(); });
-  tb.appendChild(tr);
-  renumber();
-}
-
-/* The optional handwritten-name region — one per exam, pinned above everything.
-   No score, no reorder; deletable. */
-function addNameBoxRow(range = "") {
-  if (nameRow()) return;                    // only one name box
-  const tb = $("#qRows");
-  const tr = document.createElement("tr");
-  tr.dataset.rowtype = "name";
-  tr.className = "namerow";
-  tr.innerHTML = `
-    <td><span class="swatch namemark"></span></td>
-    <td class="namelabel">Name</td>
-    <td><input class="qrange" type="text" placeholder="page1!A1:E2" value="" autocomplete="off"></td>
-    <td></td><td></td><td></td>
-    <td><button class="rowbtn del" title="Remove name box">✕</button></td>`;
-  tr.querySelector(".qrange").value = range;
-  tr.querySelector(".qrange").addEventListener("input", refreshHighlights);
-  tr.querySelector(".del").addEventListener("click", () => {
-    tr.remove(); updateNameBtn(); renumber();
-  });
-  tb.insertBefore(tr, tb.firstChild);       // pinned first
-  updateNameBtn();
-  renumber();
-}
-
-function updateNameBtn() {
-  const btn = $("#addNameBtn");
-  if (btn) btn.disabled = !!nameRow();
-}
-
-function renumber() {                       // colour question swatches by q-index
-  let qi = 0;
-  allRows().forEach(tr => {
-    if (rowType(tr) !== "question") return;
-    tr.querySelector(".swatch").style.background = Q_COLORS[qi % Q_COLORS.length];
-    tr.querySelector(".qlabel").placeholder = "Q" + (qi + 1);
-    qi++;
-  });
-  refreshHighlights();
-}
-
-/* Walk the mixed row list into the saved config shape: name_box (or null),
-   sections [{name,required}], and questions [{label,range,max,section}] with
-   each question pinned to the most recent section header above it. */
-function configPayload() {
-  const sections = [];
-  const questions = [];
-  let nameBox = null, curSection = "";
-  allRows().forEach(tr => {
-    const t = rowType(tr);
-    if (t === "name") {
-      const r = tr.querySelector(".qrange").value.trim();
-      if (r) nameBox = r;
-    } else if (t === "section") {
-      const nm = tr.querySelector(".secname").value.trim();
-      const all = tr.querySelector(".secall").checked;
-      const reqv = tr.querySelector(".secrequired").value.trim();
-      const required = (all || !reqv) ? null : parseInt(reqv, 10);
-      sections.push({name: nm, required});
-      curSection = nm;
-    } else if (t === "question") {
-      const label = tr.querySelector(".qlabel").value.trim();
-      const range = tr.querySelector(".qrange").value.trim();
-      const max = tr.querySelector(".qscore").value.trim();
-      if (label && range)
-        questions.push({label, range, max: max || "0-1", section: curSection});
-    }
-  });
-  // Display-only real names (D5): {stem -> name}, empties dropped. Sourced from
-  // STUDENT_NAMES (kept live by the panel's inputs) so a resave preserves names
-  // even when the panel isn't currently rendered.
-  const studentNames = {};
-  Object.keys(STUDENT_NAMES).forEach(stem => {
-    const v = (STUDENT_NAMES[stem] || "").trim();
-    if (v) studentNames[stem] = v;
-  });
-  return {
-    name: $("#examName").value.trim(),
-    paper_size: $("#paperSelect").value,
-    grid: currentDensity(),
-    pdf_folder: FOLDER,
-    name_box: nameBox,
-    sections,
-    questions,
-    student_names: studentNames,
-  };
-}
-
-/* ---------- Left panel: folder loading + page preview ---------- */
-async function loadFolder() {
-  const folder = $("#folderInput").value.trim();
-  if (!folder) { alert("Paste the folder path holding the student PDFs."); return; }
-  setStatus("Scanning folder…");
-  try {
-    const res = await fetch("/api/exam/scan_folder", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({folder})
-    });
-    const d = await res.json();
-    if (!res.ok) { setStatus(""); alert(d.error || "Could not read folder."); return; }
-    FOLDER = d.folder; PAGE_COUNT = d.page_count || 1;
-    STUDENT_STEMS = d.students || [];
-    PAGE_COUNTS = d.page_counts || {};
-    const sel = $("#pageSelect"); sel.innerHTML = "";
-    for (let p = 1; p <= PAGE_COUNT; p++) {
-      const o = document.createElement("option");
-      o.value = p; o.textContent = "Page " + p; sel.appendChild(o);
-    }
-    setStatus(d.file_count + " student file(s) — previewing " + d.first_student);
-    renderNamePanel();          // Phase 5: list students for real-name entry
-    // Focus-adjust (Phase 6) may want a later page; default to page 1 otherwise.
-    showPage(FOCUS_PAGE <= PAGE_COUNT ? FOCUS_PAGE : 1);
-  } catch (e) { setStatus(""); alert("Error: " + e); }
-}
-
-/* ---------- Students naming panel (Phase 5, D5) ---------- */
-/* The filename stem is the storage key everywhere (crops, grades file, export
-   csv_key); the names entered here are DISPLAY-ONLY — the grading tab shows them
-   and export writes them into "Student Name", nothing else keys off them. When
-   the exam has a processed name box, each row shows its __name__ crop so the
-   teacher can read the handwriting while typing. */
-function renderNamePanel() {
-  const panel = $("#namePanel"), rows = $("#nameRows");
-  rows.innerHTML = "";
-  if (!STUDENT_STEMS.length) { panel.style.display = "none"; return; }
-  panel.style.display = "";
-  $("#namePanelTitle").textContent = "Students (" + STUDENT_STEMS.length + ")";
-  const majority = majorityPageCount();
-  const examName = $("#examName").value.trim();
-  const hasNameBox = !!nameRow();
-  const bust = Date.now();
-  STUDENT_STEMS.forEach(stem => {
-    const row = document.createElement("div");
-    row.className = "stu-row";
-    // Name-box crop thumbnail — only when a name box is programmed and the exam
-    // is named (so the crop URL resolves); onerror hides it if not yet sliced.
-    let thumb = "";
-    if (hasNameBox && examName) {
-      const src = "/api/exam/crop?class=" + encodeURIComponent(CLASS_NAME)
-                + "&exam=" + encodeURIComponent(examName)
-                + "&q=__name__&student=" + encodeURIComponent(stem)
-                + "&t=" + bust;
-      thumb = '<img class="stu-crop" src="' + src
-            + '" alt="" onerror="this.style.display=\'none\'">';
-    }
-    // Booklet-scan outlier flag (D5): a page count off the class majority means
-    // shifted crops for this student — surface it right where names are entered.
-    const pc = PAGE_COUNTS[stem];
-    let flag = "";
-    if (majority && typeof pc === "number" && pc !== majority)
-      flag = '<span class="stu-flag" title="Others have ' + majority
-           + ' pages — crops may be shifted for this student">⚠ ' + pc + ' pages</span>';
-    row.innerHTML = thumb
-      + '<div class="stu-meta"><span class="stu-stem" title="' + escapeHtml(stem)
-      + '">' + escapeHtml(stem) + '</span>' + flag + '</div>'
-      + '<input class="stu-name" type="text" placeholder="Real name (optional)" autocomplete="off">';
-    const inp = row.querySelector(".stu-name");
-    inp.value = STUDENT_NAMES[stem] || "";
-    inp.addEventListener("input", () => {
-      if (inp.value.trim()) STUDENT_NAMES[stem] = inp.value;
-      else delete STUDENT_NAMES[stem];
-    });
-    rows.appendChild(row);
-  });
-}
-
-/* Most common page count across the scanned files (ties -> larger count); 0
-   when fewer than two files are readable. Mirrors exam_engine.scan_page_warnings
-   so the panel's flag and the process-note warning agree. */
-function majorityPageCount() {
-  const vals = STUDENT_STEMS.map(s => PAGE_COUNTS[s]).filter(v => typeof v === "number");
-  if (vals.length < 2) return 0;
-  const freq = {};
-  vals.forEach(v => { freq[v] = (freq[v] || 0) + 1; });
-  let best = 0, bestN = -1;
-  Object.keys(freq).forEach(k => {
-    const n = freq[k], c = parseInt(k, 10);
-    if (n > bestN || (n === bestN && c > best)) { bestN = n; best = c; }
-  });
-  return best;
-}
-
-function showPage(p) {
-  $("#pageSelect").value = String(p);
-  const img = $("#pageImg");
-  img.src = "/api/exam/preview?folder=" + encodeURIComponent(FOLDER) + "&page=" + p
-          + "&t=" + Date.now();
-  img.onload = () => {
-    $("#noPage").style.display = "none";
-    img.style.display = "block";
-    $("#gridOverlay").style.display = "grid";
-    $("#fitToggleBtn").classList.remove("hidden");   // fit toggle lives whenever a page is loaded
-    refreshHighlights();
-    sizeCellLabels();      // cell pixels are laid out now — size the labels to them
-    applyZoom();           // re-frame once the new page's pixels are laid out
-  };
-}
-
-/* ---------- Saved exams: load an existing definition for editing ---------- */
-async function refreshExamList() {
-  if (!CLASS_NAME) return;
-  try {
-    const res = await fetch("/api/exams?class_name=" + encodeURIComponent(CLASS_NAME));
-    const d = await res.json();
-    const sel = $("#examLoadSelect");
-    sel.innerHTML = '<option value="">— new exam —</option>';
-    Object.keys(d.exams || {}).sort().forEach(n => {
-      const o = document.createElement("option"); o.value = n; o.textContent = n;
-      sel.appendChild(o);
-    });
-    sel.dataset.exams = JSON.stringify(d.exams || {});
-  } catch (e) { console.warn("exam list failed", e); }
-}
-
-function loadExamConfig() {
-  const name = $("#examLoadSelect").value;
-  if (!name) return;
-  const cfg = (JSON.parse($("#examLoadSelect").dataset.exams || "{}"))[name];
-  if (!cfg) return;
-  resetFocus();               // dropping any prior focus/zoom before rebuilding
-  // Display-only real names (Phase 5, D5): adopt the saved map as the live
-  // source of truth. Kept even if the folder can't load below, so a resave
-  // preserves the names. renderNamePanel() (via loadFolder) fills the inputs.
-  STUDENT_NAMES = Object.assign({}, cfg.student_names || {});
-  STUDENT_STEMS = []; PAGE_COUNTS = {}; renderNamePanel();
-  $("#examName").value = cfg.name;
-  $("#paperSelect").value = cfg.paper_size || "A4";
-  // Density follows the saved config; a missing/legacy "grid" reveals the
-  // load-only "Standard (legacy 2 cm)" option so the coordinates render on the
-  // right grid. Compact/fine drop that option — new exams never see it.
-  const density = ["compact", "fine"].includes(cfg.grid) ? cfg.grid : "legacy";
-  if (density === "legacy") { ensureLegacyOption(); $("#gridSelect").value = "legacy"; }
-  else { dropLegacyOption(); $("#gridSelect").value = density; }
-  applyPaperGrid();                       // grid matrix follows the saved paper + density
-  $("#qRows").innerHTML = "";
-  // Name box (optional, pinned first).
-  if (cfg.name_box) addNameBoxRow(cfg.name_box);
-  // Sections then their questions, in stored order. A legacy config with no
-  // sections synthesizes one default section holding every question.
-  const sections = (cfg.sections && cfg.sections.length)
-      ? cfg.sections : [{name: DEFAULT_SECTION_NAME, required: null}];
-  const validNames = new Set(sections.map(s => s.name));
-  const byS = {};
-  (cfg.questions || []).forEach(q => {
-    const s = validNames.has(q.section) ? q.section : sections[0].name;
-    (byS[s] = byS[s] || []).push(q);
-  });
-  sections.forEach(s => {
-    addSectionRow(s.name, s.required);
-    (byS[s.name] || []).forEach(q => addRow(q.label, q.range, String(q.max)));
-  });
-  updateNameBtn();
-  if (cfg.pdf_folder) { $("#folderInput").value = cfg.pdf_folder; loadFolder(); }
-}
-
-/* ---------- Focus-adjust one question mid-grading (Phase 6) ---------- */
-/* Clear any active focus + zoom (called before loading a different exam). */
-function resetFocus() {
-  FOCUS_LABEL = ""; FOCUS_ROW = null; FOCUS_PAGE = 1;
-  $("#focusBar").classList.add("hidden");
-  allRows().forEach(tr => tr.classList.remove("focusrow"));
-  clearZoom();
-}
-
-function findQuestionRow(label) {
-  return allRows().find(tr => rowType(tr) === "question"
-    && tr.querySelector(".qlabel").value.trim() === label) || null;
-}
-
-/* Land on one question: highlight + scroll to its row, zoom the preview to its
-   cells, and reveal the "re-slice this question" action. Called after the exam
-   is loaded (from grading's ✎ deep-link, ?exam=..&focus=<label>). */
-function enterFocusMode(label) {
-  const row = findQuestionRow(label);
-  if (!row) { setStatus("Question '" + label + "' not found in this exam."); return; }
-  FOCUS_LABEL = label; FOCUS_ROW = row;
-  allRows().forEach(tr => tr.classList.remove("focusrow"));
-  row.classList.add("focusrow");
-  row.scrollIntoView({block: "center", behavior: "smooth"});
-  $("#focusBar").classList.remove("hidden");
-  $("#focusNote").textContent = "Adjusting " + label + " — tweak its coordinate "
-    + "range on the right (zoomed in on the left), then re-slice just this "
-    + "question. Entered marks are kept.";
-  const rng = parseRange(row.querySelector(".qrange").value.trim());
-  if (rng) { ZOOM_RANGE = rng; FOCUS_PAGE = rng.page; applyZoom(); }
-}
-
-/* Re-slice ONLY the focused question for every student, then signal the grading
-   tab to refresh its crops. Saves the (possibly widened) config first. */
-async function resliceOne() {
-  const label = FOCUS_ROW ? FOCUS_ROW.querySelector(".qlabel").value.trim() : FOCUS_LABEL;
-  if (!label) { alert("Open a question to adjust first."); return; }
-  const cfg = configPayload();
-  if (!cfg.pdf_folder) { alert("Load the student PDF folder first."); return; }
-  const saved = await saveSetup(true);
-  if (!saved) return;
-  $("#resliceBtn").disabled = true;
-  setStatus("Re-slicing " + label + "…");
-  try {
-    const res = await fetch("/api/exam/process_one", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({class_name: CLASS_NAME, config: cfg, label})
-    });
-    const d = await res.json();
-    if (!res.ok) { setStatus(""); alert(d.error || "Re-slice failed."); return; }
-    await pollResliceJob(d.job_id, label);
-  } catch (e) { setStatus(""); alert("Re-slice error: " + e); }
-  finally { $("#resliceBtn").disabled = false; }
-}
-
-async function pollResliceJob(jobId, label) {
-  while (true) {
-    let d;
-    try {
-      const res = await fetch("/api/exam/status/" + encodeURIComponent(jobId));
-      d = await res.json();
-      if (!res.ok) { setStatus(""); alert(d.error || "Lost track of the re-slice job."); return; }
-    } catch (e) { setStatus(""); alert("Status check failed: " + e); return; }
-    if (d.state === "running") {
-      setStatus("Re-slicing " + label + " — " + d.done + " / " + (d.total || "?") + "…");
-      await new Promise(r => setTimeout(r, 800));
-      continue;
-    }
-    if (d.state === "error") { setStatus(""); alert(d.error || "Re-slice failed."); return; }
-    const r = d.result || {};                       // state === "done"
-    setStatus("Re-sliced " + label + " for " + r.students + " student(s).");
-    let note = "✅ Re-sliced '" + label + "' — " + r.crops + " crop(s) across "
-             + r.students + " student(s). Back in the grading tab, " + label
-             + "'s answers now show the new framing.";
-    if ((r.errors || []).length)
-      note += "\n⚠ " + r.errors.length + " problem(s):\n  " + r.errors.slice(0, 12).join("\n  ");
-    $("#procNote").textContent = note;
-    // Same-origin ping to the grading tab: bump its crop cache-buster (Phase 6).
-    try {
-      localStorage.setItem("cam_exam_resliced", JSON.stringify({
-        class: CLASS_NAME, exam: $("#examName").value.trim(), label, ts: Date.now()
-      }));
-    } catch (_) {}
-    return;
-  }
-}
-
-/* ---------- Save + Process ---------- */
-async function saveSetup(silent) {
-  const cfg = configPayload();
-  if (!CLASS_NAME) { alert("Open Exam Setup from the main screen with a class selected."); return null; }
-  if (!cfg.name) { alert("Give the exam a name."); return null; }
-  if (!cfg.questions.length) { alert("Program at least one question (label + range)."); return null; }
-  try {
-    const res = await fetch("/api/exam/save", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({class_name: CLASS_NAME, config: cfg})
-    });
-    const d = await res.json();
-    if (!res.ok) { alert(d.error || "Save failed."); return null; }
-    if (!silent) setStatus("Saved '" + d.config.name + "' (" + d.config.questions.length + " questions).");
-    refreshExamList();
-    return d.config;
-  } catch (e) { alert("Save error: " + e); return null; }
-}
-
-async function processAll() {
-  const cfg = configPayload();
-  if (!cfg.pdf_folder) { alert("Load the student PDF folder first."); return; }
-  const saved = await saveSetup(true);
-  if (!saved) return;
-  setStatus("Starting…");
-  $("#processBtn").disabled = true;
-  try {
-    const res = await fetch("/api/exam/process", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({class_name: CLASS_NAME, config: cfg})
-    });
-    const d = await res.json();
-    if (!res.ok) { setStatus(""); alert(d.error || "Processing failed."); return; }
-    await pollExamJob(d.job_id);
-  } catch (e) { setStatus(""); alert("Processing error: " + e); }
-  finally { $("#processBtn").disabled = false; }
-}
-
-// Slicing now runs on a background thread server-side; poll for progress.
-async function pollExamJob(jobId) {
-  while (true) {
-    let d;
-    try {
-      const res = await fetch("/api/exam/status/" + encodeURIComponent(jobId));
-      d = await res.json();
-      if (!res.ok) { setStatus(""); alert(d.error || "Lost track of the slicing job."); return; }
-    } catch (e) { setStatus(""); alert("Status check failed: " + e); return; }
-    if (d.state === "running") {
-      setStatus("Slicing student PDFs — " + d.done + " / " + (d.total || "?") + " done…");
-      await new Promise(r => setTimeout(r, 1000));
-      continue;
-    }
-    if (d.state === "error") { setStatus(""); alert(d.error || "Processing failed."); return; }
-    const r = d.result || {};                       // state === "done"
-    setStatus("Done — " + r.crops + " crops from " + r.students + " student(s).");
-    let note = "✅ Sliced " + r.crops + " answer image(s) across " + r.students +
-               " student(s) × " + r.questions + " question(s).\n" +
-               "'" + r.exam_name + "' now appears under Exams in the main " +
-               "grading screen's assignment dropdown.";
-    if ((r.errors || []).length)
-      note += "\n⚠ " + r.errors.length + " problem(s):\n  " + r.errors.slice(0, 12).join("\n  ");
-    // Booklet-scan guard (Phase 5, D5): page-count outliers mean shifted crops.
-    if ((r.warnings || []).length)
-      note += "\n⚠ Scan check — " + r.warnings.length + " student(s) off the "
-            + "class page count (their crops may be shifted):\n  "
-            + r.warnings.slice(0, 12).join("\n  ");
-    $("#procNote").textContent = note;
-    // Refresh the Students panel so freshly-sliced name-box crops appear beside
-    // each row (the thumbnails 404'd until this run wrote them).
-    renderNamePanel();
-    // D4: a full re-process re-slices every question, so an open grading tab is
-    // now stale. Ping it with the same signal a single re-slice writes (no
-    // single label — the whole exam was re-processed) so it bumps its crop
-    // cache-buster and refetches every crop in place.
-    try {
-      localStorage.setItem("cam_exam_resliced", JSON.stringify({
-        class: CLASS_NAME, exam: $("#examName").value.trim(), label: "", ts: Date.now()
-      }));
-    } catch (_) {}
-    return;
-  }
-}
-
-/* ---------- wire up ---------- */
-// D3 smart back-link: when this tab was script-opened from a grading tab,
-// focus that opener and close ourselves; otherwise fall through to href="/"
-// so direct-URL / middle-click / no-JS still navigate normally.
-$("#backLink").addEventListener("click", (e) => {
-  if (window.opener && !window.opener.closed) {
-    e.preventDefault();
-    window.opener.focus();
-    window.close();
-  }
-});
-$("#loadFolderBtn").addEventListener("click", loadFolder);
-$("#folderInput").addEventListener("keydown", e => { if (e.key === "Enter") loadFolder(); });
-$("#pageSelect").addEventListener("change", () => showPage(parseInt($("#pageSelect").value, 10)));
-$("#addQBtn").addEventListener("click", () => addRow());
-$("#addSectionBtn").addEventListener("click", () => addSectionRow());
-$("#addNameBtn").addEventListener("click", () => addNameBoxRow());
-$("#saveBtn").addEventListener("click", () => saveSetup(false));
-$("#processBtn").addEventListener("click", processAll);
-$("#zoomToggleBtn").addEventListener("click", clearZoom);
-$("#fitToggleBtn").addEventListener("click", toggleFitMode);
-$("#resliceBtn").addEventListener("click", resliceOne);
-$("#examLoadSelect").addEventListener("change", loadExamConfig);
-$("#paperSelect").addEventListener("change", applyPaperGrid);
-$("#gridSelect").addEventListener("change", () => {
-  // Choosing a real density retires the load-only legacy option; the teacher
-  // then re-types any ranges that fall outside the new grid (flagged red).
-  if ($("#gridSelect").value !== "legacy") dropLegacyOption();
-  applyPaperGrid();
-});
-$("#gridColorSelect").addEventListener("change", () => {
-  const col = $("#gridColorSelect").value || GRID_COLOR_DEFAULT;
-  try { localStorage.setItem(GRID_COLOR_KEY, col); } catch (e) {}
-  applyGridColor(col);
-});
-window.addEventListener("resize", sizeCellLabels);  // labels track the cell size
-
-initGridColor();            // restore the per-device grid colour before building
-initFitMode();              // restore the per-device fit-width/fit-page choice
-applyPaperGrid();           // build the initial (A4 compact 15×21) overlay + labels
-addSectionRow(DEFAULT_SECTION_NAME);  // new exams start with one section header
-addRow("Q1", "", "3");      // start with one empty question row ready to fill
-updateNameBtn();
-
-/* Deep-links into this page:
-   ?exam=<name>              — CAM bridge: pre-fill a new exam's name, OR load
-                               an existing one for editing.
-   ?exam=<name>&focus=<label> — grading's ✎: load the exam and land focused on
-                               one question to adjust + re-slice it (Phase 6). */
-const _params = new URLSearchParams(location.search);
-const EXAM_PREFILL = _params.get("exam") || "";
-const FOCUS_PARAM = _params.get("focus") || "";
-refreshExamList().then(() => {
-  const exams = JSON.parse($("#examLoadSelect").dataset.exams || "{}");
-  if (EXAM_PREFILL && exams[EXAM_PREFILL]) {
-    $("#examLoadSelect").value = EXAM_PREFILL;
-    loadExamConfig();                       // load the saved definition
-    if (FOCUS_PARAM) enterFocusMode(FOCUS_PARAM);
-  } else if (EXAM_PREFILL && !$("#examName").value.trim()) {
-    $("#examName").value = EXAM_PREFILL;     // brand-new exam handed over from CAM
-    setStatus('Exam "' + EXAM_PREFILL + '" (from CAM) — load the PDF folder, ' +
-              'program the questions, then Save & Process.');
-  }
-});
 </script>
 </body>
 </html>

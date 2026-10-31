@@ -68,12 +68,6 @@ from engine import (
     is_exam_csv,
     parse_iso_date,
     parse_date_from_filename,
-    exam_question_columns,
-    section_state,
-    resolved_total,
-    resolved_max,
-    resolved_suggested_band,
-    exam_is_pending,
     parse_unit_plan,
     parse_classroom_roster,
     gojuon_sort_key,
@@ -152,53 +146,6 @@ GRADING_PORT = 5001
 # stay on this computer, never in the cloud class folder.
 CAM2_HANDOFF_DIR = os.path.join(tempfile.gettempdir(), "cam_exam_handoffs")
 
-# CGW slices exam pages into <cloud class folder>/exam_crops/<exam>/<Q or
-# __name__>/<student>.png (the Phase-6 cloud root) — older installs used an
-# exam_crops/<class>/... tree beside CGW's own app.py (the legacy root). CAM
-# reads those crops read-only (e.g. Window 1's exam analytics name-crop preview,
-# the Window 2 exam matcher) and, like the exam-delete purge, resolves against
-# BOTH roots: cloud first, legacy fallback. The reserved __name__ dir holds the
-# optional handwritten-name box crop.
-EXAM_CROPS_DIR = os.path.join(GRADING_WORKSPACE_DIR, "exam_crops")
-EXAM_NAME_BOX_DIR = "__name__"
-
-
-def _cgw_safe_name(name: str) -> str:
-    """Mirror of ``cam_grading_workspace/exam_engine._safe_name`` — the on-disk
-    slug CGW uses for class / exam / label / student path segments. Kept in sync
-    so CAM can resolve a crop's path from the same class/exam/student strings."""
-    return re.sub(r'[\\/*?:"<>|]', "_", str(name or "").strip()).strip() or "Unnamed"
-
-
-def _exam_crop_dirs(class_name: str, exam_name: str) -> list:
-    """The exam's candidate crop-tree roots, cloud (Phase 6) first, legacy
-    app-local second — mirroring the dual-root resolution the exam-delete purge
-    (:func:`_purge_exam_cgw_artifacts`) already does."""
-    slug = _cgw_safe_name(exam_name)
-    return [
-        os.path.join(class_data_dir(class_name), "exam_crops", slug),
-        os.path.join(EXAM_CROPS_DIR, _cgw_safe_name(class_name or "Unsorted"),
-                     slug),
-    ]
-
-
-def exam_crop_path(class_name: str, exam_name: str, label: str,
-                   student_key: str) -> str:
-    """Absolute path to one student's crop for ``label`` (a question label or
-    the reserved ``__name__`` box), or "" when none exists under either root."""
-    for d in _exam_crop_dirs(class_name, exam_name):
-        p = os.path.join(d, _cgw_safe_name(label),
-                         _cgw_safe_name(student_key) + ".png")
-        if os.path.isfile(p):
-            return p
-    return ""
-
-
-def exam_name_crop_path(class_name: str, exam_name: str, student_key: str) -> str:
-    """Absolute path to a student's name-box crop, or "" when none exists."""
-    return exam_crop_path(class_name, exam_name, EXAM_NAME_BOX_DIR, student_key)
-
-
 def cam2_session_dir(class_name: str, exam_name: str) -> str:
     """The CAM2 session folder of an exam (``<class>/exams/<folder>/``), from
     the folder recorded at launch/Sync, else the exam's default folder name.
@@ -219,11 +166,6 @@ def cam2_name_crop(class_name: str, exam_name: str, student_key: str) -> str:
     return exam_bridge.name_crop(cam2_session_dir(class_name, exam_name), sid)
 
 
-def exam_has_name_crops(class_name: str, exam_name: str) -> bool:
-    """True when CGW sliced a name box for this exam (a __name__ crop dir)."""
-    return any(os.path.isdir(os.path.join(d, EXAM_NAME_BOX_DIR))
-               for d in _exam_crop_dirs(class_name, exam_name))
-
 # Window-2 unmatched-work thumbnails (Phase 4). Rendered first-page/image PNGs
 # are disk-cached here, keyed by source path + mtime + width, so re-opening the
 # matching dialog is instant. Gitignored (thumb_cache/) and deliberately beside
@@ -233,7 +175,7 @@ THUMB_CACHE_DIR = os.path.join(BASE_DIR, "thumb_cache")
 THUMB_GRID_WIDTH = 400        # grid-tile render width (px)
 THUMB_ENLARGE_WIDTH = 1600    # click-to-enlarge render width (px)
 # File extensions rendered directly by Pillow (everything else falls to fitz for
-# PDFs, or a filename-only tile); mirrors exam_engine's IMAGE_EXTS.
+# PDFs, or a filename-only tile); mirrors the grading workspace's IMAGE_EXTS.
 THUMB_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff",
                     ".gif"}
 
@@ -2928,7 +2870,7 @@ def _seed_workspace_class() -> str:
     mirror) exactly like a manual Settings-dialog save:
 
       * ``cloud_dir`` -> CAM's database folder (:func:`db_folder`), so the
-        workspace routes its grade/exam CSV exports into the per-class
+        workspace routes its grading CSV exports into the per-class
         subfolder that CAM's Sync scans. Without this the workspace falls back
         to its own app root (a browser download), the CSV never reaches CAM's
         database folder, and Sync reports "nothing new" forever. Only set when
@@ -3073,7 +3015,7 @@ def launch_grading_workspace(assignment_name: str) -> str:
 
     The target assignment travels as URL query parameters that the
     workspace's CAM-bridge autoloader resolves (Drive folder ID first, then
-    exam::<name>, then display-name match)."""
+    display-name match). Exams open in CAM2 instead (:func:`launch_exam_setup`)."""
     cls = st.session_state["active_class"]
     asg = next((a for a in gb().assignments
                 if a.name == assignment_name
@@ -3081,21 +3023,18 @@ def launch_grading_workspace(assignment_name: str) -> str:
     if not _ensure_workspace_running():
         return ""
     ref = getattr(asg, "folder_ref", "") if asg else ""
-    is_exam = bool(getattr(asg, "is_exam", False)) if asg else False
-    target = (f"exam::{assignment_name}" if is_exam and not ref
-              else (ref or assignment_name))
+    target = ref or assignment_name
     # Seed the workspace (class map + cloud_dir). Both Drive and local masters
     # are seedable since Phase 4, so seed_err is empty for a valid class; it is
     # only non-empty when the /api/config round-trip itself fails, which is a
-    # genuine dead end for folder grading (exams are exempt — they live in the
-    # workspace by class name, no Drive and no class map needed).
+    # genuine dead end for folder grading.
     seed_err = _seed_workspace_class()
-    if seed_err and not target.startswith("exam::"):
+    if seed_err:
         st.session_state["save_status"] = ("error", seed_err)
         return ""
     # Folder grading round-trips through the workspace: hand it CAM's current
-    # grades so its next export carries them forward (exams don't round-trip).
-    if ref and not target.startswith("exam::"):
+    # grades so its next export carries them forward.
+    if ref:
         # Close the stale-handoff race (Terrain §T4): if a previous session's
         # export was never synced, CAM's values are OLDER than the CSV on disk;
         # publishing them now would make CGW's reconcile adopt the stale value
@@ -3137,9 +3076,9 @@ def launch_grading_workspace(assignment_name: str) -> str:
     # os.stat its export CSV(s) and auto-ingest a fresh export the moment the
     # teacher returns (see _run_active_launch_probe), and so the global scan
     # keeps its hands off that file meanwhile (active_skip in sync_from_cloud).
-    # Exams don't round-trip, so they get no marker. Session-only — a restart
-    # forgets it and the session-start global pass catches up.
-    if ref and not target.startswith("exam::"):
+    # Session-only — a restart forgets it and the session-start global pass
+    # catches up.
+    if ref:
         st.session_state["active_launch"] = {
             "class": cls,
             "assignment": assignment_name,
@@ -3226,7 +3165,8 @@ def launch_exam_setup(exam_name: str) -> str:
         metas[exam_name] = dict(meta, folder=folder_base)
         persist()
     msg = (f"'{exam_name}' opened in CAM2 (session folder: {folder}). When "
-           "grading is done, click Send to CAM there, then 🔄 Sync here.")
+           "grading is done, click Send to CAM there; the results appear "
+           "here a few seconds later.")
     st.session_state["save_status"] = ("ok", msg)
     return msg
 
@@ -3639,10 +3579,8 @@ def assignment_table():
         raw_totals = []
         n_rubric = 0     # CAM2 rubric-mode papers: levels per criterion, no total
         if is_exam:
-            # Section-aware (Phase 5D): use each student's *resolved* total and
-            # drop students whose choice section is still pending (`?`) from the
-            # class average — an unresolved total isn't a number yet.
-            secs = getattr(asg, "sections", None)
+            # A paper not finished in CAM2 isn't a number yet: leave it out
+            # of the class average.
             for s in gb():
                 if asg.name not in getattr(s, "exam_results", {}):
                     continue
@@ -3650,9 +3588,9 @@ def assignment_table():
                 if r.mode == "rubric":
                     n_rubric += 1
                     continue
-                if exam_is_pending(r, secs) or not r.complete:
+                if not r.complete:
                     continue
-                raw_totals.append(resolved_total(r, secs))
+                raw_totals.append(r.total)
         rows.append({
             "name": asg.name,
             "criteria": ",".join(asg.criteria) if asg.criteria else "—",
@@ -3739,17 +3677,11 @@ def commit_staged(sig: str, name: str, crit_letter, override_date) -> int:
     gov = (datetime.combine(override_date, datetime.min.time())
            if override_date else None)
     try:
-        if item.get("is_exam"):
-            # Item-level exam export: raw marks live off the 0-8 scale until
-            # the teacher assigns bands in Window 1's exam-banding panel.
-            created = IngestionPipeline(gb()).ingest_exam_csv(
-                path, assignment=name)
-        else:
-            created = IngestionPipeline(gb()).ingest_csv(
-                path, assignment=name,
-                manual_criterion_target=target,
-                global_override_date=gov,
-            )
+        created = IngestionPipeline(gb()).ingest_csv(
+            path, assignment=name,
+            manual_criterion_target=target,
+            global_override_date=gov,
+        )
     except ValueError as exc:
         st.session_state["save_status"] = ("error", f"{item['name']}: {exc}")
         return 0
@@ -4123,37 +4055,6 @@ def _assignment_csv_paths(class_name: str, assignment_name: str) -> list:
     return out
 
 
-def _exam_csv_paths(class_name: str, exam_name: str) -> list:
-    """Every *exam* CSV abspath in ``class_name``'s folder that ingest keys to
-    ``exam_name`` — the exam-side sibling of :func:`_assignment_csv_paths`.
-
-    Same walk and same cleaned-name + rebind round-trip, but the exam/grading
-    filter is inverted: this keeps *only* files whose header ``is_exam_csv`` says
-    is an item-level exam export (a ``Total Score`` column), so the beacon
-    poller can scoped-sync one exam without a full tree walk. Returns ``[]`` when
-    the class folder or its CSVs are absent/unreadable."""
-    class_path = class_data_dir(class_name)
-    if not os.path.isdir(class_path):
-        return []
-    out = []
-    for dirpath, _dirs, files in _walk_class(class_path):
-        for fname in sorted(files):
-            if not fname.lower().endswith(".csv"):
-                continue
-            path = os.path.abspath(os.path.join(dirpath, fname))
-            try:
-                fieldnames, _first = _peek_csv(path)
-            except OSError:
-                continue
-            if not is_exam_csv([(h or "").strip() for h in fieldnames]):
-                continue
-            name = _rebind_import_name(
-                clean_assignment_name(os.path.splitext(fname)[0]), class_name)
-            if name == exam_name:
-                out.append(path)
-    return out
-
-
 def _sync_one_csv(path: str, fname: str, class_name: str,
                   registry: dict, summary: dict) -> tuple:
     """Fingerprint one grading CSV against the registry and act on it.
@@ -4454,16 +4355,9 @@ def sync_assignment(class_name: str, assignment_name: str) -> dict:
 
 
 def sync_exam(class_name: str, exam_name: str) -> dict:
-    """Scoped Sync of one exam's export CSV(s) — the exam sibling of
-    :func:`sync_assignment`.
-
-    Feeds only the exam CSV(s) that ingest keys to ``exam_name`` (via
-    :func:`_exam_csv_paths`) through the identical shared per-file core
-    (:func:`_sync_one_csv`), so an exam export surfaces without a full-tree
-    ``sync_all``. ``_sync_one_csv`` -> ``_ingest_cloud_file`` already routes an
-    exam header to the item-level exam pipeline, so no exam-specific ingest logic
-    is duplicated here. The exam's CAM2 session, if any, is read too
-    (:func:`_sync_cam2_sessions`). Returns the same summary shape as
+    """Scoped Sync of one exam: read its CAM2 session
+    (:func:`_sync_cam2_sessions` with ``only_exam``; "" reads every session
+    of the class) — the exam sibling of :func:`sync_assignment`. Returns the same summary shape as
     ``sync_from_cloud`` for :func:`_report_sync`. A quiet no-op when no Custom
     Database Path is set."""
     summary = {"found": 0, "ingested": 0, "updated": 0, "skipped": 0,
@@ -4477,17 +4371,8 @@ def sync_exam(class_name: str, exam_name: str) -> dict:
         return summary
 
     registry = st.session_state["ingested_files"]
-    any_ingested = False
-    any_change = False
-    for path in _exam_csv_paths(class_name, exam_name):
-        ingested, changed = _sync_one_csv(
-            path, os.path.basename(path), class_name, registry, summary)
-        any_ingested = any_ingested or ingested
-        any_change = any_change or changed
-    ingested, changed = _sync_cam2_sessions(class_name, registry, summary,
-                                            only_exam=exam_name)
-    any_ingested = any_ingested or ingested
-    any_change = any_change or changed
+    any_ingested, any_change = _sync_cam2_sessions(
+        class_name, registry, summary, only_exam=exam_name)
 
     if any_ingested or any_change:
         if st.session_state["active_class"] not in class_names() and class_names():
@@ -4608,6 +4493,14 @@ def sync_from_cloud() -> dict:
                 if path in dup_skip:
                     summary["found"] += 1
                     summary["duplicates"] += 1
+                    continue
+                # An exam export from the old CGW exam grader: not imported
+                # any more (D5). Exams come from CAM2 sessions, read below.
+                try:
+                    fieldnames, _first = _peek_csv(path)
+                except OSError:
+                    fieldnames = []
+                if is_exam_csv([(h or "").strip() for h in fieldnames]):
                     continue
                 # Shared per-file core: fingerprint, ingest-or-read-only-passes,
                 # tripwire, graceful parse failure (see _sync_one_csv).
@@ -4799,9 +4692,8 @@ def _export_beacon_poller() -> None:
 
     CGW cannot push to CAM (separate processes) and Streamlit only reruns on
     interaction, so the scoped ``_run_active_launch_probe`` above only catches
-    an export for the one assignment launched via 🖌 this session — and exams
-    never round-trip, so they got no probe at all. This ``run_every`` fragment
-    closes both gaps: every ~3 s it does ONE ``os.stat`` of
+    an export for the one assignment launched via 🖌 this session. This
+    ``run_every`` fragment closes that gap: every ~3 s it does ONE ``os.stat`` of
     ``<db folder>/cam_export_beacon.json`` (which CGW atomically rewrites on
     every routed export). An unchanged mtime returns immediately — that single
     stat is the entire steady-state cost, and no app rerun ever fires on a no-op
@@ -4809,8 +4701,8 @@ def _export_beacon_poller() -> None:
 
     On a change it reads the beacon (tolerating torn reads — a bad read just
     retries next tick), then runs the SAME scoped sync path as today keyed on
-    the beacon's class/assignment: :func:`sync_assignment` for grading exports,
-    :func:`sync_exam` for exam exports — never a full ``sync_all`` tree walk.
+    the beacon's class/assignment (:func:`sync_assignment`) — never a full
+    ``sync_all`` tree walk. (Exams come from CAM2 sessions, read by Sync.)
     Only when that sync actually ingested/updated (or refused a duplicate) does
     it surface the banner and ``st.rerun(scope="app")`` so Windows 1–3 repaint.
 
@@ -4841,17 +4733,55 @@ def _export_beacon_poller() -> None:
     st.session_state["export_beacon_mtime"] = mtime
     class_name = str(beacon.get("class_name") or "").strip()
     assignment = str(beacon.get("assignment") or "").strip()
-    is_exam = bool(beacon.get("is_exam"))
-    if not class_name or not assignment:
-        return
-    if is_exam:
-        summary = sync_exam(class_name, assignment)
-    else:
-        summary = sync_assignment(class_name, assignment)
+    if not class_name or not assignment or beacon.get("is_exam"):
+        return   # an exam beacon can only come from an older CGW
+    summary = sync_assignment(class_name, assignment)
     # Repaint only on a real change: fresh/updated grades, or a duplicate refusal
     # the teacher must see. A pure no-op (unchanged CSV already in the DB) leaves
     # the UI untouched — the guard against yanking a mid-typed edit for nothing.
     if summary["ingested"] or summary["updated"] or summary["duplicates"]:
+        _report_sync(summary)
+        st.rerun(scope="app")
+
+
+@st.fragment(run_every=3)
+def _cam2_send_poller() -> None:
+    """Sync an exam the moment it is sent from CAM2.
+
+    CAM2's *Send to CAM* (and *Send again*) rewrites the session's
+    ``cam2_session.json``. Every ~3 s this fragment ``os.stat``s that file
+    for each exam folder of the active class, read only; when one changes it
+    runs :func:`sync_exam` for the class, which reads only sessions that were
+    sent and changed. The first look at a folder only records it (the
+    session-start Sync has already read it). It repaints only when Sync
+    filed something, so a teacher typing in CAM is not interrupted for
+    nothing."""
+    custom = (st.session_state.get("prefs", {}).get("db_custom_path") or "").strip()
+    cls = st.session_state.get("active_class", "")
+    if not custom or not cls:
+        return
+    root = os.path.join(class_data_dir(cls), exam_bridge.EXAMS_DIR)
+    try:
+        entries = [e for e in os.scandir(root)
+                   if e.is_dir() and not e.name.startswith("_")]
+    except OSError:
+        return
+    session_file = exam_bridge.cam2_module("storage").SESSION_FILE
+    seen = st.session_state.setdefault("cam2_session_mtimes", {})
+    changed = False
+    for entry in entries:
+        path = os.path.join(entry.path, session_file)
+        try:
+            mtime = os.stat(path).st_mtime
+        except OSError:
+            continue
+        if path in seen and seen[path] != mtime:
+            changed = True
+        seen[path] = mtime
+    if not changed:
+        return
+    summary = sync_exam(cls, "")
+    if summary["ingested"] or summary["updated"] or summary["errors"]:
         _report_sync(summary)
         st.rerun(scope="app")
 
@@ -4944,14 +4874,7 @@ def _ingest_cloud_file(path: str, fname: str, class_name: str,
     scores); fast-path prefix matches are recorded into the durable
     ``work_aliases[class]`` and announced on ``summary`` when one is given. A
     rosterless class skips all of this (legacy behaviour — the score-only
-    folder-graded-before-roster path stays intact).
-
-    **Exam CSVs route too (Phase 4, exam identity plan).** An exam export's
-    ``Student Name`` is a PDF filename stem, so it flows through the identical
-    resolution via :meth:`IngestionPipeline.ingest_exam_csv`; unmatched rows
-    pool as exam-flavoured rows (``is_exam: True``) for the Window-2 matcher,
-    and — roster classes only — phantom students an earlier unrouted exam
-    ingest minted are swept once they hold no scores and no exam results."""
+    folder-graded-before-roster path stays intact)."""
     # The export names files "<assignment>_Grades_<deadline>.csv"; trim the
     # Grades tag and trailing date so the timeline shows just the clean name
     # (an embedded "(Crit X)" hint is preserved for criterion detection).
@@ -4993,31 +4916,16 @@ def _ingest_cloud_file(path: str, fname: str, class_name: str,
     aliases = dict(st.session_state["work_aliases"].get(class_name, {}))
     unmatched: list = []
     auto_aliases: dict = {}
-    is_exam_file = False
     try:
-        # Exam exports (item-level, raw marks) route to the exam pipeline; the
-        # header decides — a "Total Score" column marks a CAM exam CSV.
-        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
-            header = [h.strip() for h in (next(csv.reader(fh), []) or [])]
-        is_exam_file = is_exam_csv(header)
-        if is_exam_file:
-            created = IngestionPipeline(gb()).ingest_exam_csv(
-                path, assignment=assignment,
-                roster_keys=roster_keys or None,
-                aliases=aliases or None,
-                unmatched_out=unmatched,
-                auto_aliases_out=auto_aliases,
-            )
-        else:
-            created = IngestionPipeline(gb()).ingest_csv(
-                path, assignment=assignment, manual_criterion_target=target,
-                is_draft=True if prior_draft else None,
-                draft_criteria=list(prior_draft.criteria) if prior_draft else None,
-                roster_keys=roster_keys or None,
-                aliases=aliases or None,
-                unmatched_out=unmatched,
-                auto_aliases_out=auto_aliases,
-            )
+        created = IngestionPipeline(gb()).ingest_csv(
+            path, assignment=assignment, manual_criterion_target=target,
+            is_draft=True if prior_draft else None,
+            draft_criteria=list(prior_draft.criteria) if prior_draft else None,
+            roster_keys=roster_keys or None,
+            aliases=aliases or None,
+            unmatched_out=unmatched,
+            auto_aliases_out=auto_aliases,
+        )
     except (ValueError, OSError) as exc:
         st.session_state["save_status"] = (
             "error", f"Skipped '{fname}': {exc}")
@@ -5041,38 +4949,6 @@ def _ingest_cloud_file(path: str, fname: str, class_name: str,
                     summary["messages"].append(
                         f"🔗 {assignment}: matched `{ck}` → {rk} by prefix "
                         f"(recorded as an alias).")
-
-    # Phantom cleanup (exam identity plan, Phase 4): earlier UNROUTED exam
-    # ingests minted a student per raw "Student Name" stem (e.g.
-    # `https___smiletutor.sg…`). Now that this exam re-ingested routed, those
-    # phantoms hold nothing — the purge-replace above stripped their exam
-    # result — so sweep any student who is on NO class's roster and holds no
-    # scores and no exam results. Roster-keyed classes only (a rosterless
-    # class's students ARE its raw-id students), and the emptiness test keeps
-    # every real student from any class safe.
-    if is_exam_file and roster_keys:
-        all_roster_keys = {e.get("key")
-                           for entries in st.session_state["rosters"].values()
-                           for e in (entries or []) if e.get("key")}
-        # Soft-removed students stay protected too — Restore expects their
-        # gradebook record (name/gender) to still be there.
-        all_roster_keys |= {
-            e.get("key")
-            for entries in st.session_state["archived_students"].values()
-            for e in (entries or []) if e.get("key")}
-        all_roster_keys |= {sid for a in gb().assignments for sid in a.draft_feedback}
-        phantoms = [sid for sid, s in gb().students.items()
-                    if sid not in all_roster_keys
-                    and not any(s.scores.values())
-                    and not getattr(s, "exam_results", {})]
-        for sid in phantoms:
-            del gb().students[sid]
-        if phantoms and summary is not None:
-            summary["messages"].append(
-                f"🧹 {assignment}: removed {len(phantoms)} phantom student "
-                f"record(s) minted by earlier exam ingests "
-                f"({', '.join(sorted(phantoms)[:5])}"
-                f"{', …' if len(phantoms) > 5 else ''}).")
 
     _ensure_class(class_name)
     if gb().assignments:
@@ -5201,151 +5077,6 @@ def restore_assignment(name: str) -> None:
     persist()
 
 
-def _read_json_dict(path: str) -> dict:
-    """Load a JSON object from ``path``; {} on any read/parse error or non-dict."""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _atomic_write_json(path: str, data: dict) -> bool:
-    """Rewrite ``path`` via tmp+os.replace (last-writer-wins). True on success."""
-    tmp = path + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-        return True
-    except OSError as e:
-        print(f"[exam purge] could not rewrite {path}: {e}")
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        return False
-
-
-def _path_within(root: str, path: str) -> bool:
-    """True when ``path`` resolves inside ``root`` (both realpath-normalised).
-
-    Guards every delete in :func:`_purge_exam_cgw_artifacts` so a mangled exam
-    slug can never escape the class folder / crop roots and touch unrelated data.
-    """
-    try:
-        root_r = os.path.realpath(root)
-        return os.path.commonpath([root_r, os.path.realpath(path)]) == root_r
-    except (ValueError, OSError):
-        return False
-
-
-def _purge_exam_cgw_artifacts(name: str, classes) -> None:
-    """Delete the on-disk CGW artifacts of a permanently-deleted *exam* (D7).
-
-    Removes, per class the exam belonged to: the sliced crop tree (the Phase-6
-    cloud root AND the legacy app-local root), the exam's definition entry (the
-    portable per-class store AND the legacy app-local store), the
-    ``exam_grades_<exam>.json`` grading file, and the exported
-    ``<exam>_Grades_*.csv`` plus its ``.meta.json`` sidecar.
-
-    The exported CSV MUST go: CAM's watch-folder sync re-ingests any
-    ``*_Grades_*.csv`` it finds, so leaving it behind would resurrect the
-    "deleted" exam on the next sync.
-
-    The exam's real name is recovered by matching the assignment name (itself
-    derived from the CSV filename) against the stored exam names via the same
-    sanitize→clean round-trip the importer uses. No stored exam matches -> delete
-    nothing file-side (logged); the exam name is never guessed. Every delete is
-    scoped to an expected root (:func:`_path_within`) and tolerates missing
-    paths, so a half-migrated class simply skips whatever isn't there.
-    """
-    key = clean_assignment_name(_safe_dirname(name))
-    legacy_defs = os.path.join(GRADING_WORKSPACE_DIR, "gcg_exams.json")
-    legacy_all = _read_json_dict(legacy_defs)
-    legacy_classes = legacy_all.get("classes")
-    legacy_classes = legacy_classes if isinstance(legacy_classes, dict) else {}
-
-    for class_name in (classes or {""}):
-        class_folder = class_data_dir(class_name)          # <db>/<class>
-        cloud_crops = os.path.join(class_folder, "exam_crops")
-        legacy_crops = os.path.join(EXAM_CROPS_DIR,
-                                    _safe_dirname(class_name or "Unsorted"))
-        portable_defs = os.path.join(class_folder, "gcg_exams.json")
-        portable_all = _read_json_dict(portable_defs)
-        portable_exams = portable_all.get("exams")
-        portable_exams = portable_exams if isinstance(portable_exams, dict) else {}
-        legacy_exams = legacy_classes.get(class_name, {})
-        legacy_exams = legacy_exams if isinstance(legacy_exams, dict) else {}
-
-        # Match against the exam names in BOTH stores via the importer's round-trip.
-        matched = [ex for ex in (set(portable_exams) | set(legacy_exams))
-                   if clean_assignment_name(_safe_dirname(ex)) == key]
-        if not matched:
-            print(f"[exam purge] no stored exam matches assignment {name!r} "
-                  f"(key={key!r}) in class {class_name!r}; skipping file cleanup")
-            continue
-
-        for exam in matched:
-            slug = _safe_dirname(exam)   # mirrors exam_engine._safe_name on disk
-
-            # 1) Crop trees: cloud (Phase 6) + legacy app-local, both guarded.
-            for tree, guard in ((os.path.join(cloud_crops, slug), cloud_crops),
-                                (os.path.join(legacy_crops, slug), legacy_crops)):
-                if not os.path.isdir(tree):
-                    continue
-                if not _path_within(guard, tree):
-                    print(f"[exam purge] refused out-of-root crop path {tree}")
-                    continue
-                try:
-                    shutil.rmtree(tree)
-                    print(f"[exam purge] removed crops {tree}")
-                except OSError as e:
-                    print(f"[exam purge] could not remove crops {tree}: {e}")
-
-            # 2) Grading file in the class folder.
-            grades = os.path.join(class_folder, f"exam_grades_{slug}.json")
-            if os.path.isfile(grades) and _path_within(class_folder, grades):
-                try:
-                    os.remove(grades)
-                    print(f"[exam purge] removed grades {grades}")
-                except OSError as e:
-                    print(f"[exam purge] could not remove {grades}: {e}")
-
-            # 3) Exported CSV + .meta.json sidecar in the class folder. Exact
-            #    prefix + suffix; the only live wildcard is the date/counter tail.
-            pattern = os.path.join(glob.escape(class_folder),
-                                   glob.escape(f"{slug}_Grades_") + "*.csv")
-            for csv_path in glob.glob(pattern):
-                if not _path_within(class_folder, csv_path):
-                    print(f"[exam purge] refused out-of-root csv {csv_path}")
-                    continue
-                for p in (csv_path, csv_path + ".meta.json"):
-                    if not os.path.isfile(p):
-                        continue
-                    try:
-                        os.remove(p)
-                        print(f"[exam purge] removed {p}")
-                    except OSError as e:
-                        print(f"[exam purge] could not remove {p}: {e}")
-
-            # 4) Definition entry — portable per-class store (drop only this exam).
-            if exam in portable_exams:
-                portable_exams.pop(exam, None)
-                portable_all["exams"] = portable_exams
-                if _atomic_write_json(portable_defs, portable_all):
-                    print(f"[exam purge] dropped {exam!r} from {portable_defs}")
-
-            # 5) Definition entry — legacy app-local store (drop only this exam).
-            if exam in legacy_exams:
-                legacy_exams.pop(exam, None)
-                legacy_classes[class_name] = legacy_exams
-                legacy_all["classes"] = legacy_classes
-                if _atomic_write_json(legacy_defs, legacy_all):
-                    print(f"[exam purge] dropped {exam!r} from {legacy_defs}")
-
-
 def _retire_cam2_sessions(name: str, classes) -> None:
     """Permanent delete of an exam: move its CAM2 session folder into
     ``exams/_deleted/<date-time> <exam>/`` (never deleted; removing it for
@@ -5372,15 +5103,14 @@ def _retire_cam2_sessions(name: str, classes) -> None:
 def delete_assignment_permanent(name: str) -> None:
     """Hard-delete: purge the assignment record AND every score it produced.
 
-    For an **exam** assignment this also purges the grading workspace's on-disk
-    artifacts (crops, definition, grading file, exported CSV) via
-    :func:`_purge_exam_cgw_artifacts` — see decision D7."""
+    For an **exam** this also moves its CAM2 session folder aside
+    (:func:`_retire_cam2_sessions`)."""
     # Remember which classes held this name before the records go, so the
     # cloud-sync registry rows below can be scoped to them.
     classes = {getattr(a, "class_name", "") for a in gb().assignments
                if a.name == name}
     # Whether this assignment is an exam (checked before the records are dropped)
-    # decides if the CGW artifact purge below runs.
+    # decides if its CAM2 session is retired below.
     is_exam = any(getattr(a, "is_exam", False)
                   for a in gb().assignments if a.name == name)
     gb().assignments = [a for a in gb().assignments if a.name != name]
@@ -5417,13 +5147,9 @@ def delete_assignment_permanent(name: str) -> None:
                  if rec.get("assignment") in (name, key)
                  and (not classes or rec.get("class") in classes)]:
         reg.pop(path, None)
-    # Phase 7 (D7): an exam also owns artifacts on disk in the grading workspace
-    # — sliced crops, the exam definition, the grading file, and the exported
-    # CSV. Purge them too, most importantly the CSV, which the watch-folder sync
-    # would otherwise re-ingest and resurrect the "deleted" exam. Normal
-    # assignments carry no such artifacts and skip this entirely.
+    # An exam's CAM2 session folder is moved aside, or the next Sync would
+    # read it again and bring the "deleted" exam back.
     if is_exam:
-        _purge_exam_cgw_artifacts(name, classes)
         _retire_cam2_sessions(name, classes)
     persist()
 
@@ -7417,16 +7143,20 @@ def _stage_uploads(ups) -> int:
         except StopIteration:
             header = []
         header = [h.strip() for h in header]
+        if is_exam_csv(header):
+            # An exam export from the old CGW exam grader: exams are graded
+            # in CAM2 now and old ones are not imported (D5).
+            st.warning(f"{uf.name} is an exam export from the old exam "
+                       "grader, which CAM no longer imports. Grade exams in "
+                       "CAM2 (Window 1 → 🛠 Exam setup / Grade).")
+            continue
         detected = map_criterion_columns(header)
-        exam = is_exam_csv(header)
         staging[sig] = {
             "name": uf.name,
             "data": raw,
             "header": header,
             "detected": {k: v.value for k, v in detected.items()},
             "has_grade": "Grade" in header,
-            "is_exam": exam,
-            "questions": exam_question_columns(header) if exam else [],
             "default_name": os.path.splitext(uf.name)[0],
         }
         added += 1
@@ -7436,7 +7166,7 @@ def _stage_uploads(ups) -> int:
 def _staged_choices(sig: str, item: dict):
     """Read the current staging-row widget choices for one file."""
     name = st.session_state.get(f"stg_name_{sig}", item["default_name"])
-    if item.get("is_exam") or item["detected"]:
+    if item["detected"]:
         crit = None
     elif item["has_grade"]:
         crit = st.session_state.get(f"stg_crit_{sig}", CRIT_ORDER[1])
@@ -7464,11 +7194,7 @@ def _render_staging_queue() -> None:
             cols = st.columns([2.2, 1.5, 1.5])
             cols[0].text_input("Assignment name", value=item["default_name"],
                                key=f"stg_name_{sig}")
-            if item.get("is_exam"):
-                cols[1].caption(f"📝 Exam export — {len(item['questions'])} "
-                                "question(s), raw marks. Grade it in Window 1 "
-                                "after committing.")
-            elif item["detected"]:
+            if item["detected"]:
                 cols[1].caption("Criteria auto-detected: "
                                 + ", ".join(f"{k}→{v}"
                                             for k, v in item["detected"].items()))
@@ -7611,24 +7337,6 @@ def _exam_results_for(name: str):
     return sorted(pairs, key=lambda p: student_label(p[0]).lower())
 
 
-# Name of the synthesized single section CGW writes for a legacy / one-section
-# exam (mirrors exam_engine.DEFAULT_SECTION_NAME). A lone section by this name is
-# not "real" strand structure — the banding panel then renders exactly as today.
-_EXAM_DEFAULT_SECTION = "All Questions"
-
-
-def _exam_has_real_sections(secs) -> bool:
-    """True when the exam carries strand structure worth banding per-section:
-    more than one section, or a single *renamed* (non-synthesized) section. A
-    lone default "All Questions" section (or no sections) → False, so the
-    single-line legacy banding layout is used."""
-    if not secs:
-        return False
-    if len(secs) > 1:
-        return True
-    return str(secs[0].get("name", "")) != _EXAM_DEFAULT_SECTION
-
-
 def _clamp_band(value: int) -> int:
     """Clamp an int suggestion into the legal 0-8 MYP band range."""
     return max(0, min(8, int(value)))
@@ -7637,7 +7345,7 @@ def _clamp_band(value: int) -> int:
 def _render_exam_banding() -> None:
     """Window 1 exam panel: raw totals per student + a 0-8 band dropdown.
 
-    Exam CSVs arrive with raw item-level marks (e.g. 31/45) that cannot enter
+    A CAM2 marks exam arrives with raw marks (e.g. 31/45) that cannot enter
     the 0-8 gradebook directly. This panel reflects every student's raw score
     and lets the teacher assign each a 0-8 band (pre-filled with the
     proportional suggestion, or the band already on record). Applying writes
@@ -7653,29 +7361,21 @@ def _render_exam_banding() -> None:
         asg = next(a for a in exams if a.name == sel)
         results = _exam_results_for(sel)
         if not results:
-            st.caption("This exam's CSV carried no student rows.")
+            st.caption("No results for this exam yet. Grade it in CAM2 and "
+                       "send it to CAM.")
             return
         if any(r.mode == "rubric" for _, r in results):
             _render_cam2_rubric_banding(asg, results)
             return
-        # Section-aware raw marks (Phase 5D): every raw number shown here is the
-        # *resolved* total; a student whose choice section is still pending (`?`)
-        # is excluded from the class average and can't be banded until resolved
-        # in Window 3.
-        secs = getattr(asg, "sections", None)
-        # A CAM2 marks exam has no sections; a paper still being graded there
-        # (or with a "teacher picks" choice open) is held back the same way.
-        counted = [resolved_total(r, secs) for _, r in results
-                   if not exam_is_pending(r, secs) and r.complete]
+        # A paper still being graded in CAM2 (or with a "teacher picks"
+        # choice open) is held back from the average and from banding.
+        counted = [r.total for _, r in results if r.complete]
         avg = mean(counted) if counted else 0.0
-        n_pending = sum(1 for _, r in results if exam_is_pending(r, secs))
         n_unfinished = sum(1 for _, r in results if not r.complete)
-        pending_note = (f" · ⚠ {n_pending} pending (`?`) — resolve in Window 3"
-                        if n_pending else "")
-        if n_unfinished:
-            pending_note += (f" · ⏳ {n_unfinished} not finished in CAM2 — "
-                             "finish grading there, Send to CAM and Sync")
-        st.caption(f"Raw marks out of **{resolved_max(results[0][1], secs) or '?'}** "
+        pending_note = (f" · ⏳ {n_unfinished} not finished in CAM2 — "
+                        "finish grading there and send it to CAM again"
+                        if n_unfinished else "")
+        st.caption(f"Raw marks out of **{results[0][1].max_total or '?'}** "
                    f"· class raw average **{avg:.1f}** · {len(results)} student(s)"
                    f"{pending_note} · questions: "
                    f"{', '.join(asg.question_labels) or '—'}")
@@ -7692,154 +7392,43 @@ def _render_exam_banding() -> None:
         existing = {s.student_id: sc.value
                     for s, sc in scores_for_assignment(sel) if sc.is_valid}
 
-        if _exam_has_real_sections(secs):
-            # Sectioned layout (D7/D8): the real cover sheet has a level per
-            # strand plus one final grade. Window 1 is narrow, so each student
-            # is a bordered two-line block — totals + final grade on top, the
-            # per-section subtotals + 0-8 level dropdowns beneath.
-            for s, r in results:
-                _render_banding_student_sectioned(sel, asg, secs, s, r, existing)
-        else:
-            head = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
-            for col, cap in zip(head, ("Student", "Raw score", "%", "Grade (0–8)")):
-                col.caption(cap)
-            for s, r in results:
-                row = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
-                row[0].write(student_label(s))
-                pending = exam_is_pending(r, secs)
-                rmax = resolved_max(r, secs) or asg.max_total or 0
-                if not r.complete:
-                    row[1].write(f"… / {rmax or '?'}")
-                    row[2].write("…")
-                    row[3].button("not finished",
-                                  key=f"band_unf_{sel}_{s.student_id}",
-                                  disabled=True, width="stretch",
-                                  help="This paper is not fully graded in "
-                                       "CAM2 yet (or a choice group is "
-                                       "waiting for you to pick). Finish it "
-                                       "there, Send to CAM and Sync.")
-                    continue
-                if pending:
-                    row[1].write(f"? / {rmax or '?'}")
-                    row[2].write("?")
-                    row[3].button("resolve first",
-                                  key=f"band_pend_{sel}_{s.student_id}",
-                                  disabled=True, width="stretch",
-                                  help="This student over-answered a choice "
-                                       "section. Resolve it in Window 3 to "
-                                       "enable banding.")
-                    continue
-                rtot = resolved_total(r, secs)
-                pct = (rtot / rmax * 100.0) if rmax else 0.0
-                row[1].write(f"{rtot} / {rmax or '?'}")
-                row[2].write(f"{pct:.0f}%")
-                default = existing.get(s.student_id, resolved_suggested_band(r, secs))
-                row[3].selectbox(
-                    " ", list(range(0, 9)),
-                    index=default if 0 <= default <= 8 else 0,
-                    key=f"band_{sel}_{s.student_id}",
-                    label_visibility="collapsed")
+        head = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
+        for col, cap in zip(head, ("Student", "Raw score", "%", "Grade (0–8)")):
+            col.caption(cap)
+        for s, r in results:
+            row = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
+            row[0].write(student_label(s))
+            rmax = r.max_total or asg.max_total or 0
+            if not r.complete:
+                row[1].write(f"… / {rmax or '?'}")
+                row[2].write("…")
+                row[3].button("not finished",
+                              key=f"band_unf_{sel}_{s.student_id}",
+                              disabled=True, width="stretch",
+                              help="This paper is not fully graded in "
+                                   "CAM2 yet (or a choice group is "
+                                   "waiting for you to pick). Finish it "
+                                   "there and send it to CAM again.")
+                continue
+            pct = (r.total / rmax * 100.0) if rmax else 0.0
+            row[1].write(f"{r.total} / {rmax or '?'}")
+            row[2].write(f"{pct:.0f}%")
+            default = existing.get(s.student_id, r.suggested_band())
+            row[3].selectbox(
+                " ", list(range(0, 9)),
+                index=default if 0 <= default <= 8 else 0,
+                key=f"band_{sel}_{s.student_id}",
+                label_visibility="collapsed")
 
         if st.button("Apply grades to gradebook", key=f"apply_bands_{sel}",
                      type="primary"):
             n = _apply_exam_bands(asg, crit, results)
             msg = f"Graded {n} student(s) for '{sel}' → Criterion {crit}."
-            if n_pending:
-                msg += (f" {n_pending} pending student(s) skipped — resolve "
-                        "their `?` sections in Window 3.")
             if n_unfinished:
                 msg += (f" {n_unfinished} paper(s) not finished in CAM2 "
                         "skipped.")
             st.session_state["save_status"] = ("ok", msg)
             st.rerun()
-
-
-def _render_banding_student_sectioned(sel, asg, secs, s, r, existing) -> None:
-    """One bordered two-line student block for the sectioned banding panel (D8).
-
-    Line 1: student label · resolved total/max · % · **final grade** dropdown.
-    Line 2: per section, ``<name> <subtotal>/<max>`` + a 0-8 **level** dropdown.
-
-    Every level and the final grade are teacher-set dropdowns; the app only
-    *suggests* (proportional per section; rounded mean of the section levels for
-    the final). A pending (over-answered, unresolved) section shows ``?`` and
-    disables its own level select; while any section is pending the final-grade
-    select is disabled too (D9). Only the final grade enters the gradebook."""
-    box = st.container(border=True)
-    # Both rows are created up-front so they render in visual order; line 2 is
-    # *populated* first so the section-level widget values feed the final-grade
-    # suggestion computed just below.
-    line1 = box.columns([2.4, 1.1, 0.7, 1.2], vertical_alignment="center")
-    line2 = box.columns(len(secs), vertical_alignment="bottom")
-
-    section_levels: list[int] = []   # non-pending strand levels, section order
-    for i, section in enumerate(secs):
-        stt = section_state(r, section)
-        col = line2[i]
-        lvl_key = f"seclvl_{sel}_{s.student_id}_{stt.name}"
-        if stt.pending:
-            col.caption(f"{stt.name} · ?/{stt.section_max}")
-            col.selectbox(
-                " ", list(range(0, 9)), key=lvl_key, disabled=True,
-                label_visibility="collapsed",
-                help="This student over-answered this choice section — resolve "
-                     "it in Window 3 to enable its level.")
-        else:
-            prop = _clamp_band(round(stt.subtotal / stt.section_max * 8)) \
-                if stt.section_max else 0
-            saved = r.section_bands.get(stt.name)
-            default = saved if saved is not None else prop
-            col.caption(f"{stt.name} · {stt.subtotal}/{stt.section_max}")
-            lvl = col.selectbox(
-                " ", list(range(0, 9)),
-                index=default if 0 <= default <= 8 else 0,
-                key=lvl_key, label_visibility="collapsed")
-            section_levels.append(int(lvl))
-
-    pending = exam_is_pending(r, secs)
-    rmax = resolved_max(r, secs) or asg.max_total or 0
-
-    # Final-grade suggestion. Priority (D8): a band already applied wins; else
-    # the rounded mean of the current section levels; else the proportional
-    # whole-exam suggestion. So the teacher can re-tune sections and the
-    # suggested final follows — until they set the final explicitly. The
-    # signature guard below drops a stale final pick when the section levels
-    # change, so an untouched final keeps tracking the mean across reruns.
-    sig_key = f"bandsig_{sel}_{s.student_id}"
-    final_key = f"band_{sel}_{s.student_id}"
-    sig = tuple(section_levels)
-    prev_sig = st.session_state.get(sig_key)
-    if s.student_id not in existing and prev_sig is not None and prev_sig != sig:
-        st.session_state.pop(final_key, None)
-    st.session_state[sig_key] = sig
-
-    if s.student_id in existing:
-        final_default = existing[s.student_id]
-    elif section_levels:
-        final_default = _clamp_band(round(mean(section_levels)))
-    else:
-        final_default = resolved_suggested_band(r, secs)
-
-    line1[0].write(student_label(s))
-    if pending:
-        line1[1].write(f"? / {rmax or '?'}")
-        line1[2].write("?")
-        line1[3].selectbox(
-            " ", list(range(0, 9)), key=final_key, disabled=True,
-            label_visibility="collapsed",
-            help="A choice section is still pending (`?`) — resolve it in "
-                 "Window 3 before setting the final grade.")
-    else:
-        rtot = resolved_total(r, secs)
-        pct = (rtot / rmax * 100.0) if rmax else 0.0
-        line1[1].write(f"{rtot} / {rmax or '?'}")
-        line1[2].write(f"{pct:.0f}%")
-        line1[3].selectbox(
-            " ", list(range(0, 9)),
-            index=final_default if 0 <= final_default <= 8 else 0,
-            key=final_key, label_visibility="collapsed",
-            help="Final criterion grade — the only value that enters the "
-                 "gradebook. Suggested from the section levels; override freely.")
 
 
 def _exam_band_time(asg) -> datetime:
@@ -7853,38 +7442,17 @@ def _exam_band_time(asg) -> datetime:
 def _apply_exam_bands(asg, crit_letter: str, results) -> int:
     """Write the chosen 0-8 bands as CriterionScores (replacing prior bands)."""
     crit = Criterion(crit_letter)
-    secs = getattr(asg, "sections", None)
     when = _exam_band_time(asg)
     applied = 0
-    sectioned = _exam_has_real_sections(secs)
     for s, r in results:
         band = st.session_state.get(f"band_{asg.name}_{s.student_id}")
-        # Pending (`?`) students' final grade is disabled/empty — skip them,
-        # and CAM2 papers not finished there.
-        if band is None or exam_is_pending(r, secs) or not r.complete:
+        # Papers not finished in CAM2 have no grade widget — skip them.
+        if band is None or not r.complete:
             continue
         # One band per student per exam: drop any earlier banding first.
         for c, bucket in list(s.scores.items()):
             s.scores[c] = [sc for sc in bucket if sc.assignment != asg.name]
-        rtot, rmax = resolved_total(r, secs), resolved_max(r, secs)
-        note = f"banded from raw {rtot}/{rmax or asg.max_total}"
-        # Persist the per-strand levels from the section widgets and record them
-        # on the score note (the digital cover sheet), e.g. "· sections: Knowing
-        # 7, Applying 7, Interpreting 5".
-        if sectioned:
-            strand_parts: list[str] = []
-            for section in secs:
-                stt = section_state(r, section)
-                if stt.pending:
-                    continue
-                lvl = st.session_state.get(
-                    f"seclvl_{asg.name}_{s.student_id}_{stt.name}")
-                if lvl is None:
-                    continue
-                r.section_bands[stt.name] = int(lvl)
-                strand_parts.append(f"{stt.name} {int(lvl)}")
-            if strand_parts:
-                note += " · sections: " + ", ".join(strand_parts)
+        note = f"banded from raw {r.total}/{r.max_total or asg.max_total}"
         s.add_score(CriterionScore(
             criterion=crit, value=int(band), timestamp=when,
             source=f"exam:{asg.name}", assignment=asg.name,
@@ -8085,7 +7653,7 @@ def show_analytics_dialog(name: str) -> None:
                 asg_rec.folder_ref = os.path.abspath(newp)
                 persist()
                 st.success("Folder re-linked — click 🖌 Grade this "
-                           "Assignment/Exam to open it.")
+                           "Assignment to open it.")
                 st.rerun()
 
     if is_exam_rec:
@@ -8095,7 +7663,8 @@ def show_analytics_dialog(name: str) -> None:
                      type="primary", width="stretch",
                      help="Open this exam in CAM2 Exam Grading: bring in the "
                           "scans, draw the question boxes, grade, then click "
-                          "Send to CAM and 🔄 Sync here."):
+                          "Send to CAM there. The results appear here a few "
+                          "seconds later."):
             msg = launch_exam_setup(name)
             if msg:
                 st.success(msg)
@@ -8103,7 +7672,7 @@ def show_analytics_dialog(name: str) -> None:
                 st.error(st.session_state.get("save_status", ("", ""))[1]
                          or "Could not open CAM2.")
     elif has_folder and not folder_missing:
-        if st.button("🖌 Grade this Assignment/Exam", key=f"bridge_{name}",
+        if st.button("🖌 Grade this Assignment", key=f"bridge_{name}",
                      type="primary", width="stretch",
                      help="Open the CAM Grading Workspace targeting this "
                           f"assignment (port {GRADING_PORT} — Streamlit is "
@@ -8134,7 +7703,6 @@ def show_analytics_dialog(name: str) -> None:
     elif match.get("is_exam"):
         # Item-level exam analytics: raw totals + per-question averages.
         results = _exam_results_for(name)
-        secs = getattr(asg_rec, "sections", None)
         st.caption(f"📝 Exam  ·  {match['date']:%b %d, %Y}  ·  "
                    f"marked out of {match['max_total'] or '?'}")
         a, b, cc, d = st.columns(4)
@@ -8142,17 +7710,10 @@ def show_analytics_dialog(name: str) -> None:
         a2 = (f"{match['raw_avg']}/{match['max_total']}"
               if match["raw_avg"] is not None else "—")
         b.metric("Avg raw score", a2)
-        # Spread over *resolved* totals, pending (`?`) students excluded.
-        totals = [resolved_total(r, secs) for _, r in results
-                  if not exam_is_pending(r, secs)]
+        totals = [r.total for _, r in results if r.complete]
         cc.metric("Spread (sd)", round(pstdev(totals), 2) if len(totals) > 1 else 0.0)
         d.metric("Graded", "Crit " + match["criteria"]
                  if match["criteria"] != "—" else "not yet")
-        n_pending = sum(1 for _, r in results if exam_is_pending(r, secs))
-        if n_pending:
-            st.caption(f"⚠ {n_pending} student(s) have an unresolved choice "
-                       "section (`?`) — excluded from these averages until "
-                       "resolved in Window 3.")
 
         labels = next((a_.question_labels for a_ in gb().assignments
                        if a_.name == name and getattr(a_, "is_exam", False)), [])
@@ -8168,22 +7729,18 @@ def show_analytics_dialog(name: str) -> None:
             style_chart(fig)
             st.plotly_chart(fig, width="stretch")
 
-        # Name-crop preview (Phase 5E): exam rows are keyed by PDF filename stem,
-        # so a mis-named script mints the wrong student. When CGW sliced a name
-        # box, show each ingested row's handwritten-name crop beside its student
-        # id so a mismatch is spottable at a glance. Re-keying stays the existing
-        # manual flow (rename the source file, re-slice, re-sync).
-        if results and (exam_has_name_crops(cls, name) or any(
-                cam2_name_crop(cls, name, s.student_id) for s, _r in results)):
+        # Name-crop preview: each paper's handwritten-name crop from the CAM2
+        # session beside the student it was matched to, so a wrong match is
+        # spottable at a glance.
+        if results and any(cam2_name_crop(cls, name, s.student_id)
+                           for s, _r in results):
             with st.expander("✍ Name-box crops — check for mis-named scripts",
                              expanded=False):
                 st.caption("Each row's handwritten name, cropped from the scan. "
                            "If a crop doesn't match its student, fix the match "
-                           "in CAM2 (or the file name for an older exam) and "
-                           "re-sync.")
+                           "in CAM2 and send it to CAM again.")
                 for s, _r in results:
-                    crop = (cam2_name_crop(cls, name, s.student_id)
-                            or exam_name_crop_path(cls, name, s.student_id))
+                    crop = cam2_name_crop(cls, name, s.student_id)
                     ic = st.columns([1.4, 2.6], vertical_alignment="center")
                     ic[0].write(f"**{student_label(s)}**")
                     if crop:
@@ -8435,7 +7992,7 @@ def _thumb_cache_path(path: str, width: int, mtime: int) -> str:
 def _work_page_png_bytes(path: str, max_width: int) -> bytes:
     """PNG bytes of a file's first page (PDF) / image, LANCZOS-downscaled to
     ``max_width``. The same PyMuPDF/Pillow pipeline the grading workspace uses
-    for its previews (``exam_engine.page_png_bytes``), replicated here so CAM
+    for its previews (``pdf_view.page_png_bytes``), replicated here so CAM
     needn't import the sub-app package. Both imports are lazy so a missing
     PyMuPDF only degrades this one feature (filename-only tiles), never boot."""
     from PIL import Image
@@ -8539,40 +8096,21 @@ def _work_thumbnail(row: dict, folder_ref: str, width: int):
     return png, ""
 
 
-def _exam_pool_thumbnail(cls: str, assignment: str, row: dict, width: int,
-                         question_labels: list):
-    """``(png_bytes | None, note)`` for one pooled *exam* row at ``width``.
-
-    The identification channel is the handwritten **name-box crop** CGW sliced
-    for this script (the same crop Window 1's mis-named-script preview shows);
-    an exam programmed without a name box falls back to the first question's
-    crop that survives on disk (same directory layout). ``None`` + note when no
-    crop exists under either root — the tile then identifies by filename stem
-    alone.
-
-    A paper pooled from a CAM2 session shows its name crop from that session
-    (``crops/__name__/<paper id>.png``)."""
-    key = row.get("csv_key", "")
-    if row.get("session_student_id"):
-        sid = row["session_student_id"]
-        path = (exam_bridge.name_crop(cam2_session_dir(cls, assignment), sid)
-                or exam_bridge.name_crop(row.get("session_folder", ""), sid))
-        if not path:
-            return None, "No name crop in the CAM2 session for this paper."
-        png = _render_work_png(path, width)
-        return (png, "") if png is not None else (None, "Crop could not be rendered.")
-    path = exam_name_crop_path(cls, assignment, key)
+def _exam_pool_thumbnail(cls: str, assignment: str, row: dict, width: int):
+    """``(png_bytes | None, note)`` for one pooled *exam* row at ``width``:
+    the paper's handwritten-name crop from its CAM2 session
+    (``crops/__name__/<paper id>.png``). ``None`` + note when there is none
+    (or the row is from an older CGW exam) — the tile then identifies by its
+    caption alone."""
+    sid = row.get("session_student_id")
+    if not sid:
+        return None, "No name crop for this paper."
+    path = (exam_bridge.name_crop(cam2_session_dir(cls, assignment), sid)
+            or exam_bridge.name_crop(row.get("session_folder", ""), sid))
     if not path:
-        for lbl in question_labels:
-            path = exam_crop_path(cls, assignment, lbl, key)
-            if path:
-                break
-    if not path:
-        return None, "No crop on disk for this script."
+        return None, "No name crop in the CAM2 session for this paper."
     png = _render_work_png(path, width)
-    if png is None:
-        return None, "Crop could not be rendered."
-    return png, ""
+    return (png, "") if png is not None else (None, "Crop could not be rendered.")
 
 
 def _work_caption(row: dict) -> str:
@@ -8623,26 +8161,22 @@ def match_works_dialog(student_key: str, assignment: str) -> None:
                     if a.name == assignment
                     and getattr(a, "class_name", "") == cls), None)
     folder_ref = getattr(asg_rec, "folder_ref", "") if asg_rec else ""
-    # Exam pools (Phase 4, exam identity plan): the thumbnail is the name-box
-    # crop (fallback: a question crop), not a folder-ref render. One pool is
-    # one CSV, so its rows are uniformly exam or not.
-    q_labels = list(getattr(asg_rec, "question_labels", []) or []) \
-        if asg_rec else []
+    # Exam pools: the thumbnail is the paper's name crop from its CAM2
+    # session, not a folder-ref render. A pool is one exam or one assignment,
+    # so its rows are uniformly exam or not.
     is_exam_pool = any(r.get("is_exam") for r in pool)
 
     def _pool_thumbnail(row, width):
         if row.get("is_exam"):
-            return _exam_pool_thumbnail(cls, assignment, row, width,
-                                        q_labels or
-                                        list(row.get("questions") or {}))
+            return _exam_pool_thumbnail(cls, assignment, row, width)
         return _work_thumbnail(row, folder_ref, width)
 
     st.markdown(
         f"**{assignment}** — pick **{first}**'s submission from the "
         f"{len(pool)} unmatched work(s) below.")
     if is_exam_pool:
-        st.caption("Each tile shows the script's handwritten name box (or a "
-                   "question crop) with its filename stem and raw total. "
+        st.caption("Each tile shows the paper's handwritten name with its "
+                   "file name and raw total. "
                    "Click ⤢ to enlarge, then "
                    f"“This is {first}’s work” to assign it.")
     else:
@@ -9001,7 +8535,7 @@ def render_window3() -> None:
         if not any_cell:
             st.caption("No marks yet for the active tasks.")
 
-        _render_exam_sections(student)   # per-section marks + `?` choice resolver
+        _render_exam_results(student)
 
         _render_trend(student)
         _render_grade_panel(student)   # method dropdown + 4-criteria grades + overrides
@@ -9099,59 +8633,21 @@ def _student_exam_records(student):
     return out
 
 
-def _render_exam_sections(student) -> None:
-    """Window 3 exam block (Phase 5C): per-exam, per-section resolved marks with
-    a `?` resolver for over-answered choice sections.
-
-    For every exam the focused student has a result for, show one compact block:
-    ``📝 <exam>`` then a row per section (``Section A · 12/20``). An unresolved
-    over-answered choice section shows ``?`` and a resolve button; while any
-    section is pending the exam-total row also reads ``?``. Legacy exams (no
-    sections metadata) show a single resolved total row — no per-section noise."""
+def _render_exam_results(student) -> None:
+    """Window 3 exam block: for every exam the focused student has a result
+    for, ``📝 <exam>`` then the CAM2 per-question rows (or, for a record from
+    an older CGW exam, just its total)."""
     records = _student_exam_records(student)
     if not records:
         return
     for asg, r in records:
-        secs = getattr(asg, "sections", None)
         st.markdown(f"**📝 {asg.name}**")
         if r.mode:
             _render_cam2_result(asg, r)
             continue
-        if secs:
-            for section in secs:
-                stt = section_state(r, section)
-                label = f"{section.get('name', '')}"
-                cc = st.columns([3, 1.2], vertical_alignment="center")
-                if stt.pending:
-                    cc[0].caption(f"{label}  ·  choose {stt.required} of "
-                                  f"{len(stt.answered)} answered")
-                    if cc[1].button("? resolve", key=f"exsec_{asg.name}_{label}",
-                                    width="stretch",
-                                    help="This student answered more questions "
-                                         "than the section requires — pick which "
-                                         "count toward the total."):
-                        exam_section_resolver_dialog(student.student_id,
-                                                     asg.name, section.get("name", ""))
-                else:
-                    extra = ""
-                    if stt.over_answered:
-                        extra = f"  ·  chose {', '.join(stt.chosen)}"
-                    cc[0].caption(f"{label}{extra}")
-                    # Append the teacher's recorded strand level (Phase 6) — the
-                    # digital cover sheet: "12/20 · level 6".
-                    sub = f"{stt.subtotal}/{stt.section_max}"
-                    lvl = r.section_bands.get(stt.name)
-                    if lvl is not None:
-                        sub += f"  ·  level {lvl}"
-                    cc[1].caption(sub)
-        # Exam total row: `?` while pending, else the resolved total/max.
         tc = st.columns([3, 1.2], vertical_alignment="center")
         tc[0].caption(f"{asg.name} — total")
-        if exam_is_pending(r, secs):
-            tc[1].caption("**?**")
-        else:
-            tc[1].caption(f"**{resolved_total(r, secs)}/"
-                          f"{resolved_max(r, secs) or asg.max_total or '?'}**")
+        tc[1].caption(f"**{r.total}/{r.max_total or asg.max_total or '?'}**")
 
 
 def _render_cam2_result(asg, r) -> None:
@@ -9195,75 +8691,6 @@ def _render_cam2_result(asg, r) -> None:
     if not r.complete:
         total += " · ⏳ not finished"
     tc[1].caption(f"**{total}**")
-
-
-@st.dialog("Resolve choice section")
-def exam_section_resolver_dialog(sid: str, exam_name: str, section_name: str) -> None:
-    """Pick which answers count for an over-answered choice section (Phase 5C).
-
-    Shows the student's answered questions (with marks) as checkboxes, capping
-    ticks at the section's ``required`` count. Save writes the picked labels to
-    ``ExamResult.chosen[section]`` and persists; the teacher can reopen and
-    change the selection at any time."""
-    student = find_student(sid)
-    if student is None:
-        st.caption("Student not found.")
-        return
-    result = getattr(student, "exam_results", {}).get(exam_name)
-    asg = next((a for a in gb().assignments
-                if a.name == exam_name and getattr(a, "is_exam", False)), None)
-    section = None
-    for sec in (getattr(asg, "sections", None) or []):
-        if sec.get("name") == section_name:
-            section = sec
-            break
-    if result is None or section is None:
-        st.caption("This section is no longer available.")
-        return
-
-    stt = section_state(result, section)
-    required = stt.required or len(stt.answered)
-    q_max = {q.get("label"): int(q.get("max", 0) or 0)
-             for q in section.get("questions", [])}
-    st.markdown(f"**{exam_name}**  ·  {section_name}  ·  {student_label(student)}")
-    st.caption(f"Tick the **{required}** answer(s) that should count toward the "
-               f"section total. The rest are recorded but don't score.")
-
-    # Pre-read current tick state so we can cap ticks at `required` (disable the
-    # unticked rows once the cap is reached). Seed from the saved selection.
-    current = set(stt.chosen)
-    keys = {lbl: f"chsel_{sid}_{exam_name}_{section_name}_{lbl}"
-            for lbl in stt.answered}
-    checked_now = {lbl: st.session_state.get(keys[lbl], lbl in current)
-                   for lbl in stt.answered}
-    n_checked = sum(1 for v in checked_now.values() if v)
-
-    for lbl in stt.answered:
-        at_cap = n_checked >= required and not checked_now[lbl]
-        st.checkbox(f"{lbl} — {result.questions.get(lbl, 0)} / {q_max.get(lbl, '?')}",
-                    value=(lbl in current), key=keys[lbl], disabled=at_cap)
-
-    picked = [lbl for lbl in stt.answered if st.session_state.get(keys[lbl])]
-    subtotal = sum(result.questions.get(lbl, 0) for lbl in picked)
-    if len(picked) == required:
-        st.success(f"Subtotal: **{subtotal}/{stt.section_max}** "
-                   f"({len(picked)}/{required} chosen)")
-    else:
-        st.info(f"Subtotal so far: {subtotal}  ·  {len(picked)}/{required} chosen "
-                f"— pick {required} to resolve this section.")
-
-    b = st.columns(2)
-    if b[0].button("Save", key=f"chsel_save_{sid}_{exam_name}_{section_name}",
-                   type="primary", width="stretch"):
-        if picked:
-            result.chosen[section_name] = picked
-        else:
-            result.chosen.pop(section_name, None)
-        persist()
-        st.rerun()
-    if b[1].button("Cancel", key=f"chsel_cancel_{sid}_{exam_name}_{section_name}",
-                   width="stretch"):
-        st.rerun()
 
 
 def _trend_figure(student):
@@ -11064,10 +10491,12 @@ def main() -> None:
     # the moment the teacher returns from CGW.
     _run_session_start_sync()
     _run_active_launch_probe()
-    # Event-driven "sync on export": a lightweight run_every fragment that polls
-    # CGW's export beacon and scoped-syncs a fresh grading/exam export within
-    # seconds, with no teacher interaction (Exam Slicer v2 plan, Phase 1).
+    # Event-driven "sync on export": lightweight run_every fragments that poll
+    # CGW's export beacon and the active class's CAM2 sessions, and scoped-sync
+    # a fresh grading export or a sent exam within seconds, with no teacher
+    # interaction.
     _export_beacon_poller()
+    _cam2_send_poller()
 
     prefs = st.session_state["prefs"]
 

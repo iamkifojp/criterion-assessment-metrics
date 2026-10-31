@@ -8,7 +8,7 @@ Covers docs/CAM2_EXAM_CONVERGENCE_PLAN.md Stage 3:
     fingerprint, rubric name → criterion, scaling to 0-8, name crops and
     moving a deleted exam's folder aside.
   * App side (no Streamlit server; ``app.st`` is a SimpleNamespace over a
-    dict, as in tests/test_exam_identity.py): ``launch_exam_setup`` writes the
+    dict, as in tests/test_export_beacon_sync.py): ``launch_exam_setup`` writes the
     handoff and starts CAM2's launcher; Sync reads only sessions sent to CAM,
     files papers by ``external_id``, pools the rest, skips unchanged ones;
     marks and rubric exams band/confirm into CriterionScores, unfinished
@@ -281,12 +281,39 @@ class SyncTests(_AppBase):
         self.assertEqual((rec["kind"], rec["assignment"], rec["class"]), ("cam2", EXAM, CLASS))
         # The 🧩 tile shows the pooled paper's name crop from the session.
         with mock.patch.object(app, "_render_work_png", lambda path, width: path.encode()):
-            png, note = app._exam_pool_thumbnail(CLASS, EXAM, pool[0], 400, [])
+            png, note = app._exam_pool_thumbnail(CLASS, EXAM, pool[0], 400)
         self.assertTrue(png.decode().endswith("s003.png"), note)
+        # Matching it in Window 2 files CAM2's result, as read, and an alias.
+        self.assertTrue(app.assign_work(CLASS, EXAM, pool[0]["csv_key"], "100003"))
+        matched = self.gb.students["100003"].exam_results[EXAM]
+        self.assertEqual((matched.mode, matched.session_id), ("marks", aoki.session_id))
+        self.assertEqual(self.ss["work_aliases"][CLASS], {pool[0]["csv_key"]: "100003"})
+        self.assertNotIn(CLASS, self.ss["unmatched_works"])
         # Unchanged: skipped, nothing re-filed.
         summary, changed = self.sync()
         self.assertEqual((summary["skipped"], summary["ingested"], changed),
                          (1, 0, (False, False)))
+
+    def test_send_poller_syncs_when_cam2_sends(self):
+        folder = self.hosted(self.marks_session, ready=False)
+        poll = app._cam2_send_poller.__wrapped__   # the fragment body
+        rerun = mock.Mock()
+        with mock.patch.object(app.st, "rerun", rerun, create=True),                 mock.patch.object(app, "_report_sync", lambda summary: None),                 mock.patch.object(app, "ensure_class_context", lambda: None),                 mock.patch.object(app, "_heal_score_comments_from_mirrors", lambda: None):
+            poll()                  # first look: recorded only
+            poll()                  # unchanged: nothing
+            self.assertEqual(self.gb.assignments, [])
+            # CAM2's "Send to CAM" rewrites cam2_session.json.
+            session, config, _ = self.storage.open_session(folder)
+            config["host_ready_at"] = "2026-11-01T10:00:00+00:00"
+            session.config_file.save(config)
+            path = os.path.join(folder, self.storage.SESSION_FILE)
+            os.utime(path, (os.path.getatime(path), os.path.getmtime(path) + 5))
+            poll()
+            self.assertEqual([a.name for a in self.gb.assignments], [EXAM])
+            self.assertIn(EXAM, self.gb.students["100001"].exam_results)
+            rerun.assert_called_once()
+            poll()                  # nothing new: no repaint
+            rerun.assert_called_once()
 
     def _crop(self, folder, sid):
         os.makedirs(os.path.join(folder, "crops", "__name__"), exist_ok=True)

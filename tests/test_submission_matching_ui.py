@@ -72,7 +72,7 @@ class SubmissionUiTests(unittest.TestCase):
             draft_feedback_for=lambda student: [(self.task, self.task.draft_feedback["10001"])]
                 if "10001" in self.task.draft_feedback else [],
         )
-        for name in ("_render_exam_sections", "_render_trend", "_render_grade_panel",
+        for name in ("_render_exam_results", "_render_trend", "_render_grade_panel",
                      "_render_comments", "_render_ai_deck"):
             self.ns[name] = lambda student: None
         functions_from(ROOT / "app.py", ["submitter_keys", "render_window2", "render_window3"], self.ns)

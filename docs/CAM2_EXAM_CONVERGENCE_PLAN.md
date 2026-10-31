@@ -1,8 +1,7 @@
 # Bringing CAM2's exam grading back into CAM: assessment and staged plan
 
 **Status:** v3, 2026-10-31. All decisions (D1–D9, §4) are locked.
-**Stages 0–3 are done** (see the ✅ notes in §5); Stage 4 (retire the CGW
-exam code) is next.
+**Stages 0–4 are done** (see the ✅ notes in §5); Stage 5 (bundle) is next.
 **Repos:** CAM = `C:\Project\criterion-assessment-metrics-public`;
 CAM2 = `C:\Project\cam2-exam-grading` (`iamkifojp/cam2-exam-grading`, 4 commits,
 187 tests, Phases 1–4c done, Phase 5 packaging next).
@@ -287,7 +286,36 @@ byte-identical. Changed while building:*
 - Sandbox end to end: temp prefs, temp `db_custom_path`, a fake class folder,
   `tools/make_sample_scans.py` papers. Grade in both modes, Sync, band, report.
 
-### Stage 4 — Retire CGW exam code (CAM) · M
+### Stage 4 — Retire CGW exam code (CAM) · M — ✅ done
+*CGW `app.py` 7,060 → 4,848 lines; `exam_engine.py` and the five CGW-only
+exam tests deleted; `test_exam_identity` / `test_exam_resolved` retired
+(CSV-only); `test_exam_sections_app` became `test_exam_old_records` (old
+records load, save and band from their stored total). Checked in a browser:
+a sandboxed CGW boots with no exam controls and its exam routes return 404;
+a sandboxed CAM read a sent CAM2 session, banded it, showed Window 3 and the
+🧩 dialog, and picked up a "Send again" without a click. Changed while
+building:*
+- *`is_exam_csv` stays, as a guard only: an old CGW exam CSV still in a class
+  folder is skipped by Sync and refused by Upload & stage. Without it the CSV
+  would be read as a grading CSV.*
+- *Nothing in a running CAM picked up CAM2's "Send to CAM" (the old exam path
+  used CGW's export beacon, and Sync is no longer a button), so
+  `_cam2_send_poller` (a `run_every=3` fragment) watches the active class's
+  `cam2_session.json` files and runs `sync_exam`. The "🔄 Sync here" wording
+  in CAM was corrected with it.*
+- *The CGW-artifact purge on exam delete (`_purge_exam_cgw_artifacts`) went
+  too: Sync no longer reads old exam CSVs, so they cannot bring an exam back.
+  Permanent delete only moves the CAM2 session aside.*
+- *A 🧩 row left in a pool by an old exam CSV can still be matched
+  (`materialize_exam_row` keeps a small fallback that rebuilds the result from
+  its marks, without the old `chosen` / `section_bands` carry-forward).*
+- *CGW's page rendering (`fitz` import, `page_png_bytes`, `IMAGE_EXTS`) moved
+  from `exam_engine.py` to `pdf_view.py`; the export beacon no longer has an
+  `is_exam` field, and CAM ignores one that does.*
+- *USER_MANUAL, QUICK_GUIDE (and its PDF), README, ARCHITECTURE §4 and
+  DATA_DICTIONARY A.4 / B.7 / C.6 were rewritten for the CAM2 flow. The manual
+  had still described the CGW flow after Stage 3.*
+
 - Delete `exam_engine.py`, the `/api/exam/*` routes, `EXAM_SETUP_PAGE`, exam
   mode in `HTML_PAGE`, the exam export beacon, and CGW-only tests
   (`test_exam_grid`, `test_exam_naming`, `test_exam_portable`,

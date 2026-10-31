@@ -46,11 +46,9 @@ from __future__ import annotations
 
 import csv
 import io
-import json
-import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from .models import (
     Assignment,
@@ -58,7 +56,6 @@ from .models import (
     CriterionScore,
     ExamResult,
     Gradebook,
-    section_max,
 )
 from .persistence import exam_result_from_dict
 
@@ -448,85 +445,18 @@ def parse_classroom_roster(text: str) -> List[Dict[str, str]]:
     return out
 
 
-# --- exam (item-level) CSV detection ----------------------------------------
+# --- old exam CSVs ---------------------------------------------------------
 #
-# The CAM grading app's Exam Slicing feature exports one column per programmed
-# question BEFORE a "Total Score" column:
-#
-#     Student Name, Q1, Q2, ..., Total Score, Max Total, Due Date, Comment
-#
-# The total is a raw mark (e.g. 37/45), NOT an MYP 0-8 band, so these files
-# must never flow through the criterion-score path. Detection is by header:
-# a "Total Score" column marks the file as an exam export.
-
-EXAM_TOTAL_HEADER = "Total Score"
-EXAM_MAX_HEADER = "Max Total"
-
-# Headers that are metadata rather than question columns (lowercased).
-_EXAM_RESERVED = {
-    "student name", "total score", "max total", "due date", "comment",
-    "checked keywords", "files (newest first)", "assessed date", "file count",
-}
-
-
-def load_exam_sidecar(csv_path: str) -> Optional[List[Dict[str, Any]]]:
-    """Read the ``<csv>.meta.json`` definition sidecar's ``sections`` list.
-
-    Written by CGW beside every routed exam CSV (Phase 4C), the sidecar carries
-    the section structure the flat CSV cannot express. Returns the ``sections``
-    list (``[{"name", "required", "questions": [{"label", "max"}]}]``) or None
-    when the sidecar is absent, unreadable, or shaped wrong — the caller then
-    keeps today's sidecar-less behaviour, never erroring.
-    """
-    meta_path = csv_path + ".meta.json"
-    if not os.path.exists(meta_path):
-        return None
-    try:
-        with open(meta_path, "r", encoding="utf-8") as fh:
-            meta = json.load(fh)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(meta, dict):
-        return None
-    sections = meta.get("sections")
-    if not isinstance(sections, list) or not sections:
-        return None
-    clean: List[Dict[str, Any]] = []
-    for sec in sections:
-        if not isinstance(sec, dict) or not sec.get("name"):
-            continue
-        req = sec.get("required")
-        try:
-            req = int(req) if req is not None else None
-        except (TypeError, ValueError):
-            req = None
-        questions = []
-        for q in (sec.get("questions") or []):
-            if isinstance(q, dict) and q.get("label") is not None:
-                try:
-                    qmax = int(q.get("max", 0) or 0)
-                except (TypeError, ValueError):
-                    qmax = 0
-                questions.append({"label": str(q["label"]), "max": qmax})
-        clean.append({"name": str(sec["name"]), "required": req,
-                      "questions": questions})
-    return clean or None
-
+# The old CGW exam grader exported one column per question before a
+# "Total Score" column. Exams now come from CAM2 sessions
+# (engine/exam_bridge.py) and those CSVs are no longer imported (D5), but one
+# may still sit in a class folder: Sync and upload recognise it by its header
+# and leave it alone rather than read it as a grading CSV.
 
 def is_exam_csv(fieldnames: List[str]) -> bool:
-    """True when a header row is a CAM item-level exam export."""
+    """True when a header row is an old CGW item-level exam export."""
     lower = {(h or "").strip().lower() for h in (fieldnames or [])}
     return "total score" in lower and "student name" in lower
-
-
-def exam_question_columns(fieldnames: List[str]) -> List[str]:
-    """The question-label columns of an exam export, in grading order."""
-    out = []
-    for h in fieldnames or []:
-        name = (h or "").strip()
-        if name and name.lower() not in _EXAM_RESERVED:
-            out.append(name)
-    return out
 
 
 class IngestionPipeline:
@@ -781,51 +711,16 @@ class IngestionPipeline:
             timestamp, bool(pool_row.get("late")), created)
         return created
 
-    def _carry_forward_exam_state(self, target_sid: str,
-                                  result: ExamResult) -> None:
-        """Copy the prior result's teacher decisions onto ``result``.
-
-        Shared by :meth:`ingest_exam_csv`'s per-row loop and
-        :meth:`materialize_exam_row` so a re-ingest and a Window-2 match
-        preserve resolutions identically. Two kinds of decision carry:
-
-        * choice-section picks (``chosen``): only picks whose labels the fresh
-          result still has a mark for survive;
-        * per-strand levels (``section_bands``, Phase 6): keyed on section name
-          (not labels), so they carry forward wholesale."""
-        prev = self.gradebook.students.get(target_sid)
-        prev_result = (prev.exam_results.get(result.assignment)
-                       if prev is not None else None)
-        if prev_result is None:
-            return
-        if prev_result.chosen:
-            for sec_name, picks in prev_result.chosen.items():
-                kept = [lbl for lbl in picks if lbl in result.questions]
-                if kept:
-                    result.chosen[str(sec_name)] = kept
-        if getattr(prev_result, "section_bands", None):
-            for sec_name, lvl in prev_result.section_bands.items():
-                try:
-                    result.section_bands[str(sec_name)] = int(lvl)
-                except (TypeError, ValueError):
-                    continue
-
     def materialize_exam_row(self, assignment: str, target_sid: str,
                              pool_row: dict) -> ExamResult:
         """Re-create the :class:`ExamResult` for one pooled *unmatched* exam row
-        under ``target_sid``.
-
-        ``pool_row`` is an ``is_exam`` dict :meth:`ingest_exam_csv` appended to
-        its ``unmatched_out`` collection — the exam sibling of
-        :meth:`materialize_row`. Builds the same result a routed ingest would
-        (including the ``chosen`` / ``section_bands`` carry-forward, so a prior
-        resolution or strand level made under the roster key survives a
-        re-match) and attaches it to the roster student. Returns the result
-        created.
+        under ``target_sid`` — the exam sibling of :meth:`materialize_row`.
+        Returns the result created.
 
         A row pooled from a CAM2 session (:mod:`engine.exam_bridge`) carries
         the whole result under ``"result"``; it is attached as read, since
-        CAM2 has already settled every choice and level."""
+        CAM2 has already settled every choice and level. A row left in a pool
+        by the old CGW exam grader carries only its marks and total."""
         if isinstance(pool_row.get("result"), dict):
             result = exam_result_from_dict(dict(pool_row["result"], assignment=assignment))
             self.gradebook.get_or_create(target_sid).exam_results[assignment] = result
@@ -851,181 +746,8 @@ class IngestionPipeline:
             questions=questions,
             comment=str(pool_row.get("comment") or ""),
         )
-        self._carry_forward_exam_state(target_sid, result)
         self.gradebook.get_or_create(target_sid).exam_results[assignment] = result
         return result
-
-    def ingest_exam_csv(
-        self,
-        path: str,
-        assignment: str,
-        *,
-        id_column: str = "Student Name",
-        ingest_time: Optional[datetime] = None,
-        roster_keys: Optional[set] = None,
-        aliases: Optional[Dict[str, str]] = None,
-        unmatched_out: Optional[List[dict]] = None,
-        auto_aliases_out: Optional[Dict[str, str]] = None,
-    ) -> List[ExamResult]:
-        """Ingest a CAM item-level exam export (raw marks, off the 0-8 scale).
-
-        Each row becomes an :class:`ExamResult` on the student (per-question
-        raw marks + total), and the assignment is registered with
-        ``is_exam=True`` and zero criteria: raw exam marks contribute nothing
-        to the recency-weighted band math until the teacher assigns each
-        student a 0-8 band (the Window 1 exam-banding dropdown), which then
-        enters the gradebook as an ordinary ``CriterionScore``. Returns the
-        results created.
-
-        **Roster-aware identity routing (opt-in, backward-compatible).** The
-        exam CSV's ``Student Name`` cell is a PDF filename stem, not a roster
-        id, so an unrouted ingest mints a phantom student per unmatched row.
-        When ``roster_keys`` is a non-empty set, each row is routed through the
-        same :func:`resolve_identity` pipeline as :meth:`ingest_csv` (exact →
-        alias → unambiguous prefix → unmatched) — never a phantom:
-
-        * matched rows attach their :class:`ExamResult` to the *resolved*
-          roster student (the ``chosen`` / ``section_bands`` carry-forward is
-          keyed on it too);
-        * unmatched rows append an exam-flavoured pool row to
-          ``unmatched_out`` — the assignment path's ``csv_key`` field plus
-          ``is_exam: True``, ``questions``, ``total``, ``max_total`` and
-          ``comment`` (everything :meth:`materialize_exam_row` needs);
-        * fast-path prefix matches record ``{csv_key: roster_key}`` into
-          ``auto_aliases_out`` for the caller to persist.
-
-        With ``roster_keys`` falsy (the default) none of this runs and every
-        row is ingested under its raw id exactly as before."""
-        ingest_time = ingest_time or datetime.now()
-        created: List[ExamResult] = []
-        max_total = 0
-        labels: List[str] = []
-        exam_date: Optional[datetime] = None
-        pool_start = len(unmatched_out) if unmatched_out is not None else 0
-
-        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
-            reader = csv.DictReader(fh)
-            fieldnames = [(h or "").strip() for h in (reader.fieldnames or [])]
-            if not is_exam_csv(fieldnames):
-                raise ValueError(
-                    f"{path!r} is not an exam export (no '{EXAM_TOTAL_HEADER}' "
-                    f"column)."
-                )
-            labels = exam_question_columns(fieldnames)
-            date_column = self._resolve_date_column(fieldnames, "Due Date")
-
-            for row in reader:
-                row = {(k or "").strip(): v for k, v in row.items()}
-                sid = (row.get(id_column) or "").strip()
-                if not sid:
-                    continue
-                questions = {}
-                for lbl in labels:
-                    val = self._coerce_raw_mark(row.get(lbl))
-                    if val is not None:
-                        questions[lbl] = val
-                total = self._coerce_raw_mark(row.get(EXAM_TOTAL_HEADER))
-                if total is None:
-                    total = sum(questions.values())
-                row_max = self._coerce_raw_mark(row.get(EXAM_MAX_HEADER)) or 0
-                max_total = max(max_total, row_max)
-                if exam_date is None and date_column:
-                    exam_date = parse_iso_date(row.get(date_column))
-                comment = (row.get("Comment") or "").strip()
-
-                # Identity routing (skipped entirely when roster_keys is falsy →
-                # legacy: target is the raw id and nothing pools).
-                target = sid
-                if roster_keys:
-                    target, auto_alias = resolve_identity(sid, roster_keys,
-                                                          aliases)
-                    if target is None:
-                        # Unmatched → pool an exam-flavoured row for visual
-                        # matching (never mint a phantom student). Every exam
-                        # row is a real script (CGW writes one per student
-                        # PDF), so unlike the grade-less assignment rows there
-                        # is no "carried nothing" skip.
-                        if unmatched_out is not None:
-                            unmatched_out.append({
-                                "csv_key": sid,
-                                "is_exam": True,
-                                "questions": dict(questions),
-                                "total": total,
-                                "max_total": row_max,
-                                "comment": comment,
-                            })
-                        continue
-                    if auto_alias is not None and auto_aliases_out is not None:
-                        auto_aliases_out[sid] = auto_alias
-
-                result = ExamResult(
-                    assignment=assignment,
-                    total=total,
-                    max_total=row_max,
-                    questions=questions,
-                    comment=comment,
-                )
-                # Preserve teacher choice-section resolutions across re-ingest
-                # (purge-replace must not wipe them — same spirit as the Late
-                # reconcile). Carry forward only picks whose labels the student
-                # still has a mark for in the fresh CSV — keyed on the RESOLVED
-                # student, so an alias-routed re-sync finds the picks made
-                # under the roster key. Per-strand section bands (Phase 6) ride
-                # the same carry-forward.
-                self._carry_forward_exam_state(target, result)
-                self.gradebook.get_or_create(target).exam_results[assignment] = result
-                created.append(result)
-
-        # Backfill the sheet-wide max onto rows whose Max Total cell was blank —
-        # pooled unmatched rows included, so a later materialization carries the
-        # same max a routed ingest would have.
-        new_pool = (unmatched_out[pool_start:]
-                    if unmatched_out is not None else [])
-        for r in created:
-            if not r.max_total:
-                r.max_total = max_total
-        for pr in new_pool:
-            if not pr.get("max_total"):
-                pr["max_total"] = max_total
-
-        # Definition sidecar (Phase 5B): when CGW dropped a <csv>.meta.json,
-        # attach its section structure and recompute every result's max via the
-        # resolved (choice-aware) rule. Absent/corrupt sidecar → sidecar-less
-        # behaviour, byte-identical to before this phase.
-        sections = load_exam_sidecar(path)
-        if sections:
-            section_total_max = sum(section_max(s) for s in sections)
-            for r in created:
-                r.max_total = section_total_max
-            for pr in new_pool:
-                pr["max_total"] = section_total_max
-            max_total = section_total_max
-
-        self.gradebook.register_assignment(
-            Assignment(
-                name=assignment,
-                criteria=[],
-                source_file=path,
-                ingested_at=exam_date or ingest_time,
-                score_count=len(created),
-                note="exam — raw item-level marks; assign 0-8 bands in Window 1",
-                is_exam=True,
-                max_total=max_total,
-                question_labels=labels,
-                sections=sections,
-            )
-        )
-        return created
-
-    @staticmethod
-    def _coerce_raw_mark(raw: Optional[str]) -> Optional[int]:
-        """Raw exam marks are unbounded ints (unlike 0-8 band grades)."""
-        if raw is None or str(raw).strip() == "":
-            return None
-        try:
-            return max(0, int(float(str(raw).strip())))
-        except ValueError:
-            return None
 
     @staticmethod
     def _resolve_column_map(

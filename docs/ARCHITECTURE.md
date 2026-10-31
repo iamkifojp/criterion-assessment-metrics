@@ -14,12 +14,12 @@ called out inline as **⚠ Reality check**.
 | # | Engine | Entry point | Framework | Role |
 |---|--------|-------------|-----------|------|
 | 1 | **CAM (main app)** | `app.py` | **Streamlit** (`==1.58.0`) | Teacher-facing analytics: gradebook, recency-weighted suggestions, report cards, trend charts. |
-| 2 | **CAM Grading Workspace** | `cam_grading_workspace/app.py` | **Flask** (`>=3.0`) | Fast per-assignment marking UI backed by Google Drive/Classroom **or a local class folder** (PDF/local-mode plan, no OAuth); also hosts Exam Slicing, which runs on local folders with no OAuth (§4). |
+| 2 | **CAM Grading Workspace** | `cam_grading_workspace/app.py` | **Flask** (`>=3.0`) | Fast per-assignment marking UI backed by Google Drive/Classroom **or a local class folder** (PDF/local-mode plan, no OAuth). Exams are graded in CAM2 instead (§4). |
 | 3 | **Backend engine (`engine/`)** | imported as a package | Pure Python (UI-free) | Domain model, CSV ingestion, aggregation math, DOCX parsing, JSON persistence, gojūon name collation. |
 
 **`exam_grading/` is vendored upstream code.** It is CAM2 Exam Grading
-(`iamkifojp/cam2-exam-grading`), added with `git subtree` and being wired in as
-CAM's exam engine (see `docs/CAM2_EXAM_CONVERGENCE_PLAN.md`). Never edit it in
+(`iamkifojp/cam2-exam-grading`), added with `git subtree`, and is CAM's only
+exam code (see `docs/CAM2_EXAM_CONVERGENCE_PLAN.md` and §4). Never edit it in
 place: change CAM2 in its own repo, then
 `git subtree pull --prefix exam_grading <cam2 repo> main --squash`. CAM's glue
 code lives outside that folder. CAM2 also has a top-level `engine` package, so
@@ -30,18 +30,7 @@ suites. Inside CAM, `engine/exam_bridge.py` loads CAM2's engine under the name
 `ExamResult`s, with totals and final levels from CAM2's own `grading_summary`.
 It never writes to the session folder.
 
-Since Stage 3 every exam opens in CAM2. Window 1's **🛠 Exam setup / Grade**
-(`launch_exam_setup`) writes a `cam2-host` handoff (exam, class, session
-folder `<class folder>/exams/<exam>/`, roster as `external_id` + name) into
-the local temp folder and starts `exam_grading/launcher.py --host <handoff>`;
-CAM2 opens the browser itself, and a CAM2 that is already running is handed
-the exam. **Sync** (`_sync_cam2_sessions`, from both the global scan and
-`sync_exam`) reads every session under `exams/` that the teacher has sent to
-CAM, files papers by `external_id` (then alias / prefix, else 🧩), and
-registers the exam. Class-folder CSV walks skip `exams/` (`_walk_class`).
-Per-exam CAM2 state lives in the persisted `exam_sessions` map
-(DATA_DICTIONARY C.8). Permanent delete moves the session folder to
-`exams/_deleted/`.
+Every exam opens in CAM2; how CAM hosts it and reads the results is in §4.
 
 `main.py` is **not** a fourth app — it is a UI-free verification harness that
 drives the `engine/` pipeline against the sample data (`Y7_Changing_View_Unit_Plan_v2.docx`,
@@ -115,13 +104,13 @@ page images are uploaded or modified. Drive files download only when opened;
 the PDF disk cache evicts older copies above 256 MiB, retaining the current file
 even when oversized. Large active PDFs still need local temporary space.
 
-Window 1's **Grade this Assignment/Exam** buttons call
-`launch_grading_workspace()` / `launch_exam_setup()` (`app.py`). Each spawns
-the Flask workspace on **port 5001** if it isn't already listening
-(`_ensure_workspace_running()`), then opens a browser URL carrying the target
-as query parameters (`class` / `assignment` / `aname`, or `class` / `exam`),
-which the workspace's client-side `autoloadFromParams()` resolves into the
-right class and assignment.
+Window 1's **Grade this Assignment** button calls
+`launch_grading_workspace()` (`app.py`). It spawns the Flask workspace on
+**port 5001** if it isn't already listening (`_ensure_workspace_running()`),
+then opens a browser URL carrying the target as query parameters (`class` /
+`assignment` / `aname`), which the workspace's client-side
+`autoloadFromParams()` resolves into the right class and assignment. (Exams
+open in CAM2 instead, through `launch_exam_setup()`; see §4.)
 
 **⚠ The workspace is a separate process with its own dependencies.** It is
 Flask + Pillow + PyMuPDF + the Google client libraries, pinned in
@@ -129,16 +118,15 @@ Flask + Pillow + PyMuPDF + the Google client libraries, pinned in
 pulls in via `-r cam_grading_workspace/requirements.txt`** — so a single
 `pip install -r requirements.txt` covers both processes. If a workspace
 dependency is missing, `cam_grading_workspace/app.py` crashes on import and
-never binds port 5001, so every handoff (Grade, Exam setup, 🔗 Connect Google
-Drive) fails with a browser *"connection refused"*. `_ensure_workspace_running()`
+never binds port 5001, so every handoff (Grade, 🔗 Connect Google Drive) fails with a browser *"connection refused"*. `_ensure_workspace_running()`
 guards against this: after spawning the sub-app it captures stdout/stderr to
 `cam_grading_workspace/workspace_startup.log`, waits up to ~10 s for the port,
 and — if it never opens — returns `False` and surfaces the log's last line
 (usually the offending `ImportError`) in CAM's status banner, instead of
-silently returning `True` and opening a dead browser tab. The PDF slicer's
-`fitz` (PyMuPDF) import is also lazy (§4), so a missing PyMuPDF only breaks
-exam slicing, not the whole workspace — including OAuth sign-in, which needs no
-PDF handling.
+silently returning `True` and opening a dead browser tab. The workspace's
+`fitz` (PyMuPDF) import is also lazy (`pdf_view.fitz_module()`), so a missing
+PyMuPDF only breaks PDF viewing and thumbnails, not the whole workspace —
+including OAuth sign-in, which needs no PDF handling.
 
 **Process lifecycle — the workspace dies with CAM.** The sub-app is spawned
 once (lazily, on the first handoff) and reused for the whole session: cold start
@@ -167,7 +155,7 @@ minimal patch, and `POST`s it back. It seeds **two** things:
    (other classes untouched; re-seeding the same pair is a no-op). Drive-backed
    classes only — a local-path master directory is never mapped.
 2. **`cloud_dir` = CAM's database folder** (`db_folder()`), so the workspace's
-   grade/exam CSV exports route into the per-class subfolder CAM's Sync scans
+   grading CSV exports route into the per-class subfolder CAM's Sync scans
    (§8). Seeded only when CAM has a custom database path configured; the patch
    is skipped when the workspace already points at the same folder
    (normcase-normalised compare). **This is what closes the round-trip** —
@@ -192,8 +180,7 @@ values instead of its own last session. This is the forward half of the grades
 round-trip — see §8. A publish failure cancels the launch (a workspace session
 that can't see CAM's edits would overwrite them on its next export). A
 successful folder launch also records a session-only **active-launch marker**
-so the post-session probe can auto-ingest the return export (§8). Exam handoffs
-skip all of this: exams don't round-trip through folder grading.
+so the post-session probe can auto-ingest the return export (§8).
 
 **⚠ The workspace ⚙ Settings is read-only for the CAM-managed fields.** Because
 CAM owns `cloud_dir` and the class map, the workspace's Settings dialog displays
@@ -234,15 +221,9 @@ storage-provider seam §H of the plan's Terrain notes), grading PDFs + images wi
 the identical marking viewer and CSV export; Phase 4 wires the CAM *Grade* button
 to reach it and keys the `cam_grades_<key>.json` handoff by the same durable
 `local-<hash>` slug (`_workspace_state_key()` ↔ `LocalProvider.state_key`) so the
-publish→reconcile→export→Sync round-trip works for local classes too. **Exams are exempt by design:** the whole exam
-pipeline (setup, question programming, slicing, grading, export) is keyed on
-`class_name` and runs on local folders with no OAuth, so `exam::<name>`
-launches and `launch_exam_setup()` always proceed; for them the seeding is
-best-effort and a local or unset master directory is normal, not an error.
-On the workspace side, `autoloadFromParams()` mirrors the split: a class
-missing from `SETTINGS["classes"]` gets its locally-stored exams listed
-(`/api/exams`) and the matching one opened; only folder targets fall back to
-the "add it in ⚙ Settings" hint.
+publish→reconcile→export→Sync round-trip works for local classes too. On the
+workspace side, `autoloadFromParams()` shows the "add it in ⚙ Settings" hint for
+a class missing from `SETTINGS["classes"]`.
 
 ### Running them
 
@@ -539,7 +520,7 @@ rescans). The Drive sign-in button is offered in both modes (§3).
 
 - A Flask app (`app = Flask(__name__)` at `cam_grading_workspace/app.py:74`) with
   a JSON REST surface (`/api/load`, `/api/save`, `/api/save_state`,
-  `/api/group/link`, `/api/exam/*`, …).
+  `/api/group/link`, …).
 - In-memory `STATE` dict guarded by `STATE_LOCK` (`threading.Lock`); persisted by
   `save_state()`, which writes **both** a per-folder `grades_<folderId>.json`
   **and** the shared multi-folder `grading_cache.json` (`write_cache()`).
@@ -635,125 +616,72 @@ whether the stored reference looks like a filesystem path or a Drive ID.
 
 ---
 
-## 4. Exam Slicing — auto-DPI cropping (Pillow + PyMuPDF)
+## 4. Exams — CAM2 hosted by CAM (`exam_grading/` + `engine/exam_bridge.py`)
 
-Implemented in `cam_grading_workspace/exam_engine.py`, exposed through the Flask
-`/api/exam/*` routes. It turns a folder of scanned student exam files into
-per-question crop images so one question can be graded across the whole class.
+Scanned exams are graded in CAM2 Exam Grading, vendored unmodified at
+`exam_grading/` (§1). CAM2 has its own small Flask server (`launcher.py`, single
+instance, port from 5182, stops itself when idle) and does everything about the
+paper: scans, booklets and page fixes, question boxes, name matching, grading
+(marks or rubric levels), choice groups, its safe saving, and its own student
+PDFs and Excel gradebook. CAM supplies the class list and reads the results. The
+convergence plan (`docs/CAM2_EXAM_CONVERGENCE_PLAN.md`) has the decisions
+(D1–D9) behind this split.
 
-**Lazy `fitz` import.** PDF pages are rasterised with PyMuPDF (`fitz`), but the
-module imports it lazily through `_fitz()` rather than at top level, so
-`exam_engine` — and therefore the whole Flask workspace that imports it at
-startup — still boots when PyMuPDF is absent. Only the two PDF paths
-(`page_count`, `load_page_image`) then fail, with a `RuntimeError` that names
-the fix (`pip install PyMuPDF`); image-only exams and every non-PDF feature
-(including Google Drive sign-in) are unaffected.
+**Opening an exam.** Window 1's **🛠 Exam setup / Grade** (`launch_exam_setup`)
+writes a `cam2-host` handoff (exam, class, session folder, roster as
+`external_id` + name; `exam_bridge.handoff`) into the local temp folder, never
+the cloud folder, and starts `exam_grading/launcher.py --host <handoff>`. CAM2
+opens the browser itself; a CAM2 that is already running is handed the exam.
+The session folder is `<class folder>/exams/<exam>/` (D6), so the scans travel
+with the class and the exam reopens on any computer that syncs it. CAM2 is not
+tied to CAM's lifetime (unlike the workspace, §1): closing CAM must not cut off
+a grading tab.
 
-**No Google account required.** Like local-master folder grading (§1), the
-entire exam path is local-first: definitions live in `gcg_exams.json` keyed by
-*class name* (not Drive ID), the source is a local folder of student
-PDFs/images (`scan_folder`/`preview` gate on `os.path.isdir`), crops go to
-`exam_crops/<class>/`, and `/api/exam/load` / `/api/exam/grade` / the CSV
-export never touch `googleapiclient`. Drive is purely optional — a teacher
-who stores papers on Drive syncs them to a local folder first. This is why a
-CAM class with a local-path (or unset) master directory can still launch Exam
-Setup and grade its exams through the CAM bridge, while assignment folder
-grading demands a Drive folder ID.
+**The session folder is the contract, and CAM only reads it.** When the teacher
+clicks *Grading finished — send to CAM*, CAM2 writes `host_ready_at` into
+`cam2_session.json`. `exam_bridge.read_session` reads `cam2_session.json` +
+`grades.json` and works out every total, counted answer and final level with
+CAM2's own `grading_summary` (loaded as `cam2_engine`), so CAM's numbers always
+match CAM2's (round half up, best N, teacher picks). `route_session` files each
+paper by `external_id`, then alias / unambiguous prefix, else the 🧩 pool
+(DATA_DICTIONARY C.6).
+`_sync_cam2_sessions` runs from the global Sync and from `sync_exam`; it reads a
+session only once it has been sent, and again only when its two files change
+(the fingerprint is kept in `ingested_files`). Re-reading is purge-replace for
+the exam's results; grades already applied in Window 1 are kept.
 
-**Slicing is a background job (since PDF/local-mode plan Phase 6).**
-`POST /api/exam/process` validates the folder, saves the config, then hands the
-slicing to a daemon `threading.Thread` (`_run_exam_job` → `process_exam(...,
-progress=…)`) and returns a `job_id` immediately — so a large stack can no
-longer block the request thread into a browser gateway timeout. The front end
-polls `GET /api/exam/status/<job_id>`, which reports `state`
-(`running`/`done`/`error`), a `done`/`total` student counter, and the final
-`result` summary. Jobs live in the in-memory `EXAM_JOBS` registry (guarded by
-`EXAM_JOBS_LOCK`, independent of `STATE_LOCK` because slicing only touches the
-filesystem, never `STATE`); they are not persisted, so a restart forgets them.
-The exam *definition* JSON store's own `threading.Lock` (in `exam_engine.py`) is
-a separate mechanism, as is the **background autosave cache** (`write_cache()` →
-`grading_cache.json`) that mirrors marking state on every edit.
+**Picking up a send.** Sync runs at session start. While CAM is open,
+`_cam2_send_poller` (a `run_every=3` fragment) `os.stat`s the active class's
+`exams/*/cam2_session.json` files and, when one changes, runs `sync_exam` for the
+class, then repaints only if something was filed. This replaced CGW's export
+beacon for exams.
 
-### The grid coordinate system
+**Grading onto criteria (Window 1).** A marks exam is banded from its total onto
+one criterion (`_apply_exam_bands`, proportional suggestion, teacher's pick).
+A rubric exam maps each CAM2 rubric to a CAM criterion (defaulted from the
+rubric's name, remembered in `exam_sessions`), and each student's final level
+per rubric becomes that criterion's score (`_apply_exam_rubric_levels`); a
+rubric whose top level is not 8 is scaled to 0–8. A paper not finished in CAM2
+(`complete` false) is held back from both. Per-exam CAM2 state (folder, mode,
+rubrics, rubric → criterion map, paper ids) lives in the persisted
+`exam_sessions` map (DATA_DICTIONARY C.8), not on `Assignment`, so an older CAM
+still loads the database. Window 2's 🧩 tiles and Window 1's name-crop check use
+the session's `crops/__name__/<paper id>.png`.
 
-A teacher programs an exam once (`/exam_setup`): each question is a label
-(`"Q1"`), a grid range (`"page2!A2:C5"`) and a max score. The grid is a
-paper-size-dependent lattice laid over the physical page. Since the exam-slicer
-v2 plan it comes at **three densities**, stored per exam under the config's
-`"grid"` key (`grid_of()` normalises it; an absent/garbage key means `legacy`):
+**Deleting.** Permanent delete moves the session folder to
+`exams/_deleted/<YYYYMMDD-HHMMSS> <exam>/` (`exam_bridge.retire_session`) and
+forgets its `exam_sessions` entry and 🧩 pool. Removing it for good is the
+teacher's own step. Class-folder CSV walks skip `exams/` (`_walk_class`).
 
-| Paper | Physical (mm) | legacy ~2 cm | compact ~1.4 cm | fine ~1 cm |
-|-------|---------------|--------------|-----------------|------------|
-| A4    | 210 × 297     | 10 × 15      | 15 × 21         | 21 × 30    |
-| B5    | 176 × 250     | 9 × 12       | 13 × 18         | 18 × 25    |
-| A3    | 297 × 420     | 15 × 21      | 21 × 30         | 30 × 42    |
-
-`legacy` is the original grid and the **backward-compat default**: every exam
-saved before densities existed has no `"grid"` key, resolves to `legacy`, and
-slices to pixel-identical crops (`grid_for(paper, grid)` returns the legacy
-tuple for it). New exams default to `compact`; the Setup UI offers only
-`compact`/`fine`, revealing a load-only `legacy` state when an old exam is
-opened. Columns are Excel-style (`col_name`/`col_index`: A…Z, AA, AB, …) so the
-30-column fine A3 grid reaches column AD.
-
-Because a range describes a rectangle of *paper*, it is independent of scan
-resolution. `parse_range(raw, paper, grid)` validates the cell against the
-chosen paper size **and density** and raises a clear `ValueError` on anything
-out of bounds. The geometry table lives in `PAPER_GRIDS` (`exam_engine.py`, the
-source of truth) and is mirrored verbatim in the `EXAM_SETUP_PAGE` JS.
-
-### Auto-DPI
-
-Scans arrive at unknown resolutions, so the pixel size of one grid cell is
-derived **per file, per axis**:
-
-```
-dpi   = pixel_span / (paper_mm / 25.4)
-cell  = (paper_mm / grid_count) / 25.4 * dpi
-```
-
-`range_to_bbox()` computes `dpi_x` and `dpi_y` independently from the image's
-actual pixel width/height, so a slightly stretched scan still lands on the right
-region. The resulting bounding box is clamped to the image bounds.
-
-### Rasterisation vs. cropping — which library does what
-
-- **PyMuPDF (`fitz`, `>=1.24`)** rasterises PDF pages at a fixed `RENDER_DPI = 200`
-  (`load_page_image()` → `doc[…].get_pixmap(dpi=RENDER_DPI)`). Render DPI only
-  affects quality; crop geometry comes from the auto-DPI formula above.
-- **Pillow (`>=10.0`)** owns the image side: single-image exam pages are opened
-  directly with `Image.open(...).convert("RGB")`, crops are taken with
-  `img.crop(box)`, and browser previews are downscaled with `Image.LANCZOS`.
-
-Crops are written to
-`<output_root>/<Exam Name>/<Q label>/<Student>.png`. The filename **stem is the
-student identity** (one file per student, named after the student). Per-crop
-failures are collected into `summary["errors"]` so one bad file doesn't abort
-the whole class.
-
-**Display-only real names.** The filename stem is the storage key *everywhere* —
-crop paths, the grades file, the export `csv_key`. Real names are a separate,
-display-only layer: the exam config carries a `student_names` map
-(`{stem → real name}`), edited in Exam Setup's **Students** panel. `/api/exam/load`
-returns `name = student_names.get(stem, stem)` (still blanked under anonymous
-grading) and the CSV export writes the mapped name into `Student Name`, but the
-stem never moves — so renaming a student never disturbs a crop or a mark. Naming
-at the source means the exported CSV arrives roster-matchable; CAM's 🧩 matcher
-(§10) is the safety net for anything left unmatched. A **booklet-scan consistency
-guard** flags the common shifted-crop hazard: `/api/exam/scan_folder` returns
-per-file page counts, the Students panel flags outliers against the class
-majority, and `process_exam` appends a `warnings` list beside `errors`.
-
-**Name-crop resolution is cloud-root-first.** The optional name box slices to the
-reserved `<output_root>/<Exam>/__name__/<Student>.png`. CAM reads these back for
-the Window-2 matcher tile and the analytics preview via `exam_name_crop_path` /
-`exam_has_name_crops`, which resolve the **cloud class root first, then the legacy
-app-local root** — mirroring the exam-crop dual-root read (§7) so crops sliced
-before a class moved to the cloud still serve.
-
-Exam definitions persist to `gcg_exams.json` (keyed by class name); exam grades
-persist to `exam_grades_<exam>.json` in the class output directory. Both writes
-are atomic (`.tmp` + `os.replace`).
+**Exams from before CAM2 (D5).** The workspace's own exam slicer (`exam_engine.py`,
+`/api/exam/*`, Exam Setup, exam mode, item-level CSV export) was removed in
+Stage 4. Its records still load and save unchanged: `ExamResult.chosen` /
+`section_bands` and `Assignment.sections` are kept but no longer read or
+written, and such an exam is banded from its stored total like any marks exam.
+An old exam CSV (`Total Score` column, `is_exam_csv`) left in a class folder is
+skipped by Sync and refused by **Upload & stage files**, so it can neither come
+back as an exam nor be misread as a grading CSV. A 🧩 row it left in a pool can
+still be matched (`materialize_exam_row` rebuilds the result from its marks).
 
 ---
 
@@ -781,8 +709,9 @@ works without them.
 
 **Flask workspace (`cam_grading_workspace/requirements.txt`):** `Flask>=3.0`,
 `google-api-python-client>=2.100`, `google-auth>=2.30`,
-`google-auth-oauthlib>=1.2`, plus Exam Slicing's `Pillow>=10.0` and
-`PyMuPDF>=1.24`.
+`google-auth-oauthlib>=1.2`, plus `Pillow>=10.0` and `PyMuPDF>=1.24` for
+thumbnails and PDF pages. CAM2 (`exam_grading/requirements.txt`) needs the same
+Flask, Pillow and PyMuPDF, plus `openpyxl` for its Excel gradebook.
 
 **Backend engine:** standard library only (`csv`, `json`, `datetime`,
 `dataclasses`) plus `python-docx` for unit-plan parsing.
@@ -799,8 +728,7 @@ works without them.
 | `acm_database.json.conflict-recovery-*.json` | Streamlit | Verified standalone copy of a stale session or cloud-sibling-blocked save plus non-student recovery provenance; never auto-merged. |
 | `grading_cache.json` | Flask | Multi-folder marking mirror (see DATA_DICTIONARY). |
 | `grades_<folderId>.json` | Flask | Per-assignment full `STATE` snapshot. |
-| `gcg_exams.json` | Flask/exam_engine | Exam definitions, keyed by class. |
-| `exam_grades_<exam>.json` | Flask/exam_engine | Per-exam question scores. |
+| `<class>/exams/<exam>/` | CAM2 writes, Streamlit reads | One CAM2 exam session (`cam2_session.json`, `grades.json`, scans, crops, `reports/`); `_deleted/` holds permanently deleted exams (§4). |
 | `cam_grades_<folderId>.json` | Streamlit writes, Flask consumes | CAM's current grades for one folder-backed assignment, published at handoff into `[db folder]/[class]/`; deleted by the workspace once merged (§8). |
 | `token.json`, `client_secret_*.json` | Flask | Google OAuth material (read by Streamlit for Drive listing). `find_client_secret()` also probes `<cloud_dir>` after the app root; `token.json` may be opt-in seeded from `<cloud_dir>` (Phase 5). |
 | `gcg_settings.json` | Flask; `cloud_dir` + class map are **CAM-managed** (seeded by the launch bridge via `POST /api/config`, read-only in the workspace). `my_identities` is workspace-owned and editable in Settings. | Cloud-sync dir + class → Drive-folder-ID map + the teacher's own identities. Mirrored into `<cloud_dir>` so identities heal across machines (Phase 5). |
@@ -829,8 +757,8 @@ that keep them from corrupting the timeline.
    which writes `cam_grades_<folderId>.json` into `[db folder]/[class]/`:
    CAM's current per-student, per-criterion 0–8 bands + comments for the
    target assignment, keyed by the email-derived student id. Skipped when no
-   custom database path is set (no `cloud_dir` routing → no round-trip) and
-   for exam targets. A write failure **cancels the launch** — a session blind
+   custom database path is set (no `cloud_dir` routing → no round-trip). A
+   write failure **cancels the launch** — a session blind
    to CAM's edits would clobber them on export. **Alias reverse-map (Phase 3):**
    a student whose scores arrived through a `work_aliases` match is graded in
    CAM under the roster id, but CGW knows that work only by its anonymous
@@ -893,24 +821,6 @@ itself, and `api_export` reads `STATE` directly, so the exported CSV's
 still keys on them and the export is byte-identical whether the toggle is on or
 off. Anonymity is bias-reduction, not blind review: the `key` still embeds the
 real id and the "↗ open" link still serves the real file.
-
-**Exam mode uses the same toggle but a YouMark-style presentation
-(Exam Grading Polish plan Phase 5, decision D6).** Assignments carry *one* seeded order for
-their whole payload; an exam is graded question-by-question, so a single stable
-order would let prejudice about "student 3" accumulate across questions. Instead
-the server side is minimal — when the toggle is on, `/api/exam/load` blanks every
-display `name` (`name: ""`) and sets `anonymous: true`, leaving `key` (the real
-stem) and `EXAM_STATE` untouched, so grading, crop serving and the CSV export
-stay real exactly as above. The **client** owns the order: a deterministic
-mulberry32 PRNG (`examSeededShuffle`) re-shuffles the roster with
-seed `class|exam|CURRENT_Q` and numbers papers by **position** — `01`, `02`, … —
-via one shared `examView()` that both the roster cards and the sheet rows iterate
-(so the two screens never disagree). The seed changes with the question, so the
-order is stable on reload but different for every question and the same student
-gets a different number each time — a progress counter, never an identity.
-Toggling the pref reloads an open exam just as it reloads an open assignment. Same
-residue caveat: the real `key` still rides the DOM/network and handwriting can
-identify a student.
 
 ### "Awaiting Grade" — a two-state rule on folder-backed work
 
@@ -982,8 +892,8 @@ most recent synced CSV, **every submitted row is graded**: a row counts as
 *submitted* when its **File Count** cell is an int > 0 (falling back to a
 non-empty **Files (newest first)** cell, and — for a legacy CSV lacking both
 columns — treating every row as submitted), and *graded* when it has at least
-one non-blank cell among the `Grade*` columns. Exam CSVs (`is_exam_csv`) are
-skipped; they never gate this pill. A later export that adds a new ungraded
+one non-blank cell among the `Grade*` columns. Old CGW exam CSVs
+(`is_exam_csv`) are skipped; they never gate this pill. A later export that adds a new ungraded
 submission flips the flag back to `False` on the next Sync, so the pill returns
 (self-correcting).
 
@@ -1019,22 +929,16 @@ above.)
    skipped and re-syncs are idempotent.
 3. **Ingest.** `_ingest_cloud_file()` cleans the filename to an assignment name
    (rebinding a filesystem-mangled name back to its existing row — see the
-   filesystem-character invariant below), routes exam CSVs (a `Total Score`
-   column) to the exam pipeline and everything else to
+   filesystem-character invariant below), passes it to
    `IngestionPipeline.ingest_csv()`, then tags the new assignment with the active
    class + term. **Roster-aware routing (Phase 3):** when the class has a roster,
    it hands `ingest_csv` the roster keys + the durable `work_aliases` map so an
    unmatched `Student Name` cell is **pooled** (`unmatched_works`) rather than
    minting a phantom student; a fast-path prefix match is auto-recorded as an
-   alias and announced on the sync banner. **Since the exam-identity plan Phase 4
-   the exam branch routes the same way:** `ingest_exam_csv` takes the identical
-   routing inputs and resolves each row through the shared pipeline, attaching a
-   matched `ExamResult` to the roster student and pooling an unmatched row as an
-   *exam-flavoured* pool entry (`is_exam` + its `questions`/`total`/`max_total`/
-   `comment`) — so the old "Exam CSVs never route" phantom-per-stem behaviour is
-   gone (a roster ingest also sweeps the stale phantoms earlier unrouted ingests
-   minted). No roster ⇒ today's rosterless behaviour, unchanged. See §10 and
-   DATA_DICTIONARY C.6.
+   alias and announced on the sync banner. No roster ⇒ today's rosterless
+   behaviour, unchanged. See §10 and DATA_DICTIONARY C.6. An old CGW exam CSV
+   (a `Total Score` column, `is_exam_csv`) is skipped before this step; exams
+   come from CAM2 sessions (§4).
 
 ### Invariant: one assignment, one CSV — Sync refuses contradictory sources
 

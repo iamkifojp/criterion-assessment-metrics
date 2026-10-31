@@ -59,21 +59,21 @@ CAM lays the whole job out in three windows, read left to right in the order you
 
 ## Grade an exam
 
-1. In Window 1, create the item with **➕ Add assignment / exam** and mark it as an **Exam**, then click its **🛠 Exam setup** button to open the grading workspace.
-2. Point the folder field at your scanned PDFs, frame each question against the on-page grid, and type each question's **Max mark**. Add a **Name box** over where students write their name — it pays off later.
-3. Click **💾 Save Setup**, then **⚙ Process All PDFs**: every script is sliced into one answer image per question.
-4. Grade one question at a time across the whole class. Tick keyword pills for stock feedback and add comments where they help — totals are hidden on purpose, so you mark the answer in front of you, not a running score.
-5. Click **Export CSV**. CAM ingests it automatically, and Window 1's **📝 Exam grading** panel turns each raw total into the 0–8 criterion grade — CAM suggests, you decide.
+1. In Window 1, create the item with **➕ Add assignment / exam** and mark it as an **Exam**, then click it and choose **🛠 Exam setup / Grade**. CAM2 Exam Grading opens with your class list already in it.
+2. Bring in the scans (one PDF of the whole class from the photocopier is fine), draw a box around each answer on the first paper, and choose **Marks** or **Rubric**.
+3. Match each paper to a student, then grade one question at a time across the class, with quick comments where they help.
+4. In **Review & export**, check the totals and click **✓ Grading finished — send to CAM**. You can also make the student PDF reports there.
+5. A few seconds later the exam appears in Window 1's **📝 Exam grading** panel: CAM suggests a 0–8 grade from each total (or shows the rubric levels), you decide, then **Apply grades to gradebook**.
 
-![Scans are sliced into questions, graded, exported, and synced back to CAM](quick_guide_images/grade-exam.svg)
+![Scans are cut into questions, graded in CAM2 and sent back to CAM](quick_guide_images/grade-exam.svg)
 
 ### Good to know
 
-- A crop cutting off an answer isn't a disaster: click the ✎ beside that question, widen its box, and **⚙ Re-slice this question** — every mark you've already entered stays put.
-- **Anonymous grading** (in the workspace settings) hides names and shows papers by position, re-shuffled for every question, so no impression of any one student builds up.
-- If you framed a name box, naming the students at setup means the exported CSV arrives already matched to your roster.
+- A box in the wrong place isn't a disaster: **✎ Adjust this box** while grading fixes it and slices only that question again — every grade you've given stays put.
+- **Hide student names** and **Shuffle papers** (in the grading step) show papers as `01`, `02`, … in a new order for every question, so no impression of any one student builds up.
+- Changed a grade after sending? Click **Send again** in CAM2; grades you already applied in CAM are kept.
 
-> Scan every paper in the same page order. If CAM warns that one script has a different page count, re-scan it before grading — its crops would land on the wrong answers.
+> The exam, scans included, is saved in the class folder, so you can carry on grading on any computer that syncs it.
 
 ## Reports and exports
 

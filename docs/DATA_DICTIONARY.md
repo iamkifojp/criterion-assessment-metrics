@@ -101,107 +101,47 @@ this is the full fallback chain the request refers to:
 So a legacy file with no date column and no dated filenames still ingests
 cleanly — it simply lands at ingest time.
 
-### A.4 Exam-export CSVs are a different animal (do not confuse)
+### A.4 Exam results (`ExamResult`) and old exam CSVs
 
-A CSV is an **item-level exam export**, not a criterion grading file, when its
-header contains both `Total Score` and `Student Name`
-(`is_exam_csv`, `ingestion.py:373`). Shape:
+Exams are graded in CAM2 and read from its session folder
+(`<class folder>/exams/<exam>/`, ARCHITECTURE §4), not from a CSV. Each paper
+becomes one `ExamResult` on the student (`Student.exam_results[exam]`), kept off
+the 0–8 scale until the teacher bands or confirms it in Window 1. The base keys
+are `assignment`, `total`, `max_total`, `questions` (label → whole mark) and
+`comment`.
+
+**Old CGW exam CSVs (no longer imported, D5).** The old workspace exam grader
+exported an item-level CSV whose header has both `Total Score` and
+`Student Name` (`is_exam_csv`, `ingestion.py`):
 
 ```
 Student Name, Q1, Q2, …, Total Score, Max Total, Due Date, Comment
 ```
 
-`Total Score` is a **raw mark** (e.g. 37/45), *not* an MYP 0–8 band, so these
-files **must never flow through the criterion-score path.** Reserved (non-question)
-headers are: `student name, total score, max total, due date, comment,
-checked keywords, files (newest first), assessed date, file count`. Everything
-else is treated as a question-label column by `exam_question_columns`.
+Sync skips such a file (it is neither imported nor misread as a grading CSV),
+and **Upload & stage files** refuses it. Its `<csv>.meta.json` sidecar is
+ignored too. Results already ingested from these CSVs keep three fields that
+CAM still loads and saves unchanged but no longer reads or writes:
 
-### A.4.1 Exam definition config (`gcg_exams.json`) — grid density
+| Field | Shape | Meaning (old CGW exams only) |
+|---|---|---|
+| `Assignment.sections` | `[{"name", "required", "questions": [{"label", "max"}]}]` | Section structure from the sidecar; `required` an int for a "choose N" section. |
+| `ExamResult.chosen` | {section name: [label]} | Answers the teacher picked to count in an over-answered choice section. |
+| `ExamResult.section_bands` | {section name: 0–8} | Per-section strand levels from the old sectioned banding panel. |
 
-The item-level CSV above is produced from an **exam definition** that the CGW
-stores in `cam_grading_workspace/gcg_exams.json`, keyed by class then exam name
-(`{"classes": {"7A": {"Midterm": {<config>}}}}`, `ExamStore`,
-`exam_engine.py`). One config:
-
-```json
-{"name": "Midterm", "paper_size": "A4", "grid": "compact",
- "pdf_folder": "C:\\Scans\\7A", "name_box": "A1:E2",
- "sections": [{"name": "Section A", "required": null},
-              {"name": "Section B", "required": 2}],
- "questions": [{"label": "Q1", "range": "A1:C3", "max": 3,
-   "section": "Section A"}]}
-```
-
-| Key | Values | Notes |
-|-----|--------|-------|
-| `paper_size` | `A4` \| `A3` \| `B5` | Physical page; picks the `PAPER_SIZES_MM` geometry. |
-| `grid` | `legacy` \| `compact` \| `fine` | **Coordinate-grid density.** `legacy` ≈2 cm (A4 10×15, B5 9×12, A3 15×21) is the original grid; `compact` ≈1.4 cm (15×21 / 13×18 / 21×30) is the default for new exams; `fine` ≈1 cm (21×30 / 18×25 / 30×42). **Absent or unrecognised ⇒ `legacy`** — this is the backward-compat contract: every exam saved before densities existed parses and slices byte-identically. Full table in `PAPER_GRIDS` (`exam_engine.py`), mirrored in the `EXAM_SETUP_PAGE` JS. |
-| `name_box` | range string \| `null` | Optional handwritten-name region (Phase 4A). Validated like a `range`; `null`/absent ⇒ no name box. Sliced to the reserved `<exam>/__name__/<Student>.png` crop dir — never a gradable question (excluded from the grading sheet **and** the CSV). `save_exam` rejects a real question labelled `__name__` so nothing collides with the dir. |
-| `sections` | `[{"name", "required"}]` | Section grouping (Phase 4B). `save_exam` **guarantees ≥1** — a legacy config with no sections synthesizes one default `All Questions` section holding every question. Names must be unique and non-empty. `required` is `null` (all questions count) or an int with `1 ≤ required ≤` the section's question count (a *choice* section: the student answers N of them). Validated by `normalize_sections` (`exam_engine.py`). |
-| `range` | e.g. `A1:C3`, `page2!AA5:AD9` | Inclusive cell rectangle, validated against `paper_size` **and** `grid` by `parse_range`. Columns are Excel-style (`A…Z, AA…AD`); fine A3 reaches column AD. |
-| `max` | int | Per-question max score (`parse_max_score` coerces `"0-3"` → `3`). |
-| `section` | string | The `sections[].name` this question belongs to. Blank/unknown ⇒ the first section (e.g. a question dragged above the first header). |
-| `student_names` | `{stem → name}` | **Display-only** real-name map (exam-identity plan Phase 5), edited in Exam Setup's **Students** panel. The filename **stem stays the storage key everywhere** — crop paths, the grades file, the export `csv_key` — so these names are display + export only and never disturb a crop or a mark. `save_exam` cleans it (str→str, values trimmed, empties dropped); absent/malformed ⇒ `{}`. `/api/exam/load` returns `name = student_names.get(stem, stem)` (still blanked under anonymous grading); `/api/exam/export` writes the mapped name into `Student Name`. |
-
-The `grid` and `name_box` keys affect only *where* the crops are cut; they are
-**not** carried in the exported CSV (whose shape is unchanged, §A.4).
-`student_names` is display-only and only ever fills the existing `Student Name`
-column with a mapped name — it never adds or reshapes a column. Section
-structure **is** carried, out-of-band, in the definition sidecar (§A.4.2).
-
-### A.4.2 Exam definition sidecar (`<csv filename>.meta.json`)
-
-The flat item-level CSV (§A.4) cannot express sections, so every **routed** exam
-export (`api_exam_export`) writes a JSON sidecar beside the CSV, named
-`<csv filename>.meta.json`, **before** the CSV itself (so a sync that sees the
-CSV also sees the structure). Writing it is atomic (`.tmp` + `os.replace`) and
-strictly best-effort — a sidecar failure never fails or blocks the export, and
-CAM tolerates its absence (falls back to today's all-questions-sum behaviour).
-
-```json
-{"exam": "Midterm", "has_name_box": true, "grid": "compact", "paper_size": "A4",
- "sections": [{"name": "Section A", "required": null,
-   "questions": [{"label": "Q1", "max": 3}]},
-  {"name": "Section B", "required": 2,
-   "questions": [{"label": "Q5", "max": 8}, {"label": "Q6", "max": 8}]}]}
-```
-
-Built by `exam_engine.build_sidecar`; a legacy config with no `sections` synthesizes the
-single default section so CAM always sees ≥1. Download-only exports (`?download=1`,
-or no cloud dir) route nothing, so they write no sidecar.
-
-On ingest, CAM's `load_exam_sidecar` (`ingestion.py`) reads this file, attaches
-`sections` to the registered `Assignment` (persisted on the model as
-`Assignment.sections`) and recomputes each result's `max_total` via the resolved
-rule — a **choice** section's max is the sum of its
-`required` largest question maxes. An over-answered choice section (student
-answered more than `required`) stays `?` (excluded from the exam total) until the
-teacher resolves it in Window 3, which records the picked labels in
-`ExamResult.chosen`. Missing/corrupt sidecar ⇒ the pre-Phase-5 all-questions-sum
-behaviour, no error.
-
-**`ExamResult.section_bands`** (exam-identity plan Phase 6) is a
-`{section name → 0–8 level}` map beside `chosen`, holding the teacher's per-strand
-level for the Window-1 banding panel (the digital cover sheet). The app only
-*suggests* — a section level defaults to `round(subtotal / section_max * 8)` and
-the final grade to the rounded mean of the section levels — but every level and
-the final grade is a teacher-set dropdown. Only the **final** grade enters the
-gradebook (one `CriterionScore`); `section_bands` is saved alongside it and folded
-into the score note (`… · sections: Knowing 7, Applying 7, Interpreting 5`), and
-Window 3 appends `· level N` to each section's subtotal. Serialized/deserialized
-exactly like `chosen` (absent ⇒ `{}`, round-tripped) and carried forward across
-re-ingest so a routed re-sync or a Window-2 match keeps the teacher's levels.
+Such an exam is banded from its stored `total` / `max_total` like any marks
+exam. A 🧩 row an old CSV left in a pool (C.6) carries `questions` / `total` /
+`max_total` / `comment` and can still be matched.
 
 **CAM2 session fields** (CAM2 convergence plan, Stage 2). An `ExamResult` read
 from a CAM2 session by `engine/exam_bridge.py` carries these extra keys. Each is
-optional and written **only when set**, so a CGW-era record saves exactly as
+optional and written **only when set**, so an old CGW record saves exactly as
 before; `questions` keeps its old shape (label → whole mark), so an older CAM
 still loads the file (it would drop these keys on its next save).
 
 | Key | Shape | Meaning |
 |---|---|---|
-| `mode` | `"marks"` \| `"rubric"` | CAM2 grading mode (absent = CGW CSV). |
+| `mode` | `"marks"` \| `"rubric"` | CAM2 grading mode (absent = an old CGW exam). |
 | `session_id` | str | The CAM2 session the result was read from. |
 | `not_answered` | [label] | Questions marked *Not answered* (count as 0; not in `questions`). |
 | `counted` | [label] | Questions that count after CAM2's choice groups (best N or teacher picks). |
@@ -233,8 +173,8 @@ submitted row is graded**.
 - A submitted row is **graded** when at least one cell is non-blank among the
   columns whose header **starts with `Grade`** (so `Grade`, `Grade (Crit A)`,
   … all count; a `0` is non-blank and counts as graded).
-- **Exam CSVs** (`is_exam_csv`, A.4) are skipped entirely — they never gate the
-  pill.
+- **Old exam CSVs** (`is_exam_csv`, A.4) are skipped entirely — they never
+  gate the pill.
 
 Because a blank `Grade` cell on a submitted row is what ingestion drops to
 `None` and skips, this pass is how CAM recovers the "submitted but not yet
@@ -519,59 +459,37 @@ CAM and CGW must agree on this slug or the handoff file is never found.
 
 Written by CGW's `_write_export_beacon()` (`cam_grading_workspace/app.py`) into
 the **root of the cloud dir** (`SETTINGS["cloud_dir"]` — the same folder CAM's
-sync scans) on **every routed export**: both grading exports (`api_export`) and
-exam exports (`api_exam_export`), in the branch that writes the CSV into the
-class subfolder. Download-only exports (`?download=1`, or no cloud dir) route
+sync scans) on **every routed grading export** (`api_export`), in the branch
+that writes the CSV into the class subfolder. Download-only exports (`?download=1`, or no cloud dir) route
 nothing and write no beacon. Write is atomic (`.tmp` + `os.replace`) and
 strictly best-effort — a write failure is logged to stdout and never fails the
 teacher's export.
 
 CAM's `_export_beacon_poller()` (`app.py`, an `@st.fragment(run_every=3)`)
 `os.stat`s this file every few seconds; on an mtime change it reads the JSON and
-runs a **scoped** sync of just the named class/assignment (`sync_assignment` for
-grading, `sync_exam` for exams) so a fresh export surfaces in Windows 1/2 within
-seconds without the teacher clicking anything. The file lives in the data folder
+runs a **scoped** sync of just the named class/assignment (`sync_assignment`)
+so a fresh export surfaces in Windows 1/2 within seconds without the teacher
+clicking anything. (A CAM2 exam is picked up the same way by
+`_cam2_send_poller`, which watches the session's `cam2_session.json` instead;
+ARCHITECTURE §4.) The file lives in the data folder
 (outside git); registry/scans only look at `*.csv`, so it is never mistaken for
 a gradebook file.
 
 ```jsonc
 {
   "class_name": "Year 7 1-4 (2026-27)", // CAM/CGW class name
-  "assignment": "Final Exam",           // assignment OR exam display name
-  "is_exam":    true,                   // routes CAM to sync_exam vs sync_assignment
-  "csv_path":   "…/Final Exam_Grades_2026-06-01.csv",  // the CSV just written
+  "assignment": "Painting",             // assignment display name
+  "csv_path":   "…/Painting_Grades_2026-06-01.csv",  // the CSV just written
   "ts":         1720000000.0            // POSIX write time (float, advisory)
 }
 ```
 
 - A single beacon file is **rewritten** each export (not appended); the poller
   keys off its mtime, not its contents, for the cheap steady-state check.
-- `ts` and `csv_path` are advisory (diagnostics); CAM acts on `class_name`,
-  `assignment` and `is_exam`. A torn/half-written read is skipped and retried on
-  the next tick.
-
-### B.7.1 `cam_exam_resliced` — mid-grading re-slice refresh signal (browser)
-
-Not a file — a transient **`localStorage`** key CGW uses to refresh exam crops
-across its own browser tabs after a single-question re-slice (Phase 6 of the exam
-slicer plan). When the teacher adjusts a question's region in Exam Setup's focus
-mode and runs **⚙ Re-slice this question**, `POST /api/exam/process_one`
-re-crops only that label (via `exam_engine.process_exam(labels=[label])`); on
-completion the setup tab writes:
-
-```jsonc
-{
-  "class": "Year 7 1-4 (2026-27)", // CGW class name
-  "exam":  "Term 2 Midterm",        // exam display name
-  "label": "Q1",                    // the question just re-sliced
-  "ts":    1720000000000            // Date.now() — also the crop cache-buster
-}
-```
-
-The grading tab (same origin) hears the `storage` event, and — if it has that
-exam open — sets `EXAM_CROP_BUST = ts` so every `/api/exam/crop` URL gains a
-`&t=<ts>` and re-renders the roster with the new framing. It carries no gradebook
-data, is never read from disk, and is ignored when the open exam doesn't match.
+- `ts` and `csv_path` are advisory (diagnostics); CAM acts on `class_name` and
+  `assignment`. A beacon with `"is_exam": true` can only come from an older CGW
+  (its exam exports) and is ignored. A torn/half-written read is skipped and
+  retried on the next tick.
 
 ### B.8 Schema versioning & migration
 
@@ -775,17 +693,14 @@ layer** applied over **purge-replace** ingest.
   grade-less row minted no student before either). `materialize_row()` /
   `assign_work()` drain a row out of the pool into a real score under the roster
   id; the recorded alias then routes that csv_key automatically on the next sync.
-- **Exam-flavoured pool rows** (exam-identity plan Phase 4). An unmatched
-  **exam** row (A.4) pools in the same `unmatched_works[class][exam]` list but
-  carries an `is_exam: true` flag plus the raw exam fields a match needs to
-  materialize an `ExamResult` — `questions` (`{label → mark}`), `total`,
-  `max_total` and `comment` — alongside the shared `csv_key`. The Window-2 🧩
-  matcher renders these with the script's handwritten name-box crop (fallback:
-  first-question crop, then a filename tile) captioned with the raw total
-  (`31/45`); `materialize_exam_row` / `assign_work` drain the row into an
-  `ExamResult` under the roster id (preserving any prior `chosen` picks) and
-  record the durable alias, so a re-sync routes it silently. Plain JSON, so the
-  extra fields ride the existing session persistence unchanged.
+- **Old CGW exam pool rows.** An unmatched row from an old exam CSV (A.4) sits
+  in the same `unmatched_works[class][exam]` list with `is_exam: true` plus
+  `questions` (`{label → mark}`), `total`, `max_total` and `comment` beside the
+  shared `csv_key`. No new ones are made (those CSVs are no longer imported),
+  but one left in a pool can still be matched: `materialize_exam_row` /
+  `assign_work` rebuild the `ExamResult` from those fields under the roster id
+  and record the alias. Its 🧩 tile has no picture, only the caption
+  (`scan_0007 · 31/45`).
 - **CAM2 pool rows** (convergence Stage 3). A paper read from a CAM2 session
   that matches no roster student pools with `is_exam: true`, the shared
   `csv_key` (the paper's class-list, typed or scan name), the whole result under
