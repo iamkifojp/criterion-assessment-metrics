@@ -302,6 +302,13 @@ class PageFixTests(PagesTestCase):
         self.assertEqual(ctx.exception.code, "pages_locked_graded")
         self.edit(0, 1, "turn")                   # student 1 alone is fine
 
+    def test_rubric_graded_papers_are_not_changed(self):
+        self.stack(make_pages_pdf(self.path("whole.pdf"), 2, 2))
+        self.grades["grades"] = {self.config["students"][1]["id"]: {"q1": {"levels": {"r1": 6}}}}
+        with self.assertRaises(UserError) as ctx:
+            self.edit(0, 2, "later")
+        self.assertEqual(ctx.exception.code, "pages_locked_graded")
+
     def test_folder_picture_becomes_a_pdf_when_fixed(self):
         folder = self.path("one per student")
         os.makedirs(folder)

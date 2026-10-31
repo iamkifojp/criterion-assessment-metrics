@@ -8,6 +8,9 @@
 
 Usage:  python launcher.py [--port 5182] [--no-browser] [--idle 600] [--host handoff.json]
 
+``--pick`` is only for the packaged app opening its own Windows file dialog
+(see ``engine/pickers.py``).
+
 ``--host`` is for another app (CAM) opening one of its exams in CAM2; see
 ``engine/host.py``. A CAM2 that is already running is handed the exam.
 """
@@ -28,16 +31,38 @@ from werkzeug.serving import make_server
 
 from app import create_app
 from appstate import AppState
-from engine import host, storage
+from engine import host, pickers, storage
 from engine.errors import UserError
 
 DEFAULT_PORT = 5182
 IDLE_SECONDS = 10 * 60
+CHECK_SECONDS = 30
 SERVER_FILE = "server.json"
 
 
 def _server_file() -> str:
     return os.path.join(storage.app_data_dir(), SERVER_FILE)
+
+
+def watch_idle(state: AppState, idle: int, shutdown, clock=time.monotonic, sleep=time.sleep) -> None:
+    """Stop once no CAM2 tab has sent a heartbeat for ``idle`` seconds.
+
+    A check that comes far later than planned means the computer was asleep
+    (Windows' clock keeps counting through sleep). Open tabs have had no chance
+    to send a heartbeat yet, so the wait starts again rather than stopping
+    CAM2 under a teacher who has just opened the lid.
+    """
+    last_check = clock()
+    while True:
+        sleep(CHECK_SECONDS)
+        now = clock()
+        if now - last_check > 3 * CHECK_SECONDS:
+            state.last_heartbeat = now
+        last_check = now
+        if now - state.last_heartbeat > idle:
+            print("No CAM2 tab open for a while; stopping.")
+            shutdown()
+            return
 
 
 def running_instance() -> str | None:
@@ -128,14 +153,7 @@ def main(argv=None) -> int:
         json.dump({"port": port, "pid": os.getpid()}, fh)
 
     if args.idle > 0:
-        def watchdog():
-            while True:
-                time.sleep(30)
-                if time.monotonic() - state.last_heartbeat > args.idle:
-                    print("No CAM2 tab open for a while; stopping.")
-                    shutdown()
-                    return
-        threading.Thread(target=watchdog, daemon=True).start()
+        threading.Thread(target=watch_idle, args=(state, args.idle, shutdown), daemon=True).start()
 
     if not args.no_browser:
         threading.Timer(0.6, webbrowser.open, args=(url,)).start()
@@ -154,4 +172,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == [pickers.PICK_FLAG]:      # packaged app: a Windows file dialog
+        raise SystemExit(pickers._main(sys.argv[2:]))
     raise SystemExit(main())

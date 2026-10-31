@@ -1,6 +1,9 @@
 // Talking to the CAM2 server. Every call returns parsed JSON or throws an
 // Error carrying the server's translated message, its code and whether it was
 // a save problem (which the app shows as a red banner, not a toast).
+import { t } from "./i18n.js";
+
+const OFFLINE = "CAM2 is not running. Start it again with “Start CAM2 Exam Grading”.";
 
 export async function api(path, { method = "GET", body, form } = {}) {
   const opts = { method, headers: {} };
@@ -14,7 +17,10 @@ export async function api(path, { method = "GET", body, form } = {}) {
   try {
     res = await fetch(path, opts);
   } catch (e) {
-    const err = new Error("CAM2 is not running. Start it again with “Start CAM2 Exam Grading”.");
+    // The server translates every other message, but it is gone: use the
+    // strings loaded at start (English if even those never arrived).
+    const text = t("error.offline");
+    const err = new Error(text === "error.offline" ? OFFLINE : text);
     err.code = "offline";
     throw err;
   }

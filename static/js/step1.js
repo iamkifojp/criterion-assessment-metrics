@@ -398,7 +398,9 @@ export function renderScanCheck() {
     h("span", { class: "thumb-name" }, s.display_name),
     h("span", { class: "muted small" }, t("step1.page_count", { pages: s.pages ?? "?" }))))),
     h("div", { class: "actions sticky" },
-      button(t("step1.choose_again"), chooseAgain, "ghost"),
+      c.students.some((s) => hasWork(s.id))
+        ? button(t("step1.choose_again"), null, "ghost", { disabled: true, title: t("step1.choose_again_locked") })
+        : button(t("step1.choose_again"), chooseAgain, "ghost"),
       button(t("step1.add_papers"), openAddPapers),
       button(t("step1.looks_right"), () => goTo(2, { next: true }), "primary big")));
 }

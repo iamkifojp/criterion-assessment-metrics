@@ -113,6 +113,10 @@ class ScanToolTests(AppTestCase):
         self.post("/api/grade", {"student_id": "s001", "question_id": "q1", "value": 4})
         data = self.post("/api/pages/edit", {"student": "s001", "page": 1, "action": "turn"}, status=400)
         self.assertEqual(data["error"], "pages_locked_graded")
+        # New papers restart at s001, so replacing would hand these grades to someone else.
+        data = self.post("/api/scans/replace", {"source": {"type": "folder", "path": self.scans}},
+                         status=400)
+        self.assertEqual(data["error"], "scans_locked_graded")
 
         late = os.path.join(self.root, "late")
         os.makedirs(late)

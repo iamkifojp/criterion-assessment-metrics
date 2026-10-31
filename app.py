@@ -307,6 +307,10 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
     @app.post("/api/scans/replace")
     def scans_replace():
         state.require_session()
+        # New papers are numbered from s001 again, so kept grades would land
+        # on whichever student is now first, second, ...
+        if workflow.class_has_work(state.grades):
+            raise UserError("scans_locked_graded")
         source = body().get("source") or {}
         workflow.check_source(source)
         return start_import(source)
@@ -511,7 +515,7 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
     @app.post("/api/setup/questions")
     def setup_questions():
         state.require_session()
-        workflow.set_questions(state.config, body())
+        workflow.set_questions(state.config, body(), state.grades)
         state.save_config()
         return ok()
 
