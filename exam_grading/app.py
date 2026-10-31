@@ -19,8 +19,8 @@ import threading
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
 from appstate import AppState
-from engine import (gradebook_xlsx, grading_summary, i18n, model, reports, rubrics, roster,
-                    slicer, storage, tables, workflow)
+from engine import (gradebook_xlsx, grading_summary, host, i18n, keywords, model, reports, roster,
+                    rubrics, slicer, storage, tables, workflow)
 from engine.errors import SaveError, UserError
 from engine.pickers import documents_folder, open_in_file_manager, pick_folder, pick_pdf
 from engine.slicer import Layout
@@ -68,7 +68,8 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
         grades = state.grades or {}
         return {
             "folder": state.session.folder,
-            "config": dict(config, students=students),
+            "config": dict(config, students=students,
+                           keywords=keywords.keyword_list(config, language())),
             "grid": {"cols": layout.cols, "rows": layout.rows},
             "grades": {"grades": grades.get("grades") or {}, "overall": grades.get("overall") or {}},
             "progress": grading_summary.progress(config, grades),
@@ -76,6 +77,24 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
             "saved_at": state.last_saved_at(),
             "save_failed": state.save_failed,
         }
+
+    def host_view() -> dict | None:
+        """The app that opened CAM2, and its one exam (None when used on its own)."""
+        if not state.host:
+            return None
+        folder = state.host["session_folder"]
+        return {"host": state.host["host"], "exam_name": state.host["exam_name"],
+                "class_name": state.host["class_name"], "session_folder": folder,
+                "session_exists": storage.is_session_folder(folder),
+                "roster_count": len(state.host["roster"])}
+
+    def adopt_host_session(save: bool = True) -> None:
+        """The host's own session uses the host's class list (papers are
+        matched again once scans come in)."""
+        if host.is_host_session(state.host, state.session.folder):
+            host.apply_roster(state.config, state.host)
+            if save:
+                state.save_config()
 
     def ok(**extra):
         return jsonify(dict({"ok": True, "session": session_view()}, **extra))
@@ -111,9 +130,29 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
     @app.post("/api/prefs")
     def set_prefs():
         data = body()
-        if "hide_names" in data:
-            storage.set_pref("hide_names", bool(data["hide_names"]))
+        for key in ("hide_names", "shuffle_papers"):
+            if key in data:
+                storage.set_pref(key, bool(data[key]))
         return jsonify({"ok": True})
+
+    @app.post("/api/host/handoff")
+    def host_handoff():
+        """A host (CAM) asks this running CAM2 to open one of its exams."""
+        state.host = host.normalize(body())
+        if state.session is not None and not host.is_host_session(state.host, state.session.folder):
+            try:
+                state.save_all()
+            finally:
+                state.close_session()
+        return jsonify({"ok": True})
+
+    @app.post("/api/host/ready")
+    def host_ready():
+        """Grading finished: the host may read the results (or not yet)."""
+        state.require_session()
+        host.set_ready(state.config, bool(body().get("ready")))
+        state.save_config()
+        return ok()
 
     @app.post("/api/heartbeat")
     def heartbeat():
@@ -131,7 +170,9 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
     def get_state():
         return jsonify({"language": language(), "version": VERSION,
                         "session": session_view(), "recent": storage.list_recent(),
-                        "prefs": {"hide_names": bool(storage.get_pref("hide_names", False))}})
+                        "host": host_view(),
+                        "prefs": {key: bool(storage.get_pref(key, False))
+                                  for key in ("hide_names", "shuffle_papers")}})
 
     # --- Pickers --------------------------------------------------------------------
 
@@ -183,6 +224,7 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
         session, config, grades = storage.open_session(folder)
         state.set_session(session, config, grades)
         storage.claim_lock(folder, force=True)
+        adopt_host_session()
         rescue = {}
         for kind, file in (("config", session.config_file), ("grades", session.grades_file)):
             newer = file.newer_emergency_copy()
@@ -231,12 +273,19 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
         chosen = str(data.get("save_folder") or "").strip().strip('"')
         if not chosen:
             raise UserError("save_folder_required")
-        folder = workflow.choose_session_folder(chosen, exam)
+        if host.is_host_session(state.host, chosen):
+            # The host reads this exact folder, so never a subfolder of it.
+            folder = os.path.abspath(chosen)
+            if os.path.isdir(folder) and os.listdir(folder):
+                raise UserError("host_folder_not_empty", folder=folder)
+        else:
+            folder = workflow.choose_session_folder(chosen, exam)
         session, config, grades = storage.create_session(folder, exam)
         config["layout"] = layout.to_config()
         state.set_session(session, config, grades)
         storage.claim_lock(folder, force=True)
         state.save_config()
+        adopt_host_session()
         return start_import(source)
 
     def start_import(source: dict):
@@ -248,6 +297,7 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
             with state.lock:
                 state.config = config
                 set_step(1)
+                adopt_host_session(save=False)
                 state.save_config()
             return {"students": len(config["students"])}
 
@@ -273,6 +323,7 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
             added = workflow.add_papers(session, config, source, job.progress)
             with state.lock:
                 state.config = config
+                adopt_host_session(save=False)
                 state.save_config()
             return {"added": added}
 
@@ -427,6 +478,14 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
         state.save_config()
         return ok()
 
+    @app.post("/api/setup/keywords")
+    def setup_keywords():
+        """The exam's quick-comment list: [{label, type: strength|growth}]."""
+        state.require_session()
+        keywords.set_list(state.config, body().get("keywords") or [])
+        state.save_config()
+        return ok()
+
     @app.post("/api/setup/rubrics/check")
     def check_rubric():
         """Validate one rubric card without saving (for inline messages)."""
@@ -470,6 +529,26 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
                 state.save_config()
             return summary
 
+        job = state.start_job("slice", work)
+        return ok(job=job.id)
+
+    @app.post("/api/slice-question")
+    def slice_one_question():
+        """Crop one question again for every paper, after its box was adjusted."""
+        session = state.require_session()
+        qid = str(body().get("question_id"))
+
+        def work(job):
+            config = dict(state.config)
+            config["crops_of"] = dict(config.get("crops_of") or {})
+            summary = workflow.slice_question(session, config, qid, job.progress)
+            with state.lock:
+                state.config = config
+                state.save_config()
+            return summary
+
+        if not workflow.crops_known(state.config):
+            raise UserError("not_sliced")
         job = state.start_job("slice", work)
         return ok(job=job.id)
 
@@ -526,6 +605,8 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
 
         Leave out "value" to change only the comment; "value": null clears it.
         "rubric_id" says which criterion of a question assessed on several.
+        "keywords" ticks exactly those quick comments and rebuilds the
+        comment's generated line.
         """
         state.require_session()
         data = body()
@@ -534,6 +615,9 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
             grading_summary.set_grade(state.config, state.grades, str(data.get("student_id")),
                                       str(data.get("question_id")), value, data.get("comment"),
                                       rubric_id=data.get("rubric_id") or None)
+            if "keywords" in data:
+                keywords.apply(state.config, state.grades, str(data.get("student_id")),
+                               str(data.get("question_id")), data.get("keywords") or [], language())
             state.save_grades()
             state.remember()
         return ok()
@@ -574,6 +658,19 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
             for rid, level in (data.get("final_levels") or {}).items():
                 grading_summary.set_final_level(state.config, state.grades, sid, rid,
                                                 None if level in ("", None) else level)
+            state.save_grades()
+        return ok()
+
+    @app.post("/api/choice")
+    def choice():
+        """The answers that count in a "teacher picks" choice group for one student."""
+        state.require_session()
+        data = body()
+        sid = str(data.get("student_id"))
+        workflow.find_student(state.config, sid)
+        with state.lock:
+            grading_summary.set_choice(state.config, state.grades, sid,
+                                       str(data.get("group_id")), data.get("questions"))
             state.save_grades()
         return ok()
 

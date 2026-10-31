@@ -155,7 +155,8 @@ def build_workbook(config: dict, grades: dict, language: str) -> Workbook:
     labels = {q["id"]: q["label"] for q in questions}
     for q in questions:
         g = groups.get(q["id"])
-        choice = (t("xlsx.choice_text", answer=g["answer"],
+        choice = (t("xlsx.choice_text" if grading_summary.group_pick(g) == grading_summary.PICK_BEST
+                    else "xlsx.choice_text_teacher", answer=g["answer"],
                     questions=", ".join(labels.get(x, x) for x in g["questions"])) if g else None)
         if mode == "rubric":
             third = ", ".join(rubric_names[rid] for rid in q_rids[q["id"]]) or None

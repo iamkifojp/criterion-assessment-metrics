@@ -1,11 +1,13 @@
 // Step 2C: draw the name box and each question's boxes on a student's page.
 // Boxes snap to whole grid cells (same rule as engine/slicer.snap_rect) and are
 // stored as ranges like "page2!A4:J10".
-import { post } from "./api.js";
+import { post, waitForJob } from "./api.js";
 import { t } from "./i18n.js";
+import { goTo } from "./main.js";
 import { nextSub } from "./step2.js";
 import { app, config, criteriaOf, handleError, render } from "./store.js";
-import { NAME_COLOR, QUESTION_COLORS, button, coach, confirmBox, debounce, formatTime, h, modal, toast } from "./ui.js";
+import { NAME_COLOR, QUESTION_COLORS, button, coach, confirmBox, debounce, formatTime, h, modal,
+  progressOverlay, toast } from "./ui.js";
 
 const PAPERS = ["A4", "B5", "A3"];
 const GRID = "5mm"; // engine/slicer.DENSITY
@@ -66,6 +68,14 @@ export function questionDraft() {
     app.draft.paperId = c.students[0]?.id;
     app.draft.addMode = false;
     app.draft.current = initialCurrent(app.draft.questions);
+    const adjust = app.draft.adjust;              // opened from grading: "Adjust this box"
+    const q = adjust && app.draft.questions.questions.find((x) => x.id === adjust.qid);
+    if (q) {
+      adjust.original = [...q.boxes];
+      app.draft.current = q.id;
+      app.draft.paperId = adjust.sid;
+      app.draft.page = (q.boxes[0] && parseRange(q.boxes[0])?.page) || 1;
+    }
   }
   return app.draft.questions;
 }
@@ -106,6 +116,50 @@ export const saveQuestions = debounce(async () => {
     else toast(err.message, "error");
   }
 }, 500);
+
+// --- Adjusting one box from grading ----------------------------------------------------------
+
+function backToGrading(adjust) {
+  goTo(4, { draft: { grading: { qid: adjust.qid, rid: adjust.rid, sid: adjust.sid, ungradedOnly: false,
+    zoom: 1, wholePage: false, page: 1 } } });
+}
+
+function adjustActions(d, item) {
+  const adjust = app.draft.adjust;
+  const save = async () => {
+    if (!item.boxes.length) { toast(t("step2.boxes.draw_first"), "error"); return; }
+    await saveQuestions.now();
+    let data;
+    try {
+      data = await post("/api/slice-question", { question_id: item.id });
+    } catch (err) {
+      await handleError(err);
+      return;
+    }
+    const overlay = progressOverlay(t("step2.adjust.working", { label: item.label }));
+    try {
+      const job = await waitForJob(data.job, overlay.update);
+      app.session = job.session;
+    } catch (err) {
+      await handleError(err);
+      return;
+    } finally {
+      overlay.close();
+    }
+    if (config().sliced) { backToGrading(adjust); return; }
+    toast(t("step2.adjust.others"), "error");
+    app.draft = { sub: "slice" };
+    render();
+  };
+  const cancel = async () => {
+    item.boxes = [...adjust.original];
+    await saveQuestions.now();
+    if (config().sliced) backToGrading(adjust);
+  };
+  return h("div", { class: "stack" },
+    button(t("step2.adjust.save", { label: item.label || "?" }), save, "primary"),
+    button(t("step2.adjust.cancel"), cancel, "ghost"));
+}
 
 function itemColor(id) {
   if (id === "name") return NAME_COLOR;
@@ -158,7 +212,7 @@ async function onBox(range) {
   let idx = -1;
   boxes.forEach((b, i) => { if (parseRange(b).page === drawn.page) idx = i; });
 
-  if (!app.draft.addMode && idx >= 0 && !overlaps(parseRange(boxes[idx]), drawn)) {
+  if (!app.draft.adjust && !app.draft.addMode && idx >= 0 && !overlaps(parseRange(boxes[idx]), drawn)) {
     const target = nextTarget(d, item.id);
     const nextLabel = target ? target.label : `Q${d.questions.length + 1}`;
     const answer = await askNewOrMove(item, nextLabel);
@@ -189,6 +243,7 @@ export function renderBoxes() {
   const d = questionDraft();
   const c = config();
   // "All done" drops the empty question being drawn; coming back, pick a real one.
+  if (app.draft.adjust) app.draft.current = app.draft.adjust.qid;
   if (!currentItem()) app.draft.current = initialCurrent(d);
   const grid = app.session.grid;
   const student = c.students.find((s) => s.id === app.draft.paperId) || c.students[0];
@@ -326,7 +381,9 @@ function sidePanel(d, c, drawingOn) {
   if (!item) return parts;
   const isName = item.id === "name";
 
-  if (isName) {
+  if (app.draft.adjust) {
+    parts.push(coach(t("step2.adjust.coach", { label: item.label || "?" })));
+  } else if (isName) {
     parts.push(coach(t("step2.boxes.coach_name")));
   } else if (app.draft.addMode) {
     parts.push(coach(t("step2.boxes.coach_add", { label: item.label || "?" })));
@@ -399,7 +456,8 @@ function sidePanel(d, c, drawingOn) {
         nextSub("boxes");
       }));
   }
-  parts.push(actions);
+  parts.push(app.draft.adjust ? adjustActions(d, item) : actions);
+  if (app.draft.adjust) return parts;
 
   // Everything so far
   parts.push(h("section", { class: "item-list" }, h("h3", {}, t("step2.boxes.so_far")),

@@ -13,7 +13,8 @@ export const app = {
   lockWarning: null,      // another computer's lock seen by the heartbeat
   version: "",
   draft: {},              // per-screen scratch state, keyed by screen
-  prefs: {},              // per-computer settings, e.g. { hide_names }
+  prefs: {},              // per-computer settings: { hide_names, shuffle_papers }
+  host: null,             // the app that opened CAM2 (CAM) and its exam, or null
 };
 
 let renderFn = () => {};

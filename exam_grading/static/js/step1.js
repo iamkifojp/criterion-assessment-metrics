@@ -14,6 +14,7 @@ function draft() {
     app.draft.newSession = { exam: "", src: newSource(), paper: null, landscape: false, detected: null,
       saveFolder: "", saveFolderChosen: false };
   }
+  if (!app.draft.newSession.src) app.draft.newSession.src = newSource();
   return app.draft.newSession;
 }
 
@@ -268,7 +269,7 @@ export function renderNewSession() {
   if (!d.saveFolder) loadDefaultFolder(d.exam);
 
   const examInput = h("input", { type: "text", id: "exam-name", class: "big-input", value: d.exam,
-    placeholder: t("step1.exam_placeholder"), maxlength: "80",
+    placeholder: t("step1.exam_placeholder"), maxlength: "80", readonly: d.fromHost ? "readonly" : null,
     oninput: (e) => { d.exam = e.target.value; loadDefaultFolder(d.exam); updateCreate(); } });
 
   // Paper size: a booklet's pages are half a scanned page, so the preview
@@ -308,10 +309,11 @@ export function renderNewSession() {
     h("section", { class: "form-step" }, h("h2", {}, h("span", { class: "num-badge" }, "3"), t("step1.paper")),
       h("p", { class: "muted" }, t("step1.paper_hint")), paperHolder),
     h("section", { class: "form-step" }, h("h2", {}, h("span", { class: "num-badge" }, "4"), t("step1.save_folder")),
-      h("p", { class: "muted" }, t("step1.save_folder_hint")),
-      h("p", { class: "muted small" }, t("step1.save_folder_cloud_note")),
+      h("p", { class: "muted" }, d.fromHost ? t("host.save_folder", { host: app.host?.host || "CAM" })
+        : t("step1.save_folder_hint")),
+      d.fromHost ? null : h("p", { class: "muted small" }, t("step1.save_folder_cloud_note")),
       h("div", { class: "chosen" }, h("strong", { id: "save-folder-path" }, d.saveFolder || "…")),
-      button(t("step1.choose_folder"), async () => {
+      d.fromHost ? null : button(t("step1.choose_folder"), async () => {
         const done = pickerWait();
         try {
           const res = await post("/api/pick", { kind: "save_folder" });

@@ -117,10 +117,58 @@ class MarksTests(unittest.TestCase):
         self.assertEqual(result["marks"]["total"], 14)
         self.assertEqual(set(result["counted"]), {"q1", "q3", "q2"})
 
+    def test_teacher_picks_which_answers_count(self):
+        group = [{"id": "g1", "questions": ["q2", "q3", "q4"], "answer": 2, "pick": "teacher"}]
+        config, grades = marks_exam(group)
+        gs.check_choice_groups(config)
+        for qid, v in (("q1", 5), ("q2", 3), ("q3", 9), ("q4", 6)):
+            gs.set_grade(config, grades, "s1", qid, v)
+        # Answered all three: nothing from the group counts until the teacher picks
+        result = gs.student_summary(config, grades, "s1")
+        self.assertEqual(result["pending"], ["g1"])
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["marks"]["total"], 5)
+        self.assertEqual(result["choices"]["g1"],
+                         {"answered": ["q2", "q3", "q4"], "chosen": [], "pending": True})
+        # A pick of fewer than N is kept but still waits
+        gs.set_choice(config, grades, "s1", "g1", ["q4"])
+        self.assertEqual(gs.student_summary(config, grades, "s1")["pending"], ["g1"])
+        # The teacher's pick counts even when it isn't the best two; stored in group order
+        gs.set_choice(config, grades, "s1", "g1", ["q4", "q2"])
+        self.assertEqual(grades["overall"]["s1"]["chosen"]["g1"], ["q2", "q4"])
+        result = gs.student_summary(config, grades, "s1")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["marks"]["total"], 14)          # 5 + 3 + 6
+        self.assertEqual(set(result["counted"]), {"q1", "q2", "q4"})
+        # A picked answer later marked Not answered no longer over-answers the group
+        gs.set_grade(config, grades, "s1", "q2", NA)
+        result = gs.student_summary(config, grades, "s1")
+        self.assertEqual(result["choices"], {})
+        self.assertEqual(result["marks"]["total"], 20)          # 5 + 9 + 6, as with best N
+        # Answering N or fewer never needs a pick
+        for qid, v in (("q1", 5), ("q2", NA), ("q3", 9), ("q4", NA)):
+            gs.set_grade(config, grades, "s2", qid, v)
+        result = gs.student_summary(config, grades, "s2")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["marks"]["total"], 14)
+
+    def test_bad_choice_picks(self):
+        group = [{"id": "g1", "questions": ["q2", "q3", "q4"], "answer": 2, "pick": "teacher"}]
+        config, grades = marks_exam(group)
+        for bad in (["q2", "q3", "q4"], ["q1"], ["q2", "q2"]):
+            with self.assertRaises(UserError, msg=bad):
+                gs.set_choice(config, grades, "s1", "g1", bad)
+        with self.assertRaises(UserError):
+            gs.set_choice(config, grades, "s1", "g9", ["q2"])
+        gs.set_choice(config, grades, "s1", "g1", ["q2"])
+        gs.set_choice(config, grades, "s1", "g1", None)
+        self.assertEqual(grades["overall"]["s1"]["chosen"], {})
+
     def test_bad_choice_groups(self):
         for group in ({"id": "g", "questions": ["q1"], "answer": 1},
                       {"id": "g", "questions": ["q1", "q2"], "answer": 2},
-                      {"id": "g", "questions": ["q1", "q9"], "answer": 1}):
+                      {"id": "g", "questions": ["q1", "q9"], "answer": 1},
+                      {"id": "g", "questions": ["q1", "q2"], "answer": 1, "pick": "first"}):
             config, _ = marks_exam([group])
             with self.assertRaises(UserError):
                 gs.check_choice_groups(config)
@@ -252,6 +300,21 @@ class MultiCriterionTests(unittest.TestCase):
         counted = gs.student_summary(config, grades, "s1")["counted"]
         self.assertIn("q2", counted)                           # 3 + 3 beats 5
         self.assertNotIn("q3", counted)
+
+    def test_teacher_picks_in_rubric_mode(self):
+        config, grades = multi_exam([{"id": "g1", "questions": ["q2", "q3"], "answer": 1,
+                                      "pick": "teacher"}])
+        gs.set_grade(config, grades, "s1", "q1", 4)
+        gs.set_grade(config, grades, "s1", "q2", 3, rubric_id="r2")
+        gs.set_grade(config, grades, "s1", "q2", 3, rubric_id="r3")
+        gs.set_grade(config, grades, "s1", "q3", 5)
+        result = gs.student_summary(config, grades, "s1")
+        self.assertEqual(result["pending"], ["g1"])
+        self.assertIsNone(result["rubrics"]["r3"]["average"])
+        gs.set_choice(config, grades, "s1", "g1", ["q3"])         # the teacher picks Q3
+        result = gs.student_summary(config, grades, "s1")
+        self.assertEqual(result["rubrics"]["r3"]["average"], 5.0)
+        self.assertIsNone(result["rubrics"]["r2"]["average"])
 
     def test_criteria_changed_after_grading(self):
         config, grades = multi_exam()

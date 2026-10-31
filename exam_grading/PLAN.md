@@ -111,7 +111,7 @@ The teacher **drags a rectangle** over the page, and it snaps to the grid cells.
    - **Forgot to press "next"?** If a box is drawn somewhere that doesn't overlap the current item's box on that page, CAM2 asks *"A new question, or move the box?"*. This was added after browser testing showed how easily a box got replaced by mistake.
    - **Question order:** the selected question in the *So far* list has **↑ ↓** buttons. A question missed and added later can be moved back into place. Grading, the review table, the student PDFs and the gradebook all follow this order. Grades are stored per question, not per position, so moving is safe at any time, even after grading, and does not need re-slicing. Labels that are all CAM2's own (`Q1`, `Q2`…) are renumbered to match; if any label was typed by the teacher, labels are left alone.
 
-**2D — Choice questions (optional).** *"Do students choose which questions to answer (e.g. answer 2 of 3)?"* The answer defaults to **No**. **Yes** lets the teacher tick the questions in the group and enter how many students must answer. Several groups are allowed.
+**2D — Choice questions (optional).** *"Do students choose which questions to answer (e.g. answer 2 of 3)?"* The answer defaults to **No**. **Yes** lets the teacher tick the questions in the group and enter how many students must answer. Several groups are allowed. Each group also says what happens when a student answers more than that: **Count the best N** (default) or **I choose which count**, which puts an amber **choose which count** button under that student's name in Step ⑤.
 
 **2E — Slice.** **Slice all papers →** shows a progress bar. Crops are saved into the session folder.
 
@@ -134,6 +134,7 @@ The teacher **drags a rectangle** over the page, and it snaps to the grid cells.
   - Progress, e.g. **18 / 24 graded**.
   - A **Show ungraded only** toggle, on by default when resuming.
   - A **Hide student names** toggle for anonymous grading, remembered on this computer. While it is on, each paper has a **👁 Show name** button that reveals only that paper's name; the name is hidden again on the next paper.
+  - A separate **Shuffle papers** toggle, also remembered: a different paper order for each question (stable when the question is reopened). With names hidden too, a paper's number is a different student on each question.
   - Navigation buttons say what they do (**◀ Previous question / Next question ▶**, **◀ Previous paper / Next paper ▶**), and the numbered strip is labelled **Papers**.
   - **💾 Save** with *"Saved ✓ 15:42"* beside it.
   - **Save & close session**, which returns to the start screen.
@@ -146,7 +147,7 @@ The teacher **drags a rectangle** over the page, and it snaps to the grid cells.
      - **Rubric mode:** one card per band showing its descriptor. Inside each card is a button for every level in that band; for example, the `5–6` card has `[5]` and `[6]`.
      - **A question on several criteria** is graded one criterion at a time: the question list has `Q2 · Criterion B` and `Q2 · Criterion C` as separate items, so the teacher grades B across the class and then C. Tabs at the top of the card switch criterion on the same paper and show each criterion's level. *Not answered* applies to every criterion of the question, and the comment is shared.
   2. **Not answered:** counts as 0, except in a choice group, where the question is left out (see §3).
-  3. **Comment (optional):** one text box.
+  3. **Comment (optional):** one text box, with **quick comments** above it: tick boxes for common feedback (*Strengths* and *Areas to develop*) that write one generated line at the top of the comment and keep the teacher's own text. **✎ Edit list** sets the exam's list.
 - **No keyboard shortcuts.**
 - **Moving on:** **Next paper →** sits under the comment box. After a grade,
   keyboard focus moves to it, but CAM2 doesn't move on by itself, so there's
@@ -188,7 +189,7 @@ The teacher **drags a rectangle** over the page, and it snaps to the grid cells.
 | Item | Rule |
 |---|---|
 | Marks: question score | A whole number from 0 to the question's maximum. *Not answered* = 0. |
-| Marks: choice group "answer N of M" | The best N scores count. The group's maximum is the sum of the N largest question maximums. A student who answers more than N gets the best N. |
+| Marks: choice group "answer N of M" | N scores count. The group's maximum is the sum of the N largest question maximums. A student who answers more than N gets the best N, or, when the choice is set to **I choose which count**, the N the teacher ticks in Step ⑤ (until then the choice counts nothing and the student is incomplete). |
 | Marks: total | Ordinary questions plus each choice group's contribution. Percentage to 1 decimal place. |
 | Rubric: criterion average | Average of every level given for that criterion, including from questions assessed on several criteria. *Not answered* = 0, but in a choice group only the best N count (questions on several criteria rank by the sum of their levels). Shown to 1 decimal place. |
 | Rubric: suggested final | Average **rounded half up**, so 4.5 → 5 and 5.5 → 6. Python's `round()` must not be used, because it rounds halves to even (`round(4.5) == 4`). |
@@ -360,7 +361,7 @@ cam2-exam-grading\
 ## 9. Deliberately Not Included
 - Built-in MYP rubrics: teachers bring their own.
 - Keyboard shortcuts.
-- Re-slicing a question after slicing: replaced by **See whole page**.
+- ~~Re-slicing a question after slicing: replaced by **See whole page**.~~ Added back (2026-10-31) as **✎ Adjust this box** in Step ④, for a box drawn in the wrong place early on: it opens Step 2 on that question and re-slices only that question, keeping every grade.
 - Matching names by paper order.
 - Half marks.
 - Google Drive API sync: a synced folder works through the normal save-folder rules.

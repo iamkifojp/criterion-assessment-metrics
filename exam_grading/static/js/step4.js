@@ -7,7 +7,7 @@ import { post } from "./api.js";
 import { t } from "./i18n.js";
 import { goTo } from "./main.js";
 import { act, app, config, criteriaOf, gradeOf, handleError, render } from "./store.js";
-import { button, debounce, formatTime, h } from "./ui.js";
+import { button, debounce, formatTime, h, modal } from "./ui.js";
 import { parseRange } from "./boxes.js";
 
 const NA = "not_answered";
@@ -49,7 +49,7 @@ function draft() {
     const it = list.find((x) => x.q.id === resume.question_id && (!x.r || !resume.rubric_id || x.r.id === resume.rubric_id))
       || list[0];
     const rid = it.r?.id || null;
-    const sids = c.students.map((s) => s.id);
+    const sids = papers(c, it.q.id).map((s) => s.id);
     const anyGraded = sids.some((sid) => list.some((x) => isGraded(sid, x.q.id, x.r?.id)));
     const sid = sids.includes(resume.student_id) ? resume.student_id
       : (sids.find((s) => !isGraded(s, it.q.id, rid)) || sids[0]);
@@ -89,10 +89,37 @@ function moveTo(changes) {
   render();
 }
 
+// "Shuffle papers": a different order for every question, the same each time
+// that question is opened, so a paper's number never identifies a student.
+const shufflePapers = () => !!app.prefs.shuffle_papers;
+
+function seededShuffle(list, seed) {
+  let a = 2166136261;                                   // FNV-1a hash of the seed…
+  for (const ch of seed) a = Math.imul(a ^ ch.codePointAt(0), 16777619);
+  const random = () => {                                // …drives mulberry32
+    a = (a + 0x6D2B79F5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+// Every paper in grading order for one question.
+function papers(c, qid) {
+  return shufflePapers() ? seededShuffle(c.students, `${c.session_id}|${qid}`) : c.students;
+}
+
 // Papers shown in the strip and stepped through by ◀ ▶.
 function visibleStudents(c, d) {
-  if (!d.ungradedOnly) return c.students;
-  return c.students.filter((s) => s.id === d.sid || !isGraded(s.id, d.qid, d.rid));
+  const all = papers(c, d.qid);
+  if (!d.ungradedOnly) return all;
+  return all.filter((s) => s.id === d.sid || !isGraded(s.id, d.qid, d.rid));
 }
 
 function nextStudentId(c, d, step = 1) {
@@ -164,9 +191,9 @@ function nameOrReveal(d, student) {
   return button(["👁 ", t("step4.show_name")], () => { d.revealed = student.id; render(); }, "small ghost");
 }
 
-function setHideNames(on) {
-  app.prefs.hide_names = on;
-  post("/api/prefs", { hide_names: on }).catch((err) => handleError(err, true));
+function setPref(key, on) {
+  app.prefs[key] = on;
+  post("/api/prefs", { [key]: on }).catch((err) => handleError(err, true));
   render();
 }
 
@@ -200,14 +227,16 @@ export function renderStep4() {
     h("label", { class: "check" }, h("input", { type: "checkbox", checked: d.ungradedOnly,
       onchange: (e) => { d.ungradedOnly = e.target.checked; render(); } }), t("step4.ungraded_only")),
     h("label", { class: "check" }, h("input", { type: "checkbox", checked: hideNames(),
-      onchange: (e) => setHideNames(e.target.checked) }), t("step4.hide_names")),
+      onchange: (e) => setPref("hide_names", e.target.checked) }), t("step4.hide_names")),
+    h("label", { class: "check" }, h("input", { type: "checkbox", checked: shufflePapers(),
+      onchange: (e) => setPref("shuffle_papers", e.target.checked) }), t("step4.shuffle_papers")),
     d.fromReview
       ? button(t("step4.back_to_review"), () => goTo(5, { next: true }), "primary")
       : button(t("step4.to_review"), () => goTo(5, { next: true }), "ghost"));
 
   const strip = h("nav", { class: "paper-strip", "aria-label": t("step4.papers") },
     h("span", { class: "strip-label" }, t("step4.papers")),
-    c.students.map((s, i) => {
+    papers(c, q.id).map((s, i) => {
       const hidden = d.ungradedOnly && s.id !== d.sid && isGraded(s.id, q.id, rid);
       if (hidden) return null;
       const v = valueOf(s.id, q.id, rid);
@@ -229,8 +258,9 @@ export function renderStep4() {
 // A new question starts from paper 1 (or its first ungraded paper), not from
 // the paper you happened to be on.
 function firstFor(c, d, it) {
-  const first = d.ungradedOnly ? c.students.find((s) => !isGraded(s.id, it.q.id, it.r?.id)) : null;
-  return (first || c.students[0]).id;
+  const all = papers(c, it.q.id);
+  const first = d.ungradedOnly ? all.find((s) => !isGraded(s.id, it.q.id, it.r?.id)) : null;
+  return (first || all[0]).id;
 }
 
 // --- Left: the answer or the whole page -------------------------------------------------------
@@ -238,7 +268,7 @@ function firstFor(c, d, it) {
 function viewer(c, d, item, student) {
   const q = item.q;
   const value = valueOf(student.id, q.id, item.r?.id);
-  const index = c.students.indexOf(student);
+  const index = papers(c, q.id).indexOf(student);
   const stamp = encodeURIComponent(c.sliced_at || "");
   const badge = badgeText(c, q, student.id);
 
@@ -255,6 +285,10 @@ function viewer(c, d, item, student) {
         button("−", () => zoom(d, -1), "small", { "aria-label": t("step4.zoom_out"), title: t("step4.zoom_out") }),
         button(t("step4.fit"), () => { d.zoom = 1; render(); }, "small"),
         button("+", () => zoom(d, 1), "small", { "aria-label": t("step4.zoom_in"), title: t("step4.zoom_in") })],
+      button(t("step4.adjust_box"), () => {
+        saveComment.flush();
+        goTo(2, { draft: { sub: "boxes", adjust: { qid: q.id, rid: item.r?.id || null, sid: student.id } } });
+      }, "small ghost", { title: t("step4.adjust_box_hint") }),
       d.wholePage
         ? button(t("step4.back_to_answer"), () => { d.wholePage = false; render(); }, "small on")
         : button(["🔍 ", t("grade.see_whole_page")], () => {
@@ -372,6 +406,19 @@ function gradeCard(c, d, item, student) {
       h("span", { class: "muted" }, `/ ${q.max}`));
   }
 
+  const picked = entry(student.id, q.id)?.keywords || [];
+  const toggleKeyword = async (label, on) => {
+    await saveComment.flush();
+    const next = on ? [...picked, label] : picked.filter((x) => x !== label);
+    act(post("/api/grade", { student_id: student.id, question_id: q.id, keywords: next }));
+  };
+  const pills = h("div", { class: "keyword-pills" },
+    h("div", { class: "row" }, h("span", { class: "label" }, t("step4.keywords")),
+      button(t("step4.keywords_edit"), () => editKeywords(c), "small ghost")),
+    h("div", {}, (c.keywords || []).map((k) => h("label", { class: `check pill ${k.type}` },
+      h("input", { type: "checkbox", checked: picked.includes(k.label),
+        onchange: (e) => toggleKeyword(k.label, e.target.checked) }), k.label))));
+
   const commentBox = h("textarea", { id: "comment-box", rows: "3", placeholder: t("grade.comment_placeholder"),
     "aria-label": t("grade.comment_placeholder"),
     oninput: (e) => saveComment(student.id, q.id, e.target.value),
@@ -386,11 +433,32 @@ function gradeCard(c, d, item, student) {
     h("div", { class: "row" },
       button(t("grade.not_answered"), notAnswered, value === NA ? "small on" : "small", { "aria-pressed": value === NA ? "true" : "false" }),
       value !== null ? button(t("step4.clear"), clear, "small ghost") : null),
+    pills,
     h("label", { class: "comment" }, h("span", { class: "label" }, t("step4.comment")), commentBox),
     nextId
       ? button(t("step4.next_paper_button"), () => { saveComment.flush(); moveTo({ sid: nextId }); },
         "primary big", { id: "next-paper" })
       : lastPaperActions(c, d, item));
+}
+
+// The exam's quick comments, one per line under Strengths and Areas to develop.
+function editKeywords(c) {
+  const lines = (type) => (c.keywords || []).filter((k) => k.type === type).map((k) => k.label).join("\n");
+  const strengths = h("textarea", { rows: "4" }, lines("strength"));
+  const growth = h("textarea", { rows: "6" }, lines("growth"));
+  const read = (box, type) => box.value.split("\n").map((s) => s.trim()).filter(Boolean)
+    .map((label) => ({ label, type }));
+  modal({
+    title: t("step4.keywords_title"),
+    body: h("div", { class: "stack" }, h("p", { class: "muted" }, t("step4.keywords_hint")),
+      h("label", { class: "stack" }, h("span", { class: "label" }, t("step4.keywords_strengths")), strengths),
+      h("label", { class: "stack" }, h("span", { class: "label" }, t("step4.keywords_growth")), growth)),
+    actions: [
+      { label: t("common.cancel") },
+      { label: t("common.save"), kind: "primary", onClick: () => act(post("/api/setup/keywords",
+        { keywords: [...read(strengths, "strength"), ...read(growth, "growth")] })) },
+    ],
+  });
 }
 
 // Tabs for a question on several criteria; each shows its level on this paper.
@@ -427,7 +495,7 @@ function doneCard(c, item) {
       ? [h("p", {}, t("step4.next_question_hint", { label: itemLabel(remaining) })),
         button(t("step4.go_to_question", { label: itemLabel(remaining) }), () => moveTo({ qid: remaining.q.id,
           rid: remaining.r?.id || null,
-          sid: (c.students.find((s) => !isGraded(s.id, remaining.q.id, remaining.r?.id)) || c.students[0]).id }),
+          sid: firstFor(c, { ungradedOnly: true }, remaining) }),
         "primary big", { id: "next-paper" })]
       : [h("p", {}, t("step4.everything_done")),
         button(t("step4.to_review"), () => goTo(5, { next: true }), "primary big", { id: "next-paper" })],

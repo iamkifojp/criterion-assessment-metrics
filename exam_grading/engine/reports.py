@@ -204,7 +204,12 @@ def build_student_pdf(session: storage.Session, config: dict, grades: dict, stud
     name = display_name(config, student)
     summary = grading_summary.student_summary(config, grades, student["id"])
     entries = (grades.get("grades") or {}).get(student["id"]) or {}
-    in_group = {qid for g in config.get("choice_groups") or [] for qid in g["questions"]}
+    group_of = {qid: g for g in config.get("choice_groups") or [] for qid in g["questions"]}
+
+    def not_counted(qid):
+        g = group_of.get(qid)
+        return (g is not None and g["id"] not in summary["pending"]
+                and qid not in summary["ungraded"] and qid not in summary["counted"])
 
     doc = fitz.open()
     w = _Writer(doc, f"{config['exam_name']} · {name}")
@@ -232,11 +237,10 @@ def build_student_pdf(session: storage.Session, config: dict, grades: dict, stud
         result_html = (f"<p class='label'>{_e(t('report.total'))}</p>"
                        f"<p class='big'>{_e(reported)} / {marks['max']}{pct}</p>")
     rows = []
-    counted = summary["counted"]
     for q in config.get("questions") or []:
         parts = _grades(config, grades, student["id"], q)
         text = _result_text(parts, language)
-        if q["id"] in in_group and q["id"] not in summary["ungraded"] and q["id"] not in counted:
+        if not_counted(q["id"]):
             text += f" ({t('report.not_counted')})"
         # (MuPDF ignores table column widths, so simple lines rather than a table)
         rows.append(f"<p><b>{_e(q['label'])}</b>&nbsp;&nbsp;&nbsp;{_e(text)}</p>")
@@ -287,8 +291,11 @@ def build_student_pdf(session: storage.Session, config: dict, grades: dict, stud
              _grade_html(config, parts, language), css=GRADE_CSS, shrink=True)
         w.y = top + row_h + 4
         notes = []
-        if q["id"] in in_group and q["id"] not in summary["ungraded"] and q["id"] not in counted:
-            notes.append(f"<p class='muted'>{_e(t('report.not_counted_long'))}</p>")
+        if not_counted(q["id"]):
+            why = ("report.not_counted_teacher"
+                   if grading_summary.group_pick(group_of[q["id"]]) == grading_summary.PICK_TEACHER
+                   else "report.not_counted_long")
+            notes.append(f"<p class='muted'>{_e(t(why))}</p>")
         comment = str(entry.get("comment") or "").strip()
         if comment:
             notes.append(f"<p><span class='label'>{_e(t('report.comment'))}{'：' if language == 'ja' else ':'}</span> {_e(comment)}</p>")

@@ -4,7 +4,7 @@ import { get, post } from "./api.js";
 import { loadStrings, t, language } from "./i18n.js";
 import { act, app, config, handleError, onRender, render } from "./store.js";
 import { button, confirmBox, formatTime, h } from "./ui.js";
-import { renderStart, openSession } from "./start.js";
+import { renderStart, openHostExam, openSession } from "./start.js";
 import { renderNewSession, renderScanCheck } from "./step1.js";
 import { renderStep2 } from "./step2.js";
 import { renderStep3 } from "./step3.js";
@@ -59,7 +59,9 @@ function header() {
   if (!c) right.append(button(t("app.quit"), quitApp, "small ghost"));
 
   const brand = h("div", { class: "brand" }, h("strong", {}, "CAM2"),
-    c ? h("span", { class: "exam-name", title: app.session.folder }, c.exam_name) : null);
+    c ? h("span", { class: "exam-name", title: app.session.folder }, c.exam_name) : null,
+    c?.host ? h("span", { class: "badge host-badge" },
+      [c.host.name, c.host.class_name].filter(Boolean).join(" · ")) : null);
   const steps = c ? h("nav", { class: "stepbar", "aria-label": t("step.nav") },
     STEPS.map((n) => {
       const reachable = canGoTo(n);
@@ -179,12 +181,14 @@ async function boot() {
     app.recent = state.recent;
     app.version = state.version;
     app.prefs = state.prefs || {};
+    app.host = state.host || null;
     if (app.session) enterWizard();
   } catch (err) {
     document.getElementById("app").textContent = err.message;
     return;
   }
   render();
+  if (!app.session && app.host) openHostExam();
   heartbeat();
   setInterval(heartbeat, HEARTBEAT_MS);
 }

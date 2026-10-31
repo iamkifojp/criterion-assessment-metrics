@@ -95,6 +95,7 @@ This starts CAM2 on `http://127.0.0.1:5182/` and opens the browser. Useful optio
 |---|---|
 | `--no-browser` | don't open a browser tab |
 | `--idle 0` | never stop by itself (normally it stops 10 minutes after the last tab closes) |
+| `--host <handoff.json>` | open one exam for another app (CAM); see `engine/host.py` |
 | `--data-dir <folder>` | keep app data (recent sessions, emergency copies) **and** the default Documents folder inside `<folder>`, so trying things out never touches your real ones |
 
 ### Sample papers to try it with

@@ -269,7 +269,7 @@ def import_scans(session: storage.Session, config: dict, source: dict,
     config["import"] = _import_record(source, files)
     config["more_imports"] = []
     config["scan_warnings"] = scan_warnings(config)
-    config["sliced"] = False
+    _crops_stale(config)
     return config
 
 
@@ -294,6 +294,8 @@ def add_papers(session: storage.Session, config: dict, source: dict,
     ids = [s["id"] for s in new]
     if config.get("sliced"):
         slice_students(session, config, ids, _scaled(progress, 2 * n, n * parts))
+    else:
+        _crops_stale(config)               # the new papers have no crops yet
     return ids
 
 
@@ -417,6 +419,8 @@ def edit_pages(session: storage.Session, config: dict, grades_data: Optional[dic
     config["scan_warnings"] = scan_warnings(config)
     if config.get("sliced") and rewritten:
         slice_students(session, config, [s["id"] for s in rewritten])
+    elif rewritten:
+        _crops_stale(config)
 
     owners = kept + added
     for i, refs in enumerate(new_refs):
@@ -490,6 +494,8 @@ def _edit_sheet(session: storage.Session, config: dict, grades_data: Optional[di
     config["scan_warnings"] = scan_warnings(config)
     if config.get("sliced"):
         slice_students(session, config, [student["id"]])
+    else:
+        _crops_stale(config)
     return {"student": student["id"], "page": page}
 
 
@@ -545,7 +551,7 @@ def set_layout(config: dict, paper: str, density: str, landscape: bool) -> dict:
         config["name_box"] = []
         for q in config.get("questions") or []:
             q["boxes"] = []
-        config["sliced"] = False
+        _crops_stale(config)
     config["layout"] = new.to_config()
     return config
 
@@ -603,6 +609,7 @@ def set_questions(config: dict, payload: dict) -> dict:
     layout = Layout.from_config(config.get("layout"))
     rubric_ids = [r["id"] for r in config.get("rubrics") or []]
     old = {q["id"]: q for q in config.get("questions") or []}
+    crops_known(config)
 
     questions = []
     seen_ids = set()
@@ -630,7 +637,8 @@ def set_questions(config: dict, payload: dict) -> dict:
     for i, g in enumerate(payload.get("choice_groups") or [], 1):
         qids = [qid for qid in g.get("questions") or [] if qid in known]
         groups.append({"id": str(g.get("id") or f"g{i}"), "questions": qids,
-                       "answer": int(g.get("answer") or 0)})
+                       "answer": int(g.get("answer") or 0),
+                       "pick": grading_summary.group_pick(g)})
 
     name_box = _clean_boxes(payload.get("name_box"), layout)
     changed = (name_box != config.get("name_box")
@@ -641,9 +649,44 @@ def set_questions(config: dict, payload: dict) -> dict:
     config["name_box_skipped"] = bool(payload.get("name_box_skipped")) and not name_box
     config["questions"] = questions
     config["choice_groups"] = groups
-    if changed:
+    stale = stale_regions(config)
+    if stale is not None:
+        config["sliced"] = not stale
+    elif changed:
         config["sliced"] = False
     return config
+
+
+# Which boxes each region's crops were cut from is kept in ``crops_of``, so
+# moving one question's box only needs that question sliced again. Anything
+# that changes the papers while they are not all sliced drops it, and then
+# only slicing every paper makes the crops current again.
+
+def _boxes_now(config: dict) -> dict:
+    out = {q["id"]: list(q.get("boxes") or []) for q in config.get("questions") or []}
+    if config.get("name_box"):
+        out[model.NAME_BOX_ID] = list(config["name_box"])
+    return out
+
+
+def crops_known(config: dict) -> bool:
+    """True when ``crops_of`` says which boxes each region's crops came from."""
+    if config.get("sliced") and "crops_of" not in config:
+        config["crops_of"] = _boxes_now(config)      # sliced before crops_of was kept
+    return "crops_of" in config
+
+
+def _crops_stale(config: dict) -> None:
+    config["sliced"] = False
+    config.pop("crops_of", None)
+
+
+def stale_regions(config: dict) -> Optional[List[str]]:
+    """Regions whose crops don't match their boxes, or None if unknown."""
+    crops_of = config.get("crops_of")
+    if crops_of is None:
+        return None
+    return [rid for rid, boxes in _boxes_now(config).items() if crops_of.get(rid) != boxes]
 
 
 def new_question_id(config: dict, taken=()) -> str:
@@ -700,6 +743,7 @@ def slice_session(session: storage.Session, config: dict, progress: Progress = N
         shutil.rmtree(crops_dir)
     summary = slice_students(session, config, [s["id"] for s in config["students"]], progress)
     config["sliced"] = True
+    config["crops_of"] = _boxes_now(config)
     return summary
 
 
@@ -713,6 +757,35 @@ def slice_students(session: storage.Session, config: dict, student_ids: List[str
              if s["id"] in wanted]
     summary = slicer.slice_all(scans, regions(config), Layout.from_config(config["layout"]),
                                session.path(storage.CROPS_DIR), progress)
+    return _finish_slicing(config, summary)
+
+
+def slice_question(session: storage.Session, config: dict, question_id: str,
+                   progress: Progress = None) -> dict:
+    """Crop one question again for every paper, after its box was adjusted.
+
+    Grades are kept, since they are stored by question. The papers count as
+    sliced again once no other region's crops are out of date.
+    """
+    question = next((q for q in config.get("questions") or [] if q["id"] == question_id), None)
+    if question is None:
+        raise UserError("unknown_question", question=question_id)
+    if not crops_known(config):
+        raise UserError("not_sliced")
+    check_ready(config)
+    layout = Layout.from_config(config["layout"])
+    folder = session.path(f"{storage.CROPS_DIR}/{question_id}")
+    if os.path.isdir(folder):
+        shutil.rmtree(folder)                  # no old crop survives a failed one
+    scans = [(s["id"], student_scan_path(session, s)) for s in config["students"]]
+    summary = slicer.slice_all(scans, [(question_id, slicer.parse_boxes(question["boxes"], layout))],
+                               layout, session.path(storage.CROPS_DIR), progress)
+    config["crops_of"][question_id] = list(question["boxes"])
+    config["sliced"] = not stale_regions(config)
+    return _finish_slicing(config, summary)
+
+
+def _finish_slicing(config: dict, summary: dict) -> dict:
     names = {s["id"]: display_name(config, s) for s in config["students"]}
     labels = {q["id"]: q["label"] for q in config["questions"]}
     labels[model.NAME_BOX_ID] = "name"

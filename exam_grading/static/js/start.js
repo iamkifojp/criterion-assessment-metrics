@@ -5,10 +5,33 @@ import { enterWizard } from "./main.js";
 import { app, handleError, render } from "./store.js";
 import { button, confirmBox, formatTime, h, pickerWait, toast } from "./ui.js";
 
+// Opened from CAM: open its exam, or start it in the folder CAM chose.
+export function openHostExam() {
+  const hostInfo = app.host;
+  if (hostInfo.session_exists) return openSession(hostInfo.session_folder);
+  app.view = "new";
+  app.draft = { newSession: { exam: hostInfo.exam_name, src: null, paper: null, landscape: false,
+    detected: null, saveFolder: hostInfo.session_folder, saveFolderChosen: true, fromHost: true } };
+  render();
+  return null;
+}
+
+function hostCard() {
+  const hostInfo = app.host;
+  return h("section", { class: "card accent host-card" },
+    h("h2", {}, t("host.from", { host: hostInfo.host }),
+      hostInfo.class_name ? h("span", { class: "muted" }, ` · ${hostInfo.class_name}`) : null),
+    h("p", {}, h("strong", {}, hostInfo.exam_name)),
+    h("p", { class: "path" }, hostInfo.session_folder),
+    h("div", { class: "card-actions" }, button(hostInfo.session_exists ? t("host.open") : t("host.start"),
+      openHostExam, "primary big")));
+}
+
 export function renderStart() {
   return h("main", { class: "page start" },
     h("h1", {}, t("app.title")),
     h("p", { class: "lead" }, t("start.lead")),
+    app.host ? hostCard() : null,
     h("div", { class: "start-grid" },
       h("section", { class: "card" },
         h("h2", {}, "▶ ", t("start.continue")),
