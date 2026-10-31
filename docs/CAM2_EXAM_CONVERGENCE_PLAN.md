@@ -1,0 +1,287 @@
+# Bringing CAM2's exam grading back into CAM: assessment and staged plan
+
+**Status:** v1, 2026-10-31. The teacher locked D1, D2 and D4–D8 (§4). **D3 is
+still open.** Nothing is implemented yet.
+**Repos:** CAM = `C:\Project\criterion-assessment-metrics-public`;
+CAM2 = `C:\Project\cam2-exam-grading` (`iamkifojp/cam2-exam-grading`, 4 commits,
+187 tests, Phases 1–4c done, Phase 5 packaging next).
+
+Read `CLAUDE.md` first. Exams write into the **class cloud folder**, and Stage 2
+changes the database schema. Every stage that touches real data follows the
+sandbox, backup and permission rules there.
+
+---
+
+## 1. Where things stand
+
+CAM2 started as a copy of CAM's exam slicer and became a separate, more
+complete exam app. Most of what it added is the "new thinking" worth bringing
+back. It also dropped several things CAM depends on.
+
+### What CAM's exam grading is today
+
+- **Code:** spread across the Flask grading workspace (CGW):
+  `cam_grading_workspace/exam_engine.py` (794 lines), about 530 lines of
+  `/api/exam/*` routes, the `EXAM_SETUP_PAGE` inline HTML/JS (about 1,150 lines)
+  and the exam mode in `HTML_PAGE`, all inside a 7,060-line `app.py`. In total
+  about 2,500 lines of exam code, much of it inline JavaScript in Python strings.
+- **Data:** definitions in `gcg_exams.json` (keyed by class), grades in
+  `exam_grades_<exam>.json`, crops in `exam_crops/<class>/<exam>/<Q>/<stem>.png`.
+  The scan's **file name stem is the student's identity**.
+- **Flow:** typed grid ranges → Process All → grade one question across the
+  class (marks only) → Export CSV + `.meta.json` sidecar → CAM Sync ingests it
+  as an `ExamResult` → the Window 1 panel turns raw marks into one 0–8 band
+  (with optional per-section strand levels, see D3) → one `CriterionScore`.
+- **Saving:** `save_exam_grades` is a plain `.tmp` + `os.replace`. It has none
+  of the generation, conflict-copy or wipe checks that protect the main
+  database, although these files sit in a cloud-synced class folder.
+
+### What CAM2 does differently
+
+| Area | CAM (CGW) today | CAM2 |
+|---|---|---|
+| Bringing in scans | One file per student, named after the student; every student must be scanned the same way (a page-count warning only) | Whole class in one PDF (split by pages per student, with a class-size check), several batches, one file per student, or phone photos; **A3 booklets unfolded** into page order; on-screen fixes (move, turn, remove, blank page; booklet sheet turned or swapped); **late papers** added any time; scans copied into the session |
+| Defining questions | Type ranges like `page2!A2:C5` on a compact or fine grid | **Drag a box** that snaps to a 5 mm grid; **several boxes per question** stitched into one image; "Check on other papers" strip; "new question or move the box?" prompt; reorder questions safely |
+| Identity | File name stem, plus a display-name map; leftovers go to CAM's 🧩 pool | Ids (`s001`, `q1`, `n001`) for everything; class list matched to **handwritten name crops** at the source; auto-match from file names (full/half width, macOS-safe) |
+| Grading screen | Sheet with one score column, keyword pills, comment | Large mark buttons, or **rubric band cards with descriptors**; **Not answered** separate from ungraded; grade badge on the image; **whole page with the box outlined**; zoom and pan; "Show ungraded only"; resume at the exact question and paper |
+| Grading model | Marks only; banding to 0–8 happens later in CAM | **Marks or Rubric** mode. In Rubric mode one question can assess **several criteria**, with a level for each, averaged with round-half-up into a suggested final level per criterion |
+| Choice questions | Sections with "choose N"; an over-answered section shows `?` in CAM until the teacher picks | Choice groups counted **best N automatically**, made unambiguous by the explicit Not answered |
+| Review & outputs | CSV export for CAM | Review table with report-only overrides; **one feedback PDF per student** (answer images, grades, comments, rubric printed once); per-exam Excel gradebook; **EN/日本語** |
+| Saving | Atomic rename only | `SafeJsonFile`: emergency copy first, folder check, cloud conflict copies, **generation/hash check against another computer**, wipe guard, daily backups, read-back check; recovery offer on open |
+| Code shape | Inline HTML/JS in one Python file | Framework-free `engine/` with `UserError` codes; thin Flask `app.py`; plain ES-module screens; i18n parity tests |
+
+### What CAM has that CAM2 lacks
+
+These must exist before CAM's exam code can be retired:
+
+1. **Keyword checklist** of comment pills per exam.
+2. **Shuffled anonymity**: papers numbered by position and reshuffled for each
+   question. CAM2 only has "Hide student names".
+3. **Teacher-picked answers** for an over-answered choice group (D2).
+4. **Strand levels** for a marks exam: sections of one criterion, each given
+   its own level before the final grade (D3, open).
+5. **Correcting a box after grading has started** and re-slicing just that
+   question. CAM2 dropped this in favour of "See whole page". Boxes can still be
+   edited in Step 2, but that re-slices every paper.
+6. **The CAM link:** roster, criteria, result ingest, banding into the
+   gradebook, sync, and clean-up on permanent delete.
+
+---
+
+## 2. Approach: one exam codebase, two hosts (D1)
+
+CAM2 becomes **the** exam app and CAM hosts it, instead of features being
+ported into the CGW one at a time.
+
+- **Why not port feature by feature:** porting booklets, page fixes, drag
+  boxes, rubric mode, safe saving and reports into CGW's inline pages means
+  writing CAM2 a second time inside a 7,000-line file. After that the two would
+  drift apart for good.
+- **Why not a shared pip package:** for one developer, the versioning and the
+  changes to the Windows bundle are not worth it.
+- **What to do:** vendor CAM2 into CAM with `git subtree` at `exam_grading/`,
+  unmodified. CAM's own glue lives **outside** that folder, in
+  `engine/exam_bridge.py` plus a small launch helper. Exam features are always
+  built in the CAM2 repo first, then brought in with `git subtree pull`, so the
+  standalone download and CAM always run the same exam code.
+- **Grading decisions are made in CAM2.** Anything about how an exam is scored
+  (choice groups, teacher-picked answers, final levels) is decided and stored
+  in CAM2, so the standalone app has it too and CAM imports the settled result
+  rather than asking again.
+- **How it runs:** CAM2 keeps its own small local server (`launcher.py`,
+  single instance, port from 5182, idle shutdown). CAM launches it the way it
+  launches CGW today. CGW goes back to grading assignments only.
+- **The session folder is the contract.** In CAM-hosted mode an exam's session
+  lives at `<class cloud folder>/exams/<exam name>/`, scans included (D6). CAM
+  never writes to it. At Sync it **reads** `cam2_session.json` + `grades.json`
+  and computes totals with the vendored `grading_summary`, so CAM's numbers
+  always match CAM2's (round-half-up, best N, teacher picks). This replaces the
+  CSV + sidecar + beacon chain. No third file format is needed.
+
+What this gives CAM: booklets and messy scans, drag boxes, rubric-mode exams
+graded straight onto MYP criteria, per-student feedback PDFs, Japanese reports,
+and CAM2's save safety on the exam files that live in the cloud folder.
+
+---
+
+## 3. What not to bring
+
+- **Old CGW exams (D5).** No migration, importer or dual path. Once the new
+  path works, CGW's exam code is removed outright. Existing `ExamResult`
+  records in a database must still load.
+- CAM2's **start screen and recent-sessions list** in hosted mode: CAM opens
+  the exact session. The standalone app keeps both.
+- CAM2's **class-list upload** in hosted mode: CAM supplies the roster. Typing
+  a name for an unmatched paper stays.
+- CAM2's **packaging and Mac build** (Phase 5). CAM keeps its own Windows bundle
+  and only adds the `exam_grading/` folder to it.
+- **App-wide Japanese for CAM.** Only the exam screens and the student PDFs come
+  bilingual, because they come from CAM2.
+- CGW's **grid colour picker, fit width/page toggle and typed ranges**: drag
+  boxes on a light 5 mm grid replace them.
+
+---
+
+## 4. Decisions
+
+### Locked (2026-10-31)
+
+- **D1 · Architecture:** CAM2 vendored into CAM and hosted by it (§2).
+- **D2 · Over-answered choice groups:** each choice group has a policy, set in
+  CAM2 Step 2D: **Best N** (the default; the highest-scoring N count
+  automatically) or **Teacher picks** (the teacher chooses which N count).
+  With Teacher picks, an over-answered group shows `?` in CAM2's Step 5 review
+  until the teacher ticks the answers that count; the total stays incomplete
+  until then. The student PDF and gradebook show which answers counted. CAM
+  imports the settled result and no longer has its own `?` resolver.
+  *(Read from "best N or fix questions": "fix" taken to mean the teacher fixes
+  which questions count. Correct this if a fixed rule such as "first N
+  answered" was meant.)*
+- **D4 · Rubric-mode exams:** CAM2's suggested (or teacher-adjusted) final
+  level per criterion becomes that criterion's `CriterionScore`, confirmed in
+  the Window 1 panel, with no raw-mark banding step.
+- **D5 · Old exams:** dropped completely (§3).
+- **D6 · Scans in the cloud folder:** the session folder, scans included, lives
+  in the class cloud folder. Re-slicing and the whole-page view then work on
+  any computer that syncs it.
+- **D7 · Correcting a box during grading:** an "Adjust this box" link on the
+  grading card opens Step 2 on that question. Saving re-slices only that
+  question for every paper, keeps every grade, and returns to the same paper.
+  This covers a box drawn wrongly early on and noticed only while grading.
+- **D8 · Anonymity:** two separate tick boxes in Step 4, both remembered on
+  this computer: **Hide student names** (exists) and **Shuffle papers** (a new
+  order for every question, seeded per exam and question so it is stable on
+  reload). With both on, papers are shown as `01`, `02`, … by position, so the
+  same number is a different student on each question.
+
+### Open
+
+- **D3 · Strand levels in marks-mode exams.** How CAM does it today: a marks
+  exam counts toward **one** criterion, chosen in the Window 1 **📝 Exam
+  grading** panel ("Counts toward criterion"). If the exam has more than one
+  section, each section is treated as a **strand of that criterion** (for
+  example Knowing / Applying / Interpreting on the Y7 Sciences cover sheet).
+  For each student the panel shows the section subtotals (`Knowing 12/16`)
+  with a 0–8 level dropdown beside each, pre-filled in proportion to the
+  subtotal, and a final-grade dropdown pre-filled with the rounded average of
+  the section levels. The teacher can override any of them. Only the final
+  grade enters the gradebook; the strand levels are kept in the score's note
+  (`… · sections: Knowing 7, Applying 7, Interpreting 5`). The options:
+  - **A · Keep it in CAM.** CAM2 gains named sections (a question group with a
+    name, all of whose questions count). CAM's panel keeps working as it does
+    now.
+  - **B · Move the cover sheet into CAM2** *(recommended, consistent with D2)*.
+    CAM2 gains named sections plus, in Marks mode, an optional "Give levels"
+    setting: Step 5 shows a 0–8 level per section and a final level, suggested
+    the same way and editable, and they are printed on the student PDF. CAM
+    imports the final level as it does for rubric exams (D4), and its panel
+    becomes a confirm step.
+  - **C · Drop strands.** A marks exam is banded from its total only. Use
+    Rubric mode for exams graded by strand.
+
+---
+
+## 5. Stages
+
+One commit per phase, tests with every phase. Stage 1 happens in the **CAM2
+repo**; the other stages happen in CAM. The order matters: CAM2 parity first,
+then CAM's **reader** before anything writes the new shapes (an older CAM on
+another computer must not choke on a newer database; see
+`CROSS_DEVICE_AND_DB_SAFETY_PLAN.md`), then the switch, then the clean-up.
+
+### Stage 0 — Groundwork (CAM; no behaviour change) · S
+- `git subtree add --prefix exam_grading <cam2 remote> main --squash`.
+- Make CAM's test run also discover `exam_grading/tests`. Both suites must pass.
+- Add to `docs/ARCHITECTURE.md`: `exam_grading/` is upstream code. Change it
+  in the CAM2 repo, never in place.
+
+### Stage 1 — CAM2 features (CAM2 repo; also improve the standalone app) · M–L
+Each is a CAM2 phase with its own tests and a browser check, in this order:
+- **1a · Choice-group policy** (D2): Best N or Teacher picks per group, the
+  Step 5 `?` and tick-to-choose, `grading_summary` totals, reports and the
+  gradebook.
+- **1b · Named sections and levels** (D3, after it is decided): option A adds
+  named sections only; option B adds them plus Marks-mode section and final
+  levels in Step 5 and the reports. Skipped for option C.
+- **1c · Keyword checklist:** per-exam comment pills in the Step 4 card.
+  Ticking them rebuilds the generated part of the comment and keeps typed text
+  (the CGW behaviour).
+- **1d · Shuffle papers** (D8): the second tick box, seeded per exam and
+  question, as in CGW's `examSeededShuffle`.
+- **1e · Adjust this box** (D7): re-slice one question (`slice_students`
+  already exists; add a per-question variant) and return to the same paper.
+- **1f · Host hook:** `launcher.py --host <handoff.json>` with exam name, class
+  name, session folder, roster `[{external_id, name}]` and optional criterion
+  names for rubric cards. In host mode: the start screen is skipped, the exam
+  name is fixed, the matcher uses the given roster and stores `external_id` on
+  roster entries, a "Back to CAM" button appears, and a "Grading finished —
+  send to CAM" action writes `host_ready_at` into `cam2_session.json`. Without
+  `--host`, nothing changes.
+
+### Stage 2 — CAM reads sessions (CAM; reader only) · M
+- Extend `ExamResult` in a tolerant way: per-question values that can be
+  `not_answered`; per-question criterion `levels`; `final_levels` per
+  criterion; section levels (if D3 = B); `mode`; `session_id`. Records already
+  in a database load unchanged. Update `_validate_exam_result` and the to/from
+  dict code.
+- `engine/exam_bridge.py`: `read_session(folder)` → per-student results via the
+  vendored `grading_summary`, routed by `external_id` (exact), then the
+  existing `resolve_identity` / 🧩 pool as the fallback.
+- Tests use fictional sessions built with CAM2's own test helpers. No real data.
+- Ship this stage, and let the other computers update, **before** Stage 3 writes
+  anything new.
+
+### Stage 3 — Exams open in CAM2 (CAM) · M–L
+- Window 1 **🛠 Exam setup / Grade** writes the handoff, starts CAM2 in host
+  mode at `<class folder>/exams/<exam>/` and opens the browser. Every exam goes
+  this way; there is no CGW fallback (D5).
+- **Sync** reads every hosted session that has `host_ready_at`, read only. It
+  ingests or updates the `ExamResult`s.
+- **Window 1 panel:** rubric exams (and marks exams with levels, if D3 = B)
+  show the imported final levels to confirm. Marks exams without levels band
+  from the total, plus strands if D3 = A.
+- **Window 2/3:** name crops and the 🧩 thumbnails come from
+  `crops/__name__/<sid>.png`; Window 3 shows each question's value,
+  Not answered, which choice answers counted, and the comment.
+- **Permanent delete** of an exam: move the session folder into a dated
+  `exams/_deleted/` folder rather than deleting it. Hard delete stays a
+  separate, explicit action.
+- Sandbox end to end: temp prefs, temp `db_custom_path`, a fake class folder,
+  `tools/make_sample_scans.py` papers. Grade in both modes, Sync, band, report.
+
+### Stage 4 — Retire CGW exam code (CAM) · M
+- Delete `exam_engine.py`, the `/api/exam/*` routes, `EXAM_SETUP_PAGE`, exam
+  mode in `HTML_PAGE`, the exam export beacon, and CGW-only tests
+  (`test_exam_grid`, `test_exam_naming`, `test_exam_portable`,
+  `test_exam_reslice`, `test_exam_sections`). CAM2's suite covers what they
+  tested.
+- Remove CAM's exam-CSV ingest path (`is_exam_csv`, `ingest_exam_csv`,
+  `load_exam_sidecar`) and its `?` resolver dialog (D2, D5). Update the
+  CAM-side tests (`test_exam_identity`, `test_exam_resolved`,
+  `test_exam_sections_app`) to the session reader, or retire the parts that
+  only tested the CSV path.
+- Rewrite the USER_MANUAL "Grading exam papers" section and ARCHITECTURE §4.
+  Expected result: CGW `app.py` loses roughly 2,000 lines.
+
+### Stage 5 — Bundle (CAM) · S
+- `tools/build_windows_bundle.py` copies `exam_grading/` and starts it from the
+  bridge. Extend `test_windows_bundle.py`. The dependencies are the same
+  (Flask, Pillow, PyMuPDF, openpyxl), so nothing new is installed.
+
+---
+
+## 6. Risks and how each is handled
+
+- **Two copies drift:** the subtree rule (Stage 0). CAM-specific code never
+  goes inside `exam_grading/`.
+- **Database schema change on a real database:** tolerant reader first
+  (Stage 2), backup before the first write, and the teacher's explicit
+  go-ahead before a real Sync with the new code.
+- **Cloud sync of large session folders:** scans make each exam folder roughly
+  20–100 MB (D6). CAM2 already detects conflict copies and saves from another
+  computer.
+- **Two local servers (CGW + CAM2):** both are single-instance, local-only and
+  idle-stopping. The bridge checks the port the same way as
+  `_ensure_workspace_running`.
+- **CAM2 Phase 5 timing:** Stage 1 doesn't block CAM2's first release.
+  Landing 1a–1e before it saves teachers a second download.
