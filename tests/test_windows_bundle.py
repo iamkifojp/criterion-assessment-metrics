@@ -18,6 +18,8 @@ class WindowsBundleTests(unittest.TestCase):
             self.assertIn("\nimport site\n", contents)
             self.assertIn("\n..\n", contents)
             self.assertIn("\n..\\cam_grading_workspace\n", contents)
+            # CAM2's own `engine` / `app` would clash with CAM's.
+            self.assertNotIn("exam_grading", contents)
 
     def test_launchers_and_readme_are_written(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -76,8 +78,31 @@ class WindowsBundleTests(unittest.TestCase):
             runtime.mkdir()
             (runtime / "python.exe").write_bytes(b"runtime")
             archive = builder.make_zip(bundle, root, "test")
+            with self.assertRaisesRegex(RuntimeError, "exam_grading/launcher.py"):
+                builder.audit_zip(archive, require_runtime=True)
 
+            for path in builder.REQUIRED_EXAM_PATHS:
+                (bundle / path).parent.mkdir(parents=True, exist_ok=True)
+                (bundle / path).write_bytes(b"sample")
+            archive = builder.make_zip(bundle, root, "test")
             builder.audit_zip(archive, require_runtime=True)
+
+    def test_dev_files_are_removed_including_cam2s(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp)
+            for rel in ("tools/build.py", "docs/X_PLAN.md", "docs/USER_MANUAL.md",
+                        "exam_grading/tests/test_a.py", "exam_grading/tools/scans.py",
+                        "exam_grading/doc/review.md", "exam_grading/PLAN.md",
+                        "exam_grading/AGENTS.md", "exam_grading/launcher.py",
+                        "exam_grading/engine/__init__.py", "exam_grading/README.md"):
+                (bundle / rel).parent.mkdir(parents=True, exist_ok=True)
+                (bundle / rel).write_text("x")
+            builder.remove_dev_files(bundle)
+            left = sorted(p.relative_to(bundle).as_posix()
+                          for p in bundle.rglob("*") if p.is_file())
+            self.assertEqual(left, ["docs/USER_MANUAL.md", "exam_grading/README.md",
+                                    "exam_grading/engine/__init__.py",
+                                    "exam_grading/launcher.py"])
 
     def test_prune_removes_caches_and_script_shims(self):
         with tempfile.TemporaryDirectory() as temp:

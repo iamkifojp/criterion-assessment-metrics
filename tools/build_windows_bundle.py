@@ -42,6 +42,15 @@ REQUIRED_BUNDLE_FILES = {
     "acm_database.json",
     "app.py",
 }
+# CAM2 Exam Grading, vendored at exam_grading/ and started by CAM
+# (engine/exam_bridge.py). Nested, so checked as paths.
+REQUIRED_EXAM_PATHS = {
+    Path("exam_grading/launcher.py"),
+    Path("exam_grading/app.py"),
+    Path("exam_grading/engine/__init__.py"),
+}
+# CAM2's development material: its tests, sample-scan tool, plan and reviews.
+EXAM_DEV_PATHS = ("tests", "tools", "doc", "PLAN.md", "AGENTS.md")
 
 
 def run(command: list[str | os.PathLike[str]], *, cwd: Path) -> None:
@@ -81,10 +90,21 @@ def stage_head(destination: Path) -> None:
     with zipfile.ZipFile(io.BytesIO(archive)) as source:
         source.extractall(destination)
 
-    shutil.rmtree(destination / ".claude", ignore_errors=True)
-    shutil.rmtree(destination / "tools", ignore_errors=True)
-    for plan in (destination / "docs").glob("*_PLAN.md"):
+    remove_dev_files(destination)
+
+
+def remove_dev_files(bundle: Path) -> None:
+    """Drop development-only content from a staged checkout."""
+    shutil.rmtree(bundle / ".claude", ignore_errors=True)
+    shutil.rmtree(bundle / "tools", ignore_errors=True)
+    for plan in (bundle / "docs").glob("*_PLAN.md"):
         plan.unlink()
+    for name in EXAM_DEV_PATHS:
+        path = bundle / "exam_grading" / name
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.is_file():
+            path.unlink()
 
 
 def enable_site_packages(runtime: Path) -> None:
@@ -104,6 +124,9 @@ def enable_site_packages(runtime: Path) -> None:
     # while a ._pth file is present. Streamlit executes app.py rather than
     # invoking it as Python's script, so CAM's root package would otherwise be
     # invisible. The workspace also uses same-folder imports (pdf_view).
+    # exam_grading is deliberately NOT listed: CAM2 has its own top-level
+    # `engine` and `app`, which would clash with CAM's. CAM starts CAM2 with
+    # its folder put first on sys.path instead (exam_bridge.launch_command).
     for relative in ("..", r"..\cam_grading_workspace"):
         if relative not in lines:
             lines.insert(1, relative)
@@ -326,6 +349,7 @@ def audit_zip(archive: Path, *, require_runtime: bool) -> None:
         joined = ", ".join(map(str, unsafe))
         raise RuntimeError(f"Sensitive or unexpected data files found in zip: {joined}")
     missing = REQUIRED_BUNDLE_FILES - {os.fspath(path) for path in files}
+    missing |= {path.as_posix() for path in REQUIRED_EXAM_PATHS - files}
     if require_runtime and Path("runtime/python.exe") not in files:
         missing.add("runtime/python.exe")
     if missing:

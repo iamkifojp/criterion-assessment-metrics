@@ -51,6 +51,18 @@ CAM2_ENGINE_DIR = os.path.join(CAM2_DIR, "engine")
 CAM2_LAUNCHER = os.path.join(CAM2_DIR, "launcher.py")
 CAM2_PACKAGE = "cam2_engine"
 
+# Runs CAM2's launcher with its own folder first on sys.path. Plain
+# ``python launcher.py`` relies on Python putting the script's folder first,
+# but the portable bundle's embedded Python ignores the script folder (its
+# ``._pth`` file fixes the path) and lists CAM's root and the grading
+# workspace instead, so CAM2's ``import engine`` / ``from app import ...``
+# would load CAM's engine and the workspace's app.py.
+_LAUNCH_BOOT = (
+    "import os, runpy, sys; launcher = sys.argv[1]; sys.argv = sys.argv[1:]; "
+    "sys.path.insert(0, os.path.dirname(launcher)); "
+    "runpy.run_path(launcher, run_name='__main__')"
+)
+
 EXAMS_DIR = "exams"          # <class folder>/exams/<exam>/ holds each session (D6)
 DELETED_DIR = "_deleted"     # exams/_deleted/<stamp> <exam>/: permanently deleted exams
 NAME_BOX_ID = "__name__"     # CAM2's handwritten-name box: crops/__name__/<paper id>.png
@@ -263,8 +275,10 @@ def write_handoff(directory: str, data: dict) -> str:
 def launch_command(handoff_path: str, python: Optional[str] = None) -> List[str]:
     """The command that opens one exam in CAM2's host mode. CAM2's launcher
     is single-instance: a running CAM2 is handed the exam and the new process
-    exits at once."""
-    return [python or sys.executable, CAM2_LAUNCHER, "--host", handoff_path]
+    exits at once. The launcher runs through :data:`_LAUNCH_BOOT`, so CAM2
+    imports its own modules in the portable bundle too."""
+    return [python or sys.executable, "-c", _LAUNCH_BOOT, CAM2_LAUNCHER,
+            "--host", handoff_path]
 
 
 def running_url() -> Optional[str]:

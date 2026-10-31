@@ -23,6 +23,7 @@ Run:  python -m unittest tests.test_exam_cam2_host
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -68,8 +69,36 @@ class BridgeHelperTests(_SessionBase):
             {"external_id": "100001", "name": "Aoki Ren"},
             {"external_id": "100002", "name": "100002"}])
         cmd = exam_bridge.launch_command(path, python="py")
-        self.assertEqual(cmd, ["py", exam_bridge.CAM2_LAUNCHER, "--host", path])
+        self.assertEqual(cmd, ["py", "-c", exam_bridge._LAUNCH_BOOT,
+                               exam_bridge.CAM2_LAUNCHER, "--host", path])
         self.assertTrue(os.path.isfile(exam_bridge.CAM2_LAUNCHER))
+
+    def test_launch_command_loads_cam2_not_a_clashing_engine(self):
+        # The portable bundle's embedded Python puts CAM's root (its own
+        # `engine`) and the workspace (its own `app.py`) on sys.path and never
+        # the script's folder. `-P` (no script folder or working folder on
+        # sys.path) plus a decoy folder on PYTHONPATH stands in for that;
+        # CAM2's imports must win.
+        decoy = os.path.join(self.root, "decoy")
+        os.makedirs(os.path.join(decoy, "engine"))
+        for rel in (os.path.join("engine", "__init__.py"), "app.py"):
+            with open(os.path.join(decoy, rel), "w", encoding="utf-8") as fh:
+                fh.write("raise ImportError('decoy module imported')\n")
+        env = dict(os.environ, PYTHONPATH=decoy,
+                   CAM2_APP_DATA=os.path.join(self.root, "appdata"))
+
+        def run(cmd):
+            return subprocess.run([cmd[0], "-P", *cmd[1:]], cwd=decoy, env=env,
+                                  capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace")
+
+        plain = run([sys.executable, exam_bridge.CAM2_LAUNCHER, "--help"])
+        self.assertIn("decoy module imported", plain.stderr)   # the hazard
+        cmd = exam_bridge.launch_command("unused.json")
+        cmd[cmd.index("--host"):] = ["--help"]
+        result = run(cmd)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Start CAM2 Exam Grading", result.stdout)
 
     def test_find_sessions_and_fingerprint(self):
         exams = os.path.join(self.root, "class", "exams")
@@ -219,9 +248,9 @@ class LaunchTests(_AppBase):
             msg = app.launch_exam_setup("Unit: 3 test")
         self.assertIn("opened in CAM2", msg)
         cmd = started["cmd"]
-        self.assertEqual(cmd[1:3], [exam_bridge.CAM2_LAUNCHER, "--host"])
+        self.assertEqual(cmd[3:5], [exam_bridge.CAM2_LAUNCHER, "--host"])
         self.assertEqual(started["kw"]["cwd"], exam_bridge.CAM2_DIR)
-        handoff = exam_bridge.cam2_module("host").load(cmd[3])
+        handoff = exam_bridge.cam2_module("host").load(cmd[5])
         folder = os.path.join(self.class_dir, "exams", "Unit_ 3 test")
         self.assertEqual(os.path.normcase(handoff["session_folder"]), os.path.normcase(folder))
         self.assertEqual([r["external_id"] for r in handoff["roster"]], ["100001", "100002"])
@@ -230,7 +259,7 @@ class LaunchTests(_AppBase):
         self.assertFalse(os.path.exists(folder))
         self.assertEqual(self.ss["exam_sessions"][CLASS]["Unit: 3 test"]["folder"], "Unit_ 3 test")
         # The handoff (it holds the class list) is not in the cloud folder.
-        self.assertFalse(cmd[3].startswith(self.class_dir))
+        self.assertFalse(cmd[5].startswith(self.class_dir))
 
     def test_second_exam_with_same_folder_name_gets_its_own(self):
         self.ss["exam_sessions"][CLASS] = {"Mid:1": {"folder": "Mid_1"}}
