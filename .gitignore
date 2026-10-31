@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output and download cache
+dist/
+build/
+tools/.cache/
+logs/
+*.log
+
+# Student data must never reach the repository.
+# Session folders, scans and anything a teacher might drop in by accident:
+CAM2 Exam Grading Sessions/
+test-folder/
+cam2_session.json
+grades.json
+cam2.lock
+scans/
+crops/
+thumbs/
+backups/
+reports/
+*.pdf
+*.xlsx
+*.csv
+
+# Local tool settings (machine-specific paths)
+.claude/launch.json
+.claude/settings.local.json
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
