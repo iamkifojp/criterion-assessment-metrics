@@ -1,0 +1,17 @@
+# Normalise line endings in the repository; check out native endings locally.
+* text=auto
+
+# Windows launch scripts must keep CRLF; shell scripts must keep LF.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.sh   text eol=lf
+*.command text eol=lf
+
+# Binary files
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.icns binary
+*.pdf  binary
+*.xlsx binary
+*.zip  binary

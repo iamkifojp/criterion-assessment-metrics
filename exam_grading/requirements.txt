@@ -1,0 +1,6 @@
+# CAM2 runtime libraries. The Windows and Mac packages ship these pre-installed;
+# teachers never run pip. Developers: python -m pip install -r requirements.txt
+Flask>=3.0          # local web server (Phase 2)
+Pillow>=10.0        # cropping and previews
+PyMuPDF>=1.24       # reading/splitting PDFs, student PDF reports
+openpyxl>=3.1       # class lists, rubric files, Excel gradebook
