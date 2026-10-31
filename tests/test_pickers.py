@@ -9,6 +9,7 @@ Run:  python -m unittest tests.test_pickers
 import io
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -40,9 +41,21 @@ class PickerTests(unittest.TestCase):
                                return_value=completed("C:\\CAM Data\n")) as run:
             self.assertEqual(pickers.pick_pdf("Choose", r"C:\CAM"), r"C:\CAM Data")
             command = run.call_args.args[0]
-            self.assertEqual(command[1:5], ["-m", "engine.pickers", "--mode", "pdf"])
+            self.assertEqual(command[1:6], ["-c", pickers._CHILD_BOOT, pickers.APP_ROOT,
+                                            "--mode", "pdf"])
             self.assertIn("--initial", command)
             self.assertEqual(run.call_args.kwargs["cwd"], pickers.APP_ROOT)
+
+    def test_child_boot_finds_cam2_without_the_working_folder(self):
+        # An embedded Python with a ._pth file puts neither the working folder
+        # nor the script folder on sys.path; started from elsewhere, plain
+        # "-m engine.pickers" would not find CAM2's engine.
+        with tempfile.TemporaryDirectory() as elsewhere:
+            result = subprocess.run(
+                [sys.executable, "-c", pickers._CHILD_BOOT, pickers.APP_ROOT, "--help"],
+                cwd=elsewhere, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--mode", result.stdout)
 
     def test_packaged_app_runs_itself_with_pick(self):
         with mock.patch.object(pickers.os, "name", "nt"), \

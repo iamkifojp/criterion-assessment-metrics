@@ -25,6 +25,13 @@ import threading
 APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODES = ("folder", "pdf")
 PICK_FLAG = "--pick"
+# Runs the picker child from source with CAM2's folder first on sys.path
+# (passed as the first argument). ``python -m engine.pickers`` relied on the
+# working folder being on sys.path, which an embedded Python with a ``._pth``
+# file (CAM's portable bundle, which hosts CAM2) does not add; there
+# ``engine`` would even be CAM's own package.
+_CHILD_BOOT = ("import sys; sys.path.insert(0, sys.argv.pop(1)); "
+               "from engine.pickers import _main; raise SystemExit(_main(sys.argv[1:]))")
 
 
 def pick_folder(title: str, initial: str | None = None) -> str | None:
@@ -98,7 +105,7 @@ def _frozen() -> bool:
 def _pick_windows_child(mode: str, title: str, initial: str | None) -> str | None:
     # The packaged app has no Python to run "-m" with, so CAM2.exe itself is
     # started with --pick and launcher.py hands that straight to _main().
-    entry = [PICK_FLAG] if _frozen() else ["-m", "engine.pickers"]
+    entry = [PICK_FLAG] if _frozen() else ["-c", _CHILD_BOOT, APP_ROOT]
     command = [sys.executable, *entry, "--mode", mode, "--title", title]
     if initial:
         command.extend(["--initial", initial])
