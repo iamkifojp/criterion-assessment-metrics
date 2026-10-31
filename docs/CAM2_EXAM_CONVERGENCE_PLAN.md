@@ -299,10 +299,13 @@ building:*
   folder is skipped by Sync and refused by Upload & stage. Without it the CSV
   would be read as a grading CSV.*
 - *Nothing in a running CAM picked up CAM2's "Send to CAM" (the old exam path
-  used CGW's export beacon, and Sync is no longer a button), so
-  `_cam2_send_poller` (a `run_every=3` fragment) watches the active class's
-  `cam2_session.json` files and runs `sync_exam`. The "🔄 Sync here" wording
-  in CAM was corrected with it.*
+  used CGW's export beacon, and Sync is no longer a button). CAM now compares
+  every class's session folders with its saved record (a stat-only stamp per
+  session in `ingested_files`) on every rerun and every 3 s, and reads only
+  what changed, so a send made while CAM was closed, asleep or on another
+  class is never missed (ARCHITECTURE §4). The exam panel shows the send
+  status with a "Check CAM2 now" button; the "🔄 Sync here" wording was
+  corrected.*
 - *The CGW-artifact purge on exam delete (`_purge_exam_cgw_artifacts`) went
   too: Sync no longer reads old exam CSVs, so they cannot bring an exam back.
   Permanent delete only moves the CAM2 session aside.*

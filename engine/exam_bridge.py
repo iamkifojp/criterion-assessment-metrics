@@ -299,6 +299,19 @@ def find_sessions(class_dir: str) -> List[str]:
     return out
 
 
+def session_stamp(folder: str) -> List[int]:
+    """Cheap change marker for the two files Sync reads: ``[mtime_ns, size]``
+    of each, from ``os.stat`` alone. A list, so it compares equal after a JSON
+    round trip in the ``ingested_files`` registry. Raises OSError when either
+    file is missing."""
+    storage = cam2_module("storage")
+    stamp: List[int] = []
+    for name in (storage.SESSION_FILE, storage.GRADES_FILE):
+        info = os.stat(os.path.join(folder, name))
+        stamp += [info.st_mtime_ns, info.st_size]
+    return stamp
+
+
 def session_fingerprint(folder: str) -> str:
     """Hash of the two files Sync reads; a session is re-read only when it
     changes. Raises OSError when either file can't be read (mid-sync)."""

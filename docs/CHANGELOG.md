@@ -22,12 +22,17 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
   Upload & stage.
 - Fix found on the way: after *Send to CAM* in CAM2, a running CAM did not
   notice until restarted, and its messages pointed at a 🔄 Sync button that no
-  longer exists. `_cam2_send_poller` now watches the active class's
-  `cam2_session.json` files every 3 s and syncs that class's sent exams.
+  longer exists. CAM now compares every class's exam folders with its own
+  saved record (a cheap file-date stamp per session in `ingested_files`) on
+  every rerun and every 3 s, and reads only folders that changed. A first
+  version watched only the class on screen and took a first look as "already
+  read", which could hide an exam sent for another class until restart; the
+  record-based check has no such gap. The exam panel shows the send status
+  and a **🔄 Check CAM2 now** button.
 - Delete: permanent delete of an exam no longer hunts for old CGW crops,
   definitions and CSVs; it moves the CAM2 session folder to `exams/_deleted/`.
 
-Validation: CAM 261 tests + CAM2 215 (`python tools/run_all_tests.py`); the
+Validation: CAM 265 tests + CAM2 215 (`python tools/run_all_tests.py`); the
 CGW-only exam tests were deleted with the code they covered. Browser checks in
 sandboxes: CGW boots clean with no exam UI; CAM read, banded and displayed a
 sent CAM2 exam and picked up a re-send on its own.

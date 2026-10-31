@@ -294,27 +294,6 @@ class SyncTests(_AppBase):
         self.assertEqual((summary["skipped"], summary["ingested"], changed),
                          (1, 0, (False, False)))
 
-    def test_send_poller_syncs_when_cam2_sends(self):
-        folder = self.hosted(self.marks_session, ready=False)
-        poll = app._cam2_send_poller.__wrapped__   # the fragment body
-        rerun = mock.Mock()
-        with mock.patch.object(app.st, "rerun", rerun, create=True),                 mock.patch.object(app, "_report_sync", lambda summary: None),                 mock.patch.object(app, "ensure_class_context", lambda: None),                 mock.patch.object(app, "_heal_score_comments_from_mirrors", lambda: None):
-            poll()                  # first look: recorded only
-            poll()                  # unchanged: nothing
-            self.assertEqual(self.gb.assignments, [])
-            # CAM2's "Send to CAM" rewrites cam2_session.json.
-            session, config, _ = self.storage.open_session(folder)
-            config["host_ready_at"] = "2026-11-01T10:00:00+00:00"
-            session.config_file.save(config)
-            path = os.path.join(folder, self.storage.SESSION_FILE)
-            os.utime(path, (os.path.getatime(path), os.path.getmtime(path) + 5))
-            poll()
-            self.assertEqual([a.name for a in self.gb.assignments], [EXAM])
-            self.assertIn(EXAM, self.gb.students["100001"].exam_results)
-            rerun.assert_called_once()
-            poll()                  # nothing new: no repaint
-            rerun.assert_called_once()
-
     def _crop(self, folder, sid):
         os.makedirs(os.path.join(folder, "crops", "__name__"), exist_ok=True)
         return os.path.join(folder, "crops", "__name__", f"{sid}.png")
@@ -417,6 +396,118 @@ class SyncTests(_AppBase):
         summary, _ = self.sync()
         self.assertEqual(summary["errors"], 1)
         self.assertEqual(self.gb.assignments, [])
+
+
+class SendPickupTests(_AppBase):
+    """CAM2 sends are found by comparing each exam folder with CAM's record,
+    so nothing depends on CAM having been open, awake or on that class."""
+
+    def setUp(self):
+        super().setUp()
+        self.rerun = mock.Mock()
+        for p in (mock.patch.object(app.st, "rerun", self.rerun, create=True),
+                  mock.patch.object(app, "_report_sync", lambda summary: None),
+                  mock.patch.object(app, "ensure_class_context", lambda: None),
+                  mock.patch.object(app, "_heal_score_comments_from_mirrors", lambda: None)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.poll = app._cam2_send_poller.__wrapped__   # the fragment body
+
+    def _bump(self, folder):
+        """Move both session files' times on, as a later save would."""
+        for name in (self.storage.SESSION_FILE, self.storage.GRADES_FILE):
+            path = os.path.join(folder, name)
+            info = os.stat(path)
+            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 5_000_000_000))
+
+    def send(self, folder, when="2026-11-01T10:00:00+00:00", grade=None):
+        """CAM2's "Send to CAM" (optionally after changing one grade)."""
+        session, config, grades = self.storage.open_session(folder)
+        if grade:
+            self.gs.set_grade(config, grades, *grade)
+            session.grades_file.save(grades)
+        config["host_ready_at"] = when
+        session.config_file.save(config)
+        self._bump(folder)
+
+    def reads(self):
+        return mock.patch.object(app.exam_bridge, "read_session",
+                                 wraps=app.exam_bridge.read_session)
+
+    def test_send_for_a_class_not_on_screen(self):
+        self.ss["classes"].append({"name": "Other", "grade": "", "myp_year": "",
+                                   "subject": ""})
+        self.ss["active_class"] = "Other"
+        self.hosted(self.marks_session)              # sent before CAM looked
+        self.poll()
+        self.assertEqual([a.name for a in self.gb.assignments], [EXAM])
+        self.rerun.assert_called_once()
+
+    def test_send_and_resend_found_after_a_restart(self):
+        folder = self.hosted(self.marks_session, ready=False)
+        self.poll()
+        self.poll()
+        self.assertEqual(self.gb.assignments, [])
+        self.send(folder)
+        self.poll()
+        self.assertEqual(self.gb.students["100001"].exam_results[EXAM].total, 7)
+        # CAM restarts: session-only state is gone, the registry (saved in the
+        # database) is not.
+        self.ss.pop("cam2_checked", None)
+        with self.reads() as read:
+            self.poll()
+            read.assert_not_called()                 # unchanged: stats only
+            self.send(folder, "2026-11-01T11:00:00+00:00", grade=("s001", "q1", 5))
+            self.poll()
+            read.assert_called_once()
+        self.assertEqual(self.gb.students["100001"].exam_results[EXAM].total, 8)
+        self.assertEqual(self.ss["ingested_files"][folder]["ready_at"],
+                         "2026-11-01T11:00:00+00:00")
+        self.assertEqual(self.rerun.call_count, 2)
+
+    def test_unsent_session_is_read_once_per_change(self):
+        folder = self.hosted(self.marks_session, ready=False)
+        with self.reads() as read:
+            for _ in range(3):
+                self.poll()
+            self.assertEqual(read.call_count, 1)
+            session, config, grades = self.storage.open_session(folder)
+            self.gs.set_grade(config, grades, "s002", "q1", 2)
+            session.grades_file.save(grades)
+            self._bump(folder)
+            self.poll()
+            self.poll()
+            self.assertEqual(read.call_count, 2)
+        self.assertEqual(self.gb.assignments, [])
+        self.rerun.assert_not_called()
+
+    def test_broken_session_is_reported_once(self):
+        folder = self.hosted(self.marks_session)
+        with open(os.path.join(folder, "grades.json"), "w", encoding="utf-8") as fh:
+            json.dump({"format": "cam2-grades", "session_id": "someone-else"}, fh)
+        self.poll()
+        self.poll()
+        self.rerun.assert_called_once()
+        self.assertIn("could not be read", app._cam2_status(CLASS, EXAM))
+
+    def test_status_line(self):
+        self.assertEqual(app._cam2_status(CLASS, EXAM), "Not opened in CAM2 yet.")
+        folder = self.hosted(self.marks_session, ready=False)
+        self.poll()
+        self.assertEqual(app._cam2_status(CLASS, EXAM), "Not sent from CAM2 yet.")
+        self.send(folder)
+        self.poll()
+        line = app._cam2_status(CLASS, EXAM)
+        self.assertIn("Sent from CAM2 Nov 01", line)
+        self.assertIn("in CAM since", line)
+        # "Not finished after all" in CAM2: the last results sent stay.
+        session, config, _ = self.storage.open_session(folder)
+        config["host_ready_at"] = None
+        session.config_file.save(config)
+        self._bump(folder)
+        self.poll()
+        self.assertIn("Marked not finished in CAM2", app._cam2_status(CLASS, EXAM))
+        self.assertIn(EXAM, self.gb.students["100001"].exam_results)
 
 
 if __name__ == "__main__":

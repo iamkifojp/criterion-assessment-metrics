@@ -650,11 +650,27 @@ session only once it has been sent, and again only when its two files change
 (the fingerprint is kept in `ingested_files`). Re-reading is purge-replace for
 the exam's results; grades already applied in Window 1 are kept.
 
-**Picking up a send.** Sync runs at session start. While CAM is open,
-`_cam2_send_poller` (a `run_every=3` fragment) `os.stat`s the active class's
-`exams/*/cam2_session.json` files and, when one changes, runs `sync_exam` for the
-class, then repaints only if something was filed. This replaced CGW's export
-beacon for exams.
+**Picking up a send: compare, don't listen.** CAM2 sends no message; the
+folder is the signal, and CAM compares it with its own record rather than
+waiting for an event it might miss. Each session folder has a cheap stamp
+(`exam_bridge.session_stamp`: mtime and size of `cam2_session.json` and
+`grades.json`, from `os.stat` alone). A filed session keeps its stamp, its
+`host_ready_at` and its content hash in the `ingested_files` registry, which is
+saved in the database; a session read but not filed (not sent yet, or
+unreadable) keeps its stamp in the session-only `cam2_checked`.
+`_pull_cam2_sends` looks at every class (not only the one on screen) and reads
+only folders whose stamp matches neither record, so a folder never seen before
+always counts as new, and a session is not re-read until it changes again. It
+runs at session start (inside the global Sync), on every rerun (switching class, opening a panel, any click),
+and every 3 s while CAM is open (`_cam2_send_poller`, a `run_every` fragment
+that repaints only when something was filed or could not be read). The timer
+only sets how soon a send appears, never whether: a send made while CAM was
+closed, asleep or on another class is still newer than the record at the next
+check. The Window 1 exam panel shows where each exam stands (`_cam2_status`:
+not opened / not sent / sent at … · in CAM since …, or marked not finished
+since) with a **🔄 Check CAM2 now** button (`sync_exam`). CAM2 cannot see
+whether CAM has read a send: that would need CAM to write into the session
+folder, which it never does.
 
 **Grading onto criteria (Window 1).** A marks exam is banded from its total onto
 one criterion (`_apply_exam_bands`, proportional suggestion, teacher's pick).

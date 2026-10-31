@@ -778,9 +778,15 @@ ownership indexes or class mirrors.
   that, each rubric defaults from its name ("Criterion B", "Crit. B", "基準B",
   "B" → B).
 - The Sync registry (`ingested_files`) holds one row per session folder with
-  `"kind": "cam2"` and a hash of `cam2_session.json` + `grades.json`; a
-  session is read again only when that hash changes, and only while
-  `host_ready_at` is set (the teacher clicked *Send to CAM*).
+  `"kind": "cam2"`, a `hash` of `cam2_session.json` + `grades.json`, a
+  `stamp` (`[mtime_ns, size]` of each of the two files, for the cheap
+  check), `ready_at` (the `host_ready_at` that was read) and `ingested_at`. A
+  session is read again only when its stamp moves and then filed only when the
+  hash changed, and only while `host_ready_at` is set (the teacher clicked
+  *Send to CAM*). Rows from before the stamp existed get one on their next
+  check. A session read but not filed is noted in session-only
+  `cam2_checked` (`{folder: {"stamp", "why": "not_sent" | "error"}}`), never
+  saved.
 - Permanent delete of the exam drops its entry and moves the session folder to
   `exams/_deleted/<YYYYMMDD-HHMMSS> <folder>/`. Renaming the class moves the
   class key; deleting the class drops it.

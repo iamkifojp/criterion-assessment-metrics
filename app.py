@@ -4245,14 +4245,22 @@ def _sync_cam2_sessions(class_name: str, registry: dict, summary: dict,
     (``host_ready_at``) and again whenever its files change (fingerprint in
     the ``ingested_files`` registry, keyed by folder). ``only_exam`` limits
     the pass to one exam. Returns ``(ingested, changed)`` like
-    :func:`_sync_one_csv`."""
+    :func:`_sync_one_csv`.
+
+    Each folder's :func:`exam_bridge.session_stamp` is taken before reading
+    and kept with what came of it: in the registry beside a filed session,
+    or in session-only ``cam2_checked`` (``{"stamp", "why"}``) for a session
+    read but not filed (not sent, or unreadable). :func:`_cam2_stale_classes`
+    compares against these, so an unchanged folder is never read again."""
     any_ingested = False
+    checked = st.session_state.setdefault("cam2_checked", {})
     for folder in exam_bridge.find_sessions(class_data_dir(class_name)):
         exam = _cam2_exam_for_folder(class_name, folder)
         if only_exam and exam != only_exam:
             continue
         name = os.path.basename(folder)
         try:
+            stamp = exam_bridge.session_stamp(folder)
             fingerprint = exam_bridge.session_fingerprint(folder)
             mtime = os.path.getmtime(folder)
         except OSError as exc:
@@ -4262,18 +4270,26 @@ def _sync_cam2_sessions(class_name: str, registry: dict, summary: dict,
             continue
         prior = registry.get(folder)
         if prior and prior.get("hash") == fingerprint:
+            # Same content (a cloud client may touch a file without changing
+            # it): remember the stamp so the cheap check stops reading it.
+            prior["stamp"] = stamp
+            checked.pop(folder, None)
             summary["found"] += 1
             summary["skipped"] += 1
             continue
         try:
             session = exam_bridge.read_session(folder, assignment=exam or None)
         except exam_bridge.ExamSessionError as exc:
+            checked[folder] = {"stamp": stamp, "why": "error"}
             summary["found"] += 1
             summary["errors"] += 1
             summary["messages"].append(f"Exam session {name}: {exc.code}")
             continue
         if not session.ready_at:
-            continue    # still being graded: Sync waits for "Send to CAM"
+            # Still being graded (or marked "not finished after all"): Sync
+            # waits for "Send to CAM".
+            checked[folder] = {"stamp": stamp, "why": "not_sent"}
+            continue
         summary["found"] += 1
         exam = exam or session.exam_name or name
         n = _ingest_cam2_session(class_name, exam, session, summary)
@@ -4282,9 +4298,11 @@ def _sync_cam2_sessions(class_name: str, registry: dict, summary: dict,
         summary["classes"].add(class_name)
         registry[folder] = {
             "hash": fingerprint, "mtime": mtime, "class": class_name,
-            "assignment": exam, "kind": "cam2",
+            "assignment": exam, "kind": "cam2", "stamp": stamp,
+            "ready_at": session.ready_at,
             "ingested_at": datetime.now().isoformat(),
         }
+        checked.pop(folder, None)
         any_ingested = True
     return (any_ingested, any_ingested)
 
@@ -4357,22 +4375,29 @@ def sync_assignment(class_name: str, assignment_name: str) -> dict:
 def sync_exam(class_name: str, exam_name: str) -> dict:
     """Scoped Sync of one exam: read its CAM2 session
     (:func:`_sync_cam2_sessions` with ``only_exam``; "" reads every session
-    of the class) — the exam sibling of :func:`sync_assignment`. Returns the same summary shape as
-    ``sync_from_cloud`` for :func:`_report_sync`. A quiet no-op when no Custom
-    Database Path is set."""
+    of the class) — the exam sibling of :func:`sync_assignment`. Returns
+    the same summary shape as ``sync_from_cloud`` for :func:`_report_sync`.
+    A quiet no-op when no Custom Database Path is set."""
+    return _sync_cam2_classes([class_name], only_exam=exam_name)
+
+
+def _sync_cam2_classes(classes: list, only_exam: str = "") -> dict:
+    """Read the CAM2 sessions of ``classes`` and persist what was filed."""
     summary = {"found": 0, "ingested": 0, "updated": 0, "skipped": 0,
                "errors": 0, "scores": 0, "duplicates": 0, "reconciled": 0,
                "classes": set(), "messages": [], "duplicate_messages": []}
     custom = (st.session_state.get("prefs", {}).get("db_custom_path") or "").strip()
     if not custom:
         return summary
-    class_path = class_data_dir(class_name)
-    if not os.path.isdir(class_path):
-        return summary
-
     registry = st.session_state["ingested_files"]
-    any_ingested, any_change = _sync_cam2_sessions(
-        class_name, registry, summary, only_exam=exam_name)
+    any_ingested = any_change = False
+    for class_name in classes:
+        if not os.path.isdir(class_data_dir(class_name)):
+            continue
+        ingested, changed = _sync_cam2_sessions(
+            class_name, registry, summary, only_exam=only_exam)
+        any_ingested = any_ingested or ingested
+        any_change = any_change or changed
 
     if any_ingested or any_change:
         if st.session_state["active_class"] not in class_names() and class_names():
@@ -4381,6 +4406,82 @@ def sync_exam(class_name: str, exam_name: str) -> dict:
         _heal_score_comments_from_mirrors()
         persist()
     return summary
+
+
+def _cam2_stale_classes() -> list:
+    """Classes holding a CAM2 session whose files differ from what CAM last
+    read: the stamp recorded with the filed session (``ingested_files``,
+    persisted in the database) or with the last read that filed nothing
+    (``cam2_checked``). Stats only — no file is opened. Every class is
+    looked at, not only the one on screen, and a folder seen for the first
+    time counts as changed, so a send is never taken as already read."""
+    registry = st.session_state["ingested_files"]
+    checked = st.session_state.get("cam2_checked", {})
+    stale = []
+    for cls in class_names():
+        for folder in exam_bridge.find_sessions(class_data_dir(cls)):
+            try:
+                stamp = exam_bridge.session_stamp(folder)
+            except OSError:
+                continue    # mid-save or missing: the next check retries
+            if stamp in ((registry.get(folder) or {}).get("stamp"),
+                         (checked.get(folder) or {}).get("stamp")):
+                continue
+            stale.append(cls)
+            break
+    return stale
+
+
+def _pull_cam2_sends() -> dict:
+    """Bring in every CAM2 exam sent (or re-sent) since CAM last read it.
+
+    The exam folders are the source of truth and nothing is lost between
+    checks: whatever CAM missed while closed, asleep or on another class is
+    still newer than its record the next time this runs. Runs on every app
+    rerun (:func:`main`) and every few seconds while CAM is open
+    (:func:`_cam2_send_poller`). Returns a sync summary, or ``None`` when
+    nothing has changed."""
+    custom = (st.session_state.get("prefs", {}).get("db_custom_path") or "").strip()
+    if not custom:
+        return None
+    stale = _cam2_stale_classes()
+    if not stale:
+        return None
+    return _sync_cam2_classes(stale)
+
+
+def _cam2_status(class_name: str, exam_name: str) -> str:
+    """One line for the Window 1 exam panel: where this exam stands between
+    CAM2 and CAM."""
+    folder = os.path.abspath(cam2_session_dir(class_name, exam_name))
+    storage = exam_bridge.cam2_module("storage")
+    if not storage.is_session_folder(folder):
+        return "Not opened in CAM2 yet."
+    rec = st.session_state["ingested_files"].get(folder)
+    note = (st.session_state.get("cam2_checked", {}).get(folder) or {}).get("why")
+    if rec is None:
+        if note == "error":
+            return "⚠ The CAM2 files could not be read — see the message above."
+        return "Not sent from CAM2 yet."
+    sent = _cam2_time(rec.get("ready_at"))
+    line = (f"📨 Sent from CAM2{' ' + sent if sent else ''} · in CAM since "
+            f"{_cam2_time(rec.get('ingested_at'))}.")
+    if note == "not_sent":
+        line += " Marked not finished in CAM2 since then; these are the last results sent."
+    elif note == "error":
+        line += " ⚠ The newest CAM2 files could not be read; these are the last results read."
+    return line
+
+
+def _cam2_time(value) -> str:
+    """``Nov 01 10:42`` in local time from an ISO timestamp, else ""."""
+    try:
+        when = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return ""
+    if when.tzinfo is not None:
+        when = when.astimezone().replace(tzinfo=None)
+    return f"{when:%b %d %H:%M}"
 
 
 def sync_from_cloud() -> dict:
@@ -4746,42 +4847,14 @@ def _export_beacon_poller() -> None:
 
 @st.fragment(run_every=3)
 def _cam2_send_poller() -> None:
-    """Sync an exam the moment it is sent from CAM2.
+    """While CAM is open, bring in a CAM2 send within a few seconds.
 
-    CAM2's *Send to CAM* (and *Send again*) rewrites the session's
-    ``cam2_session.json``. Every ~3 s this fragment ``os.stat``s that file
-    for each exam folder of the active class, read only; when one changes it
-    runs :func:`sync_exam` for the class, which reads only sessions that were
-    sent and changed. The first look at a folder only records it (the
-    session-start Sync has already read it). It repaints only when Sync
-    filed something, so a teacher typing in CAM is not interrupted for
-    nothing."""
-    custom = (st.session_state.get("prefs", {}).get("db_custom_path") or "").strip()
-    cls = st.session_state.get("active_class", "")
-    if not custom or not cls:
-        return
-    root = os.path.join(class_data_dir(cls), exam_bridge.EXAMS_DIR)
-    try:
-        entries = [e for e in os.scandir(root)
-                   if e.is_dir() and not e.name.startswith("_")]
-    except OSError:
-        return
-    session_file = exam_bridge.cam2_module("storage").SESSION_FILE
-    seen = st.session_state.setdefault("cam2_session_mtimes", {})
-    changed = False
-    for entry in entries:
-        path = os.path.join(entry.path, session_file)
-        try:
-            mtime = os.stat(path).st_mtime
-        except OSError:
-            continue
-        if path in seen and seen[path] != mtime:
-            changed = True
-        seen[path] = mtime
-    if not changed:
-        return
-    summary = sync_exam(cls, "")
-    if summary["ingested"] or summary["updated"] or summary["errors"]:
+    Only sets the pace: :func:`_pull_cam2_sends` compares the exam folders
+    with CAM's record, so a missed tick (sleep, a closed tab) just means the
+    next check, or the next rerun, finds the send. Repaints only when
+    something was filed or a session could not be read."""
+    summary = _pull_cam2_sends()
+    if summary and (summary["ingested"] or summary["updated"] or summary["errors"]):
         _report_sync(summary)
         st.rerun(scope="app")
 
@@ -7359,6 +7432,20 @@ def _render_exam_banding() -> None:
         names = [a.name for a in exams]
         sel = st.selectbox("Exam", names, key="exam_band_sel")
         asg = next(a for a in exams if a.name == sel)
+        cls = st.session_state.get("active_class", "")
+        sc = st.columns([4, 1.4], vertical_alignment="center")
+        sc[0].caption(_cam2_status(cls, sel))
+        if sc[1].button("🔄 Check CAM2 now", key=f"cam2_check_{sel}",
+                        width="stretch",
+                        help="Read this exam's CAM2 folder again now. CAM "
+                             "also checks by itself every few seconds."):
+            summary = sync_exam(cls, sel)
+            if summary["ingested"] or summary["updated"] or summary["errors"]:
+                _report_sync(summary)
+            else:
+                st.session_state["save_status"] = (
+                    "ok", f"'{sel}' is up to date with CAM2.")
+            st.rerun()
         results = _exam_results_for(sel)
         if not results:
             st.caption("No results for this exam yet. Grade it in CAM2 and "
@@ -10491,11 +10578,15 @@ def main() -> None:
     # the moment the teacher returns from CGW.
     _run_session_start_sync()
     _run_active_launch_probe()
-    # Event-driven "sync on export": lightweight run_every fragments that poll
-    # CGW's export beacon and the active class's CAM2 sessions, and scoped-sync
-    # a fresh grading export or a sent exam within seconds, with no teacher
-    # interaction.
+    # Event-driven "sync on export": a lightweight run_every fragment polls
+    # CGW's export beacon and scoped-syncs a fresh grading export within
+    # seconds, with no teacher interaction.
     _export_beacon_poller()
+    # CAM2 sends: checked on every rerun (switching class, opening a panel,
+    # any click) against CAM's own record, and on a timer in between.
+    summary = _pull_cam2_sends()
+    if summary and (summary["ingested"] or summary["updated"] or summary["errors"]):
+        _report_sync(summary)
     _cam2_send_poller()
 
     prefs = st.session_state["prefs"]

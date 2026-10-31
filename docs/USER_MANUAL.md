@@ -155,12 +155,18 @@ with **🛠 Exam setup / Grade**; it reopens at the same question and paper.
 
 ### 3 · Bring the results into the gradebook (Window 1)
 
-A few seconds after you send, CAM reads the exam (it never changes the files in
-the exam folder; an exam sent while CAM was closed is read the next time CAM
-starts). The results appear in Window 1's **📝 Exam grading** panel and in each
+A few seconds after you send, CAM reads the exam. It never changes the files
+in the exam folder, and nothing is missed if CAM was closed, the computer was
+asleep or another class was open: CAM compares each exam folder with what it
+last read, so an exam sent in the meantime is brought in the next time CAM
+looks. The results appear in Window 1's **📝 Exam grading** panel and in each
 student's marks list in Window 3, with every question's mark (or Not answered),
 which choice answers counted and the comment. If you change grades in CAM2
 afterwards, click **Send again**; grades you already applied in CAM are kept.
+
+The top of the panel says where the exam stands, for example
+*📨 Sent from CAM2 Nov 01 10:42 · in CAM since Nov 01 10:42*, or *Not sent from
+CAM2 yet*. **🔄 Check CAM2 now** reads the exam folder again straight away.
 
 - **Marks exam.** The panel shows each student's raw total (`31/45`) and a 0–8
   grade, suggested in proportion to the total. Pick the criterion it counts
