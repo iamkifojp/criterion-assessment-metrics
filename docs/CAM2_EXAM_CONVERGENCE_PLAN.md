@@ -1,7 +1,7 @@
 # Bringing CAM2's exam grading back into CAM: assessment and staged plan
 
-**Status:** v1, 2026-10-31. The teacher locked D1, D2 and D4–D8 (§4). **D3 is
-still open.** Nothing is implemented yet.
+**Status:** v2, 2026-10-31. All decisions (D1–D9, §4) are locked. Nothing is
+implemented yet.
 **Repos:** CAM = `C:\Project\criterion-assessment-metrics-public`;
 CAM2 = `C:\Project\cam2-exam-grading` (`iamkifojp/cam2-exam-grading`, 4 commits,
 187 tests, Phases 1–4c done, Phase 5 packaging next).
@@ -31,7 +31,8 @@ back. It also dropped several things CAM depends on.
 - **Flow:** typed grid ranges → Process All → grade one question across the
   class (marks only) → Export CSV + `.meta.json` sidecar → CAM Sync ingests it
   as an `ExamResult` → the Window 1 panel turns raw marks into one 0–8 band
-  (with optional per-section strand levels, see D3) → one `CriterionScore`.
+  (with optional per-section strand levels, dropped by D3) → one
+  `CriterionScore`.
 - **Saving:** `save_exam_grades` is a plain `.tmp` + `os.replace`. It has none
   of the generation, conflict-copy or wipe checks that protect the main
   database, although these files sit in a cloud-synced class folder.
@@ -58,13 +59,14 @@ These must exist before CAM's exam code can be retired:
 2. **Shuffled anonymity**: papers numbered by position and reshuffled for each
    question. CAM2 only has "Hide student names".
 3. **Teacher-picked answers** for an over-answered choice group (D2).
-4. **Strand levels** for a marks exam: sections of one criterion, each given
-   its own level before the final grade (D3, open).
-5. **Correcting a box after grading has started** and re-slicing just that
+4. **Correcting a box after grading has started** and re-slicing just that
    question. CAM2 dropped this in favour of "See whole page". Boxes can still be
    edited in Step 2, but that re-slices every paper.
-6. **The CAM link:** roster, criteria, result ingest, banding into the
+5. **The CAM link:** roster, criteria, result ingest, banding into the
    gradebook, sync, and clean-up on permanent delete.
+
+CAM's strand levels for marks exams are not on this list: D3 drops them in
+favour of Rubric mode.
 
 ---
 
@@ -113,6 +115,10 @@ and CAM2's save safety on the exam files that live in the cloud folder.
   the exact session. The standalone app keeps both.
 - CAM2's **class-list upload** in hosted mode: CAM supplies the roster. Typing
   a name for an unmatched paper stays.
+- CAM's **strand levels** for marks exams (D3).
+
+CAM2's **Step 5 export stays in hosted mode** (D9): student PDFs and the Excel
+gradebook, written to the session's `reports/` folder.
 - CAM2's **packaging and Mac build** (Phase 5). CAM keeps its own Windows bundle
   and only adds the `exam_grading/` folder to it.
 - **App-wide Japanese for CAM.** Only the exam screens and the student PDFs come
@@ -137,6 +143,19 @@ and CAM2's save safety on the exam files that live in the cloud folder.
   *(Read from "best N or fix questions": "fix" taken to mean the teacher fixes
   which questions count. Correct this if a fixed rule such as "first N
   answered" was meant.)*
+- **D3 · No strand levels; criteria come from Rubric mode** (option C).
+  An exam that assesses several criteria is set up in CAM2's Rubric mode, with
+  each question (or group of questions) assigned to Criterion A, B, C or D,
+  and graded with the teacher's full rubrics. CAM2's review step and student
+  PDFs report a level per criterion, and CAM imports those levels (D4). A
+  marks-mode exam is banded from its total onto one criterion in the Window 1
+  panel, without sections. CAM's per-section strand dropdowns and
+  `section_bands` are removed in Stage 4.
+  - *For reference, what is being dropped:* a marks exam counted toward one
+    criterion, and each section was a strand of it (for example Knowing /
+    Applying / Interpreting). The Window 1 panel showed each section's
+    subtotal with a 0–8 level dropdown and a final grade suggested as the
+    rounded average; only the final grade entered the gradebook.
 - **D4 · Rubric-mode exams:** CAM2's suggested (or teacher-adjusted) final
   level per criterion becomes that criterion's `CriterionScore`, confirmed in
   the Window 1 panel, with no raw-mark banding step.
@@ -153,31 +172,9 @@ and CAM2's save safety on the exam files that live in the cloud folder.
   order for every question, seeded per exam and question so it is stable on
   reload). With both on, papers are shown as `01`, `02`, … by position, so the
   same number is a different student on each question.
-
-### Open
-
-- **D3 · Strand levels in marks-mode exams.** How CAM does it today: a marks
-  exam counts toward **one** criterion, chosen in the Window 1 **📝 Exam
-  grading** panel ("Counts toward criterion"). If the exam has more than one
-  section, each section is treated as a **strand of that criterion** (for
-  example Knowing / Applying / Interpreting on the Y7 Sciences cover sheet).
-  For each student the panel shows the section subtotals (`Knowing 12/16`)
-  with a 0–8 level dropdown beside each, pre-filled in proportion to the
-  subtotal, and a final-grade dropdown pre-filled with the rounded average of
-  the section levels. The teacher can override any of them. Only the final
-  grade enters the gradebook; the strand levels are kept in the score's note
-  (`… · sections: Knowing 7, Applying 7, Interpreting 5`). The options:
-  - **A · Keep it in CAM.** CAM2 gains named sections (a question group with a
-    name, all of whose questions count). CAM's panel keeps working as it does
-    now.
-  - **B · Move the cover sheet into CAM2** *(recommended, consistent with D2)*.
-    CAM2 gains named sections plus, in Marks mode, an optional "Give levels"
-    setting: Step 5 shows a 0–8 level per section and a final level, suggested
-    the same way and editable, and they are printed on the student PDF. CAM
-    imports the final level as it does for rubric exams (D4), and its panel
-    becomes a confirm step.
-  - **C · Drop strands.** A marks exam is banded from its total only. Use
-    Rubric mode for exams graded by strand.
+- **D9 · Exam reports from CAM2 inside CAM:** hosted mode keeps CAM2's Step 5
+  export, so a teacher can hand out a report for one test (student PDFs, plus
+  the Excel gradebook) separately from CAM's end-of-term report.
 
 ---
 
@@ -200,28 +197,25 @@ Each is a CAM2 phase with its own tests and a browser check, in this order:
 - **1a · Choice-group policy** (D2): Best N or Teacher picks per group, the
   Step 5 `?` and tick-to-choose, `grading_summary` totals, reports and the
   gradebook.
-- **1b · Named sections and levels** (D3, after it is decided): option A adds
-  named sections only; option B adds them plus Marks-mode section and final
-  levels in Step 5 and the reports. Skipped for option C.
-- **1c · Keyword checklist:** per-exam comment pills in the Step 4 card.
+- **1b · Keyword checklist:** per-exam comment pills in the Step 4 card.
   Ticking them rebuilds the generated part of the comment and keeps typed text
   (the CGW behaviour).
-- **1d · Shuffle papers** (D8): the second tick box, seeded per exam and
+- **1c · Shuffle papers** (D8): the second tick box, seeded per exam and
   question, as in CGW's `examSeededShuffle`.
-- **1e · Adjust this box** (D7): re-slice one question (`slice_students`
+- **1d · Adjust this box** (D7): re-slice one question (`slice_students`
   already exists; add a per-question variant) and return to the same paper.
-- **1f · Host hook:** `launcher.py --host <handoff.json>` with exam name, class
+- **1e · Host hook:** `launcher.py --host <handoff.json>` with exam name, class
   name, session folder, roster `[{external_id, name}]` and optional criterion
   names for rubric cards. In host mode: the start screen is skipped, the exam
   name is fixed, the matcher uses the given roster and stores `external_id` on
   roster entries, a "Back to CAM" button appears, and a "Grading finished —
-  send to CAM" action writes `host_ready_at` into `cam2_session.json`. Without
-  `--host`, nothing changes.
+  send to CAM" action writes `host_ready_at` into `cam2_session.json`. Step 5
+  export stays available (D9). Without `--host`, nothing changes.
 
 ### Stage 2 — CAM reads sessions (CAM; reader only) · M
 - Extend `ExamResult` in a tolerant way: per-question values that can be
   `not_answered`; per-question criterion `levels`; `final_levels` per
-  criterion; section levels (if D3 = B); `mode`; `session_id`. Records already
+  criterion; `mode`; `session_id`. Records already
   in a database load unchanged. Update `_validate_exam_result` and the to/from
   dict code.
 - `engine/exam_bridge.py`: `read_session(folder)` → per-student results via the
@@ -237,9 +231,9 @@ Each is a CAM2 phase with its own tests and a browser check, in this order:
   this way; there is no CGW fallback (D5).
 - **Sync** reads every hosted session that has `host_ready_at`, read only. It
   ingests or updates the `ExamResult`s.
-- **Window 1 panel:** rubric exams (and marks exams with levels, if D3 = B)
-  show the imported final levels to confirm. Marks exams without levels band
-  from the total, plus strands if D3 = A.
+- **Window 1 panel:** rubric exams show the imported final level per
+  criterion to confirm (D4). Marks exams band from the total onto one
+  criterion, with no sections (D3).
 - **Window 2/3:** name crops and the 🧩 thumbnails come from
   `crops/__name__/<sid>.png`; Window 3 shows each question's value,
   Not answered, which choice answers counted, and the comment.
@@ -256,7 +250,9 @@ Each is a CAM2 phase with its own tests and a browser check, in this order:
   `test_exam_reslice`, `test_exam_sections`). CAM2's suite covers what they
   tested.
 - Remove CAM's exam-CSV ingest path (`is_exam_csv`, `ingest_exam_csv`,
-  `load_exam_sidecar`) and its `?` resolver dialog (D2, D5). Update the
+  `load_exam_sidecar`), its `?` resolver dialog (D2, D5), and the sectioned
+  banding panel with `section_bands` (D3). `chosen` and `section_bands` stay
+  readable on old records but are no longer written. Update the
   CAM-side tests (`test_exam_identity`, `test_exam_resolved`,
   `test_exam_sections_app`) to the session reader, or retire the parts that
   only tested the CSV path.
@@ -284,4 +280,4 @@ Each is a CAM2 phase with its own tests and a browser check, in this order:
   idle-stopping. The bridge checks the port the same way as
   `_ensure_workspace_running`.
 - **CAM2 Phase 5 timing:** Stage 1 doesn't block CAM2's first release.
-  Landing 1a–1e before it saves teachers a second download.
+  Landing 1a–1d before it saves teachers a second download.
