@@ -9,6 +9,7 @@ Modules are framework-free so they can be tested on their own:
     roster           class lists and matching papers to names
     tables           reading .xlsx / .csv into rows
     grading_summary  recording grades, totals, averages, overrides
+    keywords         quick comments ticked while grading
     i18n             English / Japanese text
     pickers          native folder / PDF dialogs (Windows, macOS)
     errors           UserError with translatable codes

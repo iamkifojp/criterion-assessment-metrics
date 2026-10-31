@@ -166,6 +166,65 @@ class SetupTests(WorkflowTestCase):
         workflow.set_questions(self.config, payload)
         self.assertFalse(self.config["sliced"])
 
+    def test_adjusting_one_box_reslices_only_that_question(self):
+        q1 = {"id": "q1", "label": "Q1", "boxes": ["B2"], "max": 2}
+        q2 = {"id": "q2", "label": "Q2", "boxes": ["B5"], "max": 3}
+        workflow.set_questions(self.config, {"name_box": ["A1"], "questions": [q1, q2]})
+        workflow.slice_session(self.session, self.config)
+        q2_crop = self.session.path("crops/q2/s001.png")
+        q2_time = os.path.getmtime(q2_crop)
+        with Image.open(self.session.path("crops/q1/s001.png")) as im:
+            self.assertEqual(center_color(im.convert("RGB")), RED)
+
+        q1["boxes"] = ["B3"]                                  # Q1's box moved off the red cell
+        workflow.set_questions(self.config, {"name_box": ["A1"], "questions": [q1, q2]})
+        self.assertFalse(self.config["sliced"])
+        self.assertEqual(workflow.stale_regions(self.config), ["q1"])
+        summary = workflow.slice_question(self.session, self.config, "q1")
+        self.assertEqual((summary["errors"], summary["crops"]), ([], 3))
+        self.assertTrue(self.config["sliced"])
+        with Image.open(self.session.path("crops/q1/s001.png")) as im:
+            self.assertNotEqual(center_color(im.convert("RGB")), RED)
+        self.assertEqual(os.path.getmtime(q2_crop), q2_time)            # Q2 untouched
+
+        # Moving a box back where it was needs no slicing at all
+        q2["boxes"] = ["B6"]
+        workflow.set_questions(self.config, {"name_box": ["A1"], "questions": [q1, q2]})
+        self.assertFalse(self.config["sliced"])
+        q2["boxes"] = ["B5"]
+        workflow.set_questions(self.config, {"name_box": ["A1"], "questions": [q1, q2]})
+        self.assertTrue(self.config["sliced"])
+
+        # Two boxes moved: re-slicing one leaves the papers unsliced
+        q1["boxes"], q2["boxes"] = ["B4"], ["B6"]
+        workflow.set_questions(self.config, {"name_box": ["A1"], "questions": [q1, q2]})
+        workflow.slice_question(self.session, self.config, "q1")
+        self.assertFalse(self.config["sliced"])
+        workflow.slice_question(self.session, self.config, "q2")
+        self.assertTrue(self.config["sliced"])
+        with self.assertRaises(UserError):
+            workflow.slice_question(self.session, self.config, "q9")
+
+    def test_reslicing_one_question_needs_current_papers(self):
+        q1 = {"id": "q1", "label": "Q1", "boxes": ["B2"], "max": 2}
+        workflow.set_questions(self.config, {"questions": [q1]})
+        with self.assertRaises(UserError) as ctx:                       # never sliced
+            workflow.slice_question(self.session, self.config, "q1")
+        self.assertEqual(ctx.exception.code, "not_sliced")
+        workflow.slice_session(self.session, self.config)
+        del self.config["crops_of"]                                     # sliced by an older CAM2
+        q1["boxes"] = ["B3"]
+        workflow.set_questions(self.config, {"questions": [q1]})
+        self.assertEqual(workflow.stale_regions(self.config), ["q1"])
+        workflow.slice_question(self.session, self.config, "q1")
+        self.assertTrue(self.config["sliced"])
+        # A late paper added while unsliced has no crops: only slicing everything helps
+        q1["boxes"] = ["B4"]
+        workflow.set_questions(self.config, {"questions": [q1]})
+        workflow.add_papers(self.session, self.config, {"type": "folder", "path": self.scans})
+        with self.assertRaises(UserError):
+            workflow.slice_question(self.session, self.config, "q1")
+
     def test_reordering_questions_keeps_papers_sliced(self):
         q1 = {"id": "q1", "label": "Q1", "boxes": ["B2"], "max": 2}
         q2 = {"id": "q2", "label": "Q2", "boxes": ["B5"], "max": 3}

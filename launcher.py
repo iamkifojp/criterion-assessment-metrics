@@ -6,7 +6,10 @@
 * Stop by itself once no CAM2 tab has sent a heartbeat for 10 minutes
   (open tabs send one every minute), or when the teacher clicks Quit.
 
-Usage:  python launcher.py [--port 5182] [--no-browser] [--idle 600]
+Usage:  python launcher.py [--port 5182] [--no-browser] [--idle 600] [--host handoff.json]
+
+``--host`` is for another app (CAM) opening one of its exams in CAM2; see
+``engine/host.py``. A CAM2 that is already running is handed the exam.
 """
 
 from __future__ import annotations
@@ -25,7 +28,8 @@ from werkzeug.serving import make_server
 
 from app import create_app
 from appstate import AppState
-from engine import storage
+from engine import host, storage
+from engine.errors import UserError
 
 DEFAULT_PORT = 5182
 IDLE_SECONDS = 10 * 60
@@ -78,21 +82,37 @@ def main(argv=None) -> int:
                         help="seconds without an open CAM2 tab before stopping (0 = never)")
     parser.add_argument("--data-dir", help="developers: keep app data and the default "
                         "Documents folder here, away from the real ones")
+    parser.add_argument("--host", help="handoff file from the app that opened CAM2 (CAM)")
     args = parser.parse_args(argv)
     if args.data_dir:
         data_dir = os.path.abspath(args.data_dir)
         os.environ["CAM2_APP_DATA"] = data_dir
         os.environ["CAM2_DOCUMENTS_OVERRIDE"] = os.path.join(data_dir, "Documents")
     _log_to_file_if_windowless()
+    handoff = None
+    if args.host:
+        try:
+            handoff = host.load(args.host)
+        except UserError as err:
+            print(f"CAM2: cannot use the handoff file {args.host!r} ({err.code})")
+            return 2
 
     existing = running_instance()
     if existing:
+        if handoff:
+            request = urllib.request.Request(
+                existing + "api/host/handoff", method="POST",
+                data=json.dumps(dict(handoff, format=host.FORMAT, version=host.VERSION)).encode("utf-8"),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=10):
+                pass
         if not args.no_browser:
             webbrowser.open(existing)
         print(f"CAM2 is already running at {existing}")
         return 0
 
     state = AppState()
+    state.host = handoff
     holder = {}
 
     def shutdown():

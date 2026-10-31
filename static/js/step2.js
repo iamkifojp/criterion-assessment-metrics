@@ -167,8 +167,21 @@ function choiceScreen() {
     })),
     h("label", { class: "inline" }, t("step2.choice.answer_before", { count: g.questions.length }),
       h("input", { type: "number", min: "1", class: "num", value: g.answer || "", id: `group-answer-${gi}`,
-        oninput: (e) => { g.answer = parseInt(e.target.value, 10) || 0; saveQuestions(); } }),
+        oninput: (e) => {
+          g.answer = parseInt(e.target.value, 10) || 0;
+          const best = document.getElementById(`group-best-${gi}`);
+          if (best) best.textContent = t("step2.choice.pick_best", { n: g.answer || "N" });
+          saveQuestions();
+        } }),
       t("step2.choice.answer_after")),
+    h("div", { class: "row" }, h("span", { class: "label" }, t("step2.choice.pick_label")),
+      h("div", { class: "seg" }, [["best", t("step2.choice.pick_best", { n: g.answer || "N" }), `group-best-${gi}`],
+        ["teacher", t("step2.choice.pick_teacher"), null]].map(([pick, label, id]) => {
+        const on = (g.pick || "best") === pick;
+        return h("button", { type: "button", id, class: on ? "on" : "", "aria-pressed": on ? "true" : "false",
+          onclick: () => { g.pick = pick; save(); render(); } }, label);
+      }))),
+    g.pick === "teacher" ? h("p", { class: "muted small" }, t("step2.choice.pick_teacher_hint")) : null,
     button(t("step2.choice.remove"), () => { draft.choice_groups.splice(gi, 1); save(); render(); }, "small ghost")));
 
   return h("section", {},

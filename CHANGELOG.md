@@ -6,6 +6,89 @@ year-month-day.
 
 ## [Unreleased]
 
+### Opened from CAM (2026-10-31)
+
+#### Added
+- **Host mode** for running CAM2 inside CAM. CAM starts CAM2 with
+  `launcher.py --host <handoff.json>`, naming one exam, the folder its session
+  lives in (inside CAM's class folder) and the class list. A CAM2 that is
+  already running is handed the exam instead (`POST /api/host/handoff`), and
+  closes any other session first.
+- In host mode CAM2 opens that exam straight away, or starts it on the Step 1
+  form with the exam name and save folder fixed (the folder must be empty, and
+  the session goes in it, never in a subfolder). CAM's class list replaces the
+  upload in Step 3; papers are matched from file names as usual, and each
+  entry keeps CAM's `external_id` and its id even if CAM corrects a name. The
+  header shows *CAM · <class>*.
+- **✓ Grading finished — send to CAM** in Step 5 stamps `host_ready_at` in
+  `cam2_session.json` (with a check if anything is ungraded); *Not finished
+  after all* clears it. CAM reads the session folder and never writes to it.
+  Student PDFs and the gradebook are made exactly as before.
+- `engine/host.py`; `POST /api/host/ready`; `/api/state` has `host`. Used on
+  its own, CAM2 is unchanged.
+
+### Adjust a box while grading (2026-10-31)
+
+#### Added
+- **✎ Adjust this box** in Step 4, beside *See whole page*, for a box drawn
+  in the wrong place and only noticed while grading. It opens Step 2 on that
+  question and paper. Drag a new box (no "new question or move?" prompt
+  here), then **Save & slice Q2 again → back to grading**: only that question
+  is cropped again, for every paper, and CAM2 returns to the same question
+  and paper. Every grade and comment is kept. **Cancel** puts the box back.
+- The config now records which boxes each question's crops were cut from
+  (`crops_of`). Moving a box and then back needs no slicing, and sessions
+  sliced by an earlier CAM2 pick this up on their next edit.
+- `workflow.slice_question`, `workflow.stale_regions`; `POST /api/slice-question`.
+
+### Shuffle papers while grading (2026-10-31)
+
+#### Added
+- **Shuffle papers** tick box in Step 4, beside *Hide student names* and
+  separate from it, remembered on this computer (`shuffle_papers` in
+  `prefs.json`). Papers come in a different order for every question, the
+  same each time that question is opened (seeded by session and question).
+  With names hidden as well, *Paper 3 of 24* is a different student on each
+  question, so no impression of one student builds up across questions. The
+  strip numbers, ◀ ▶, "Show ungraded only" and *Go to Q2* all follow the
+  shuffled order. Ported from CAM's grading workspace (`examSeededShuffle`).
+
+### Quick comments while grading (2026-10-31)
+
+#### Added
+- **Quick comments** on the Step 4 grading card: tick boxes for common
+  feedback. Ticking one writes a line at the top of that answer's comment
+  (*Areas to develop: check calculations.*); ticking more, or unticking,
+  rebuilds that line and keeps anything typed below it. The line is in the
+  app's language and appears on the student PDF with the rest of the comment.
+- Each exam starts with five *Areas to develop* (illegible handwriting, more
+  explanation needed, wrong format, incomplete answer, check calculations;
+  the same as CAM's grading workspace). **✎ Edit list** sets the exam's own
+  list, one per line, under *Strengths* and *Areas to develop*.
+- `engine/keywords.py`; `POST /api/setup/keywords`; `POST /api/grade` takes
+  `keywords`. The list is `keywords` in `cam2_session.json`; each grade entry
+  keeps its ticked `keywords` and the generated `keyword_text`.
+
+### Choice questions: best N or teacher picks (2026-10-31)
+
+#### Added
+- **How an over-answered choice counts.** Each choice in Step 2 has a new
+  setting, *If a student answers more than that*: **Count the best N** (the
+  default, as before) or **I choose which count**. With the second, a student
+  who answered more than N gets an amber **Choice 1: choose which count**
+  button under their name in Step 5. It opens a list of the answers they gave
+  with their marks or levels; tick the N that count and Save. Until then the
+  student is incomplete and the choice adds nothing to the total or average.
+  The button then reads *Choice 1: Q2, Q3 count ✎*, so the pick can be
+  changed. A student who answered N or fewer is counted as before.
+- Student PDFs say *your teacher chose which answers count* beside an answer
+  that was not picked, and the gradebook's Questions sheet says *(teacher
+  chooses)* for such a choice.
+- `grading_summary.set_choice`, `group_pick`; `POST /api/choice`. The choice's
+  setting is stored as `pick` (`"best"` or `"teacher"`) and the picks in
+  `grades.json` under `overall[<student>]["chosen"][<choice id>]`.
+  `student_summary` gains `pending` and `choices`.
+
 ### Repository and licence (2026-10-31)
 
 #### Added

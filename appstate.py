@@ -41,6 +41,7 @@ class AppState:
         self.last_heartbeat = time.monotonic()
         self.roster_rows: Optional[list] = None      # uploaded class list awaiting a column choice
         self.save_failed = False
+        self.host: Optional[dict] = None             # set when another app (CAM) opened CAM2
 
     # Session ---------------------------------------------------------------------
 

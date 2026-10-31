@@ -137,6 +137,12 @@ class ShellTests(AppTestCase):
         self.post("/api/prefs", {"hide_names": True})
         self.assertTrue(self.client.get("/api/state").get_json()["prefs"]["hide_names"])
 
+    def test_shuffle_papers_preference(self):
+        self.assertFalse(self.client.get("/api/state").get_json()["prefs"]["shuffle_papers"])
+        self.post("/api/prefs", {"shuffle_papers": True})
+        prefs = self.client.get("/api/state").get_json()["prefs"]
+        self.assertEqual(prefs, {"hide_names": False, "shuffle_papers": True})   # independent of hiding
+
     def test_language_switch(self):
         self.assertEqual(self.client.get("/api/i18n").get_json()["language"], "en")
         self.post("/api/language", {"language": "ja"})
@@ -283,6 +289,30 @@ class GradingTests(AppTestCase):
         session = self.grade({"student_id": "s001", "question_id": "q1", "value": None})["session"]
         self.assertIsNone(session["grades"]["grades"]["s001"]["q1"]["value"])
 
+    def test_quick_comments(self):
+        session = self.client.get("/api/state").get_json()["session"]
+        self.assertEqual(len(session["config"]["keywords"]), 5)          # defaults, in English
+        self.post("/api/setup/keywords", {"keywords": [{"label": "neat", "type": "strength"}]})
+        self.grade({"student_id": "s001", "question_id": "q1", "comment": "Typed."})
+        session = self.grade({"student_id": "s001", "question_id": "q1", "keywords": ["neat"]})["session"]
+        self.assertEqual(session["config"]["keywords"], [{"label": "neat", "type": "strength"}])
+        self.assertEqual(session["grades"]["grades"]["s001"]["q1"]["comment"], "Strengths: neat.\nTyped.")
+        err = self.grade({"student_id": "s001", "question_id": "q1", "keywords": ["gone"]}, status=400)
+        self.assertEqual(err["error"], "unknown_keyword")
+
+    def test_adjust_one_box_after_grading(self):
+        self.grade({"student_id": "s001", "question_id": "q2", "value": 2})
+        session = self.post("/api/setup/questions", {"name_box": ["page1!B2"], "questions": [
+            {"id": "q1", "label": "Q1", "boxes": ["page1!B2:C3"], "max": 5},
+            {"id": "q2", "label": "Q2", "boxes": ["page2!A1:B2"], "max": 3}]})["session"]
+        self.assertFalse(session["config"]["sliced"])
+        self.post("/api/step", {"step": 4}, status=400)                  # not until it is sliced
+        job = self.wait(self.post("/api/slice-question", {"question_id": "q2"})["job"])
+        self.assertEqual(job["status"], "done", job.get("error"))
+        self.assertTrue(job["session"]["config"]["sliced"])
+        self.assertEqual(job["session"]["grades"]["grades"]["s001"]["q2"]["value"], 2)
+        self.post("/api/step", {"step": 4})
+
     def test_position_is_remembered(self):
         self.post("/api/position", {"question_id": "q2", "student_id": "s002"})
         self.post("/api/session/close")
@@ -339,6 +369,23 @@ class ReviewTests(AppTestCase):
         err = self.post("/api/overall", {"student_id": "s001", "report_total": "lots"}, status=400)
         self.assertEqual(err["error"], "report_total_invalid")
         self.post("/api/overall", {"student_id": "nobody", "comment": "x"}, status=400)
+
+    def test_teacher_picks_a_choice(self):
+        self.post("/api/setup/questions", {"name_box": ["page1!B2"], "questions": [
+            {"id": "q1", "label": "Q1", "boxes": ["page1!B2:C3"], "max": 5},
+            {"id": "q2", "label": "Q2", "boxes": ["page2!A1"], "max": 3}],
+            "choice_groups": [{"id": "g1", "questions": ["q1", "q2"], "answer": 1, "pick": "teacher"}]})
+        session = self.client.get("/api/state").get_json()["session"]
+        self.assertEqual(session["config"]["choice_groups"][0]["pick"], "teacher")
+        student = session["summary"]["students"][0]
+        self.assertEqual((student["pending"], student["complete"]), (["g1"], False))
+        session = self.post("/api/choice", {"student_id": "s001", "group_id": "g1",
+                                            "questions": ["q2"]})["session"]
+        student = session["summary"]["students"][0]
+        self.assertEqual((student["pending"], student["marks"]["total"]), ([], 3))
+        err = self.post("/api/choice", {"student_id": "s001", "group_id": "g1",
+                                        "questions": ["q1", "q2"]}, status=400)
+        self.assertEqual(err["error"], "choice_pick_invalid")
 
     def test_export_makes_pdfs_and_gradebook(self):
         job = self.wait(self.post("/api/export", {"language": "ja", "what": "all"})["job"])

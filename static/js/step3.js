@@ -55,6 +55,10 @@ function classListCard(roster) {
     } catch (err) { toast(err.message, "error"); }
   } });
 
+  if (config().host && roster.some((r) => r.external_id)) {
+    return h("section", { class: "card" },
+      h("p", {}, "📋 ", t("host.class_list", { host: config().host.name, n: roster.length })));
+  }
   if (roster.length) {
     return h("section", { class: "card row spread" },
       h("p", {}, "📋 ", t("step3.list_loaded", { n: roster.length })),

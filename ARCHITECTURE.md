@@ -35,7 +35,9 @@ This describes how CAM2 is built. For what it should do and why, see
 | `rubrics.py` | Teacher rubrics: level parsing (`3`, `5–6`, `５～６`), validation, Excel/CSV import, blank template. |
 | `roster.py` | Class lists: header and name-column guesses, name extraction, pasted names, file-name auto-matching. |
 | `tables.py` | Reads `.xlsx` and `.csv` (UTF-8 or Shift-JIS) into rows of text. |
-| `grading_summary.py` | Recording a grade (with validation), choice groups, totals, rubric averages, round-half-up, report overrides, class statistics, progress. In Rubric mode a question can be assessed on several criteria (`rubric_ids`); each (question, criterion) pair is a *slot* with its own level, stored in the grade entry's `levels` and read through `level_of()`, which also reads sessions saved with one `rubric_id`. Summaries key per-slot statistics as `q2/r3` (`slot_key`). |
+| `grading_summary.py` | Recording a grade (with validation), choice groups (best N, or the teacher's pick per student: `pick`, `set_choice`, a *pending* group counts nothing), totals, rubric averages, round-half-up, report overrides, class statistics, progress. In Rubric mode a question can be assessed on several criteria (`rubric_ids`); each (question, criterion) pair is a *slot* with its own level, stored in the grade entry's `levels` and read through `level_of()`, which also reads sessions saved with one `rubric_id`. Summaries key per-slot statistics as `q2/r3` (`slot_key`). |
+| `keywords.py` | Quick comments: the exam's list (`keywords` in the config, or five defaults in the app language), and `apply()`, which ticks keywords on one answer and rebuilds the generated first line of its comment. The line last written is kept as `keyword_text`, so it is replaced exactly and the teacher's own text below it is kept. |
+| `host.py` | Host mode (CAM opening one of its exams): reads and checks the handoff file, gives the session the host's class list keyed by `external_id` (ids stay put when a name changes), and stamps `host_ready_at` when the teacher sends the results. |
 | `i18n.py` | Looks up text in `i18n/en.json` / `i18n/ja.json`; translates `UserError`s. |
 | `pickers.py` | Native folder / PDF dialogs: Windows IFileOpenDialog (in a child process) with a PowerShell fallback, macOS `osascript`. Finds the Documents folder. |
 | `pages.py` | Turning scans into one PDF per paper: a page is a `Ref` (file, page, turn). It joins several PDFs or page photos into one stack and groups it into papers. It also unfolds booklets scanned open: each side is cut in half with `show_pdf_page(clip=…)`, so quality is kept, and pages are put in reading order by `booklet_layout`. A page with a stored rotation is first baked upright with `remove_rotation`. Photos are turned upright from their phone orientation and reduced to about 200 dpi. Also makes the Step 1 preview of paper 1. |
@@ -50,7 +52,7 @@ Phase 5 adds the package builders.
 
 | File | Job |
 |---|---|
-| `launcher.py` | **Single instance:** if CAM2 is already running on this computer, it just opens the browser on it (`server.json` in app data records the port). Otherwise it serves on `127.0.0.1`, on the first free port from 5182. It stops 10 minutes after the last heartbeat, or on **Quit**. Without a console (`pythonw`), output goes to `<app data>/logs/cam2.log`. |
+| `launcher.py` | `--host <handoff.json>`: opened by CAM for one exam (a running CAM2 is handed it through `POST /api/host/handoff`). **Single instance:** if CAM2 is already running on this computer, it just opens the browser on it (`server.json` in app data records the port). Otherwise it serves on `127.0.0.1`, on the first free port from 5182. It stops 10 minutes after the last heartbeat, or on **Quit**. Without a console (`pythonw`), output goes to `<app data>/logs/cam2.log`. |
 | `appstate.py` | **What the server remembers:** the one open session (config, grades, save-failure flag) and background **jobs** for importing and slicing (one at a time; the browser polls their progress). `save_config()` keeps a change in memory even when the save fails, so the browser can show the red banner and retry. |
 | `app.py` | **JSON routes**, grouped by screen (see below). Errors come back as `{"error", "message", "params", "save_error"}`, with status 400, or 409 for save problems. It also stops the browser keeping old scripts after an upgrade (`Cache-Control: no-cache`). |
 | `templates/index.html`, `static/app.css` | **The page:** one HTML shell and one stylesheet. Light and dark themes, large click targets, and the Japanese system fonts listed first. |
@@ -71,19 +73,20 @@ Phase 5 adds the package builders.
 | `boxes.js` | box drawing: grid maths that mirrors `slicer.py`, drag-to-snap, multi-box questions, the check strip, and the "new question or move the box?" prompt |
 | `step3.js` | class-list upload with the column picker, paste, typed names, and the matcher combobox |
 | `step5.js` | review table, one column per question (and criterion): click any grade (or an amber "?") to open it in Step 4, which then offers "Back to review"; report-total or final-level overrides with ↺ reset; overall comments; class statistics; report language, export, and "Open the reports folder" |
-| `step4.js` | grading screen: one item per question, or per question and criterion in Rubric mode (tabs switch criterion on the same paper); question and paper navigation, paper strip, "Show ungraded only", the zoomable answer (wheel zooms, drag pans) or the whole page with the box outlined, the grade badge, and the grading card (mark buttons, a number box above 15 marks, or rubric bands with a button per level; Not answered; comment) |
+| `step4.js` | grading screen (paper order is the class order, or with **Shuffle papers** a seeded shuffle per question: `papers()`): one item per question, or per question and criterion in Rubric mode (tabs switch criterion on the same paper); question and paper navigation, paper strip, "Show ungraded only", the zoomable answer (wheel zooms, drag pans) or the whole page with the box outlined, the grade badge, and the grading card (mark buttons, a number box above 15 marks, or rubric bands with a button per level; Not answered; comment) |
 
 ### Routes
 
 | Area | Routes |
 |---|---|
+| Host | `POST /api/host/handoff` (from `launcher.py --host`), `POST /api/host/ready` (`ready`: send the results to CAM, or take them back) |
 | Shell | `GET /`, `GET /api/ping`, `GET /api/i18n`, `POST /api/language`, `GET /api/state`, `POST /api/heartbeat`, `POST /api/quit` |
 | Sessions | `POST /api/session/{open,create,close,reopen,forget,restore-emergency}`, `POST /api/save`, `POST /api/step`, `GET /api/job/<id>` |
 | Step 1 | `POST /api/pick`, `POST /api/inspect`, `POST /api/preview-paper` (paper 1 as JPEG data URLs, no session needed), `GET /api/default-folder`, `POST /api/scans/replace`, `POST /api/scans/add` (a job: late papers), `POST /api/pages/edit` (`student`, `page`, `action`; returns `where` the page is now), `GET /api/thumb/<student>` |
-| Step 2 | `POST /api/setup/{layout,mode,rubrics,rubrics/check,rubrics/import,questions}`, `GET /api/setup/rubrics/template`, `POST /api/slice`, `GET /api/page/<student>/<page>`, `GET /api/preview-crop/<student>` |
+| Step 2 | `POST /api/setup/{layout,mode,rubrics,rubrics/check,rubrics/import,questions}`, `GET /api/setup/rubrics/template`, `POST /api/slice`, `POST /api/slice-question` (a job: one question for every paper), `GET /api/page/<student>/<page>`, `GET /api/preview-crop/<student>` |
 | Step 3 | `POST /api/roster/{upload,columns,paste,clear}`, `POST /api/students/<student>/match`, `GET /api/crop/<region>/<student>` |
-| Step 4 | `POST /api/grade` (value and/or comment; saves `grades.json` at once), `POST /api/position` (the question and paper on screen, for resuming) |
-| Step 5 | `POST /api/overall` (overall comment, report-only total or final levels; empty means "use the calculated value"), `POST /api/export` (a job: `what` is `all` or `excel`, plus `language`), `POST /api/open-folder` (shows `reports/` in Explorer or Finder) |
+| Step 4 | `POST /api/grade` (value and/or comment and/or `keywords`; saves `grades.json` at once), `POST /api/setup/keywords` (the quick-comment list), `POST /api/position` (the question and paper on screen, for resuming) |
+| Step 5 | `POST /api/overall` (overall comment, report-only total or final levels; empty means "use the calculated value"), `POST /api/choice` (`student_id`, `group_id`, `questions`: the answers that count in a "teacher picks" choice), `POST /api/export` (a job: `what` is `all` or `excel`, plus `language`), `POST /api/open-folder` (shows `reports/` in Explorer or Finder) |
 
 **The session view** sent to the browser includes the grades, progress
 counts and the class summary, so every screen draws from one object.
@@ -105,7 +108,13 @@ through `storage.resolve_path()`.
   one step on, and the server checks that the papers are sliced before Step 3.
 - **Editing boxes after slicing** marks the papers as needing slicing again,
   and Step 3 stays locked until they are re-sliced. Changing only labels,
-  marks or rubrics does not.
+  marks or rubrics does not. `crops_of` in the config records the boxes each
+  region's crops were cut from, so a box moved back needs no slicing, and
+  **✎ Adjust this box** in Step 4 re-slices only that question
+  (`workflow.slice_question`, `POST /api/slice-question`) before returning to
+  the same paper. Anything that changes the papers while they are not all
+  sliced (new scans, late papers, page fixes, a layout change) drops
+  `crops_of`, so only slicing everything makes them current again.
 - **Changing paper size or grid density** clears the boxes after asking, since
   they no longer fit the new grid. Labels and marks are kept.
 - **A box drawn where it doesn't overlap the current item's box** on that page
@@ -255,7 +264,8 @@ python -m unittest discover -s tests -t .
 | `test_storage.py` | Every save-safety rule (ported from CAM's cloud-safety and concurrency tests), the lock, recent sessions, paths |
 | `test_rubrics.py` | Level parsing, overlaps, imports, template round trip, Shift-JIS |
 | `test_roster.py` | Spreadsheet reading, column guesses, pasted names, auto-matching (including macOS-decomposed names) |
-| `test_grading_summary.py` | Validation, round-half-up, choice groups (ported from CAM's `test_exam_sections.py`), rubric averages, overrides, class statistics |
+| `test_grading_summary.py` | Validation, round-half-up, choice groups (ported from CAM's `test_exam_sections.py`) with best N and teacher picks, rubric averages, overrides, class statistics |
+| `test_keywords.py` | Quick-comment list defaults and clean-up, rebuilding the generated line while keeping typed text, language changes |
 | `test_i18n.py` | Key and placeholder parity, error coverage |
 | `test_pickers.py` | Picker launching on Windows and macOS (ported from CAM's `test_folder_dialog.py`) |
 | `test_workflow.py` | Import from a folder and a combined PDF, re-import, set-up drafts vs. `check_ready`, layout changes, slicing a two-page question, matching names |

@@ -4,8 +4,13 @@ Rules (see PLAN.md §3):
 
 * A question's value is a whole number, ``"not_answered"`` or missing
   (ungraded). *Not answered* counts as 0.
-* In a choice group ("answer N of M") only the best N questions count. A
-  question the student answered always ranks above one they did not.
+* In a choice group ("answer N of M") N questions count. With the group's
+  ``pick`` set to ``"best"`` (the default) the best N count, and a question
+  the student answered always ranks above one they did not. With ``"teacher"``
+  a student who answered more than N waits (the group is *pending*) until the
+  teacher picks which N count; the picks are kept per student in
+  ``overall[sid]["chosen"][group id]``. A student who answered N or fewer is
+  counted exactly as with ``"best"``.
 * Marks: total = counted marks; maximum = ordinary maximums plus, per choice
   group, the N largest maximums in it.
 * Rubric: a question is assessed on one or more criteria (rubrics) and gets
@@ -30,6 +35,8 @@ from . import model, rubrics
 from .errors import UserError
 
 NOT_ANSWERED = model.NOT_ANSWERED
+PICK_BEST = "best"
+PICK_TEACHER = "teacher"
 
 
 def round_half_up(value, places: int = 0) -> Decimal:
@@ -83,6 +90,11 @@ def slot_key(question_id: str, rubric_id: Optional[str]) -> str:
     return question_id if rubric_id is None else f"{question_id}/{rubric_id}"
 
 
+def group_pick(group: dict) -> str:
+    """How a choice group counts an over-answered paper: best N, or teacher picks."""
+    return PICK_TEACHER if group.get("pick") == PICK_TEACHER else PICK_BEST
+
+
 def check_choice_groups(config: dict) -> None:
     """Every group names known questions, none twice, and 1 <= answer < size."""
     known = {q["id"] for q in config.get("questions") or []}
@@ -92,7 +104,8 @@ def check_choice_groups(config: dict) -> None:
         answer = g.get("answer")
         if (len(qids) < 2 or len(set(qids)) != len(qids)
                 or not set(qids) <= known or seen & set(qids)
-                or not isinstance(answer, int) or not 1 <= answer < len(qids)):
+                or not isinstance(answer, int) or not 1 <= answer < len(qids)
+                or g.get("pick", PICK_BEST) not in (PICK_BEST, PICK_TEACHER)):
             raise UserError("choice_group_invalid", group=g.get("id", "?"))
         seen |= set(qids)
 
@@ -179,11 +192,15 @@ def question_values(config: dict, grades_data: dict, student_id: str, question: 
 # --- One student -------------------------------------------------------------------
 
 def counted_questions(config: dict, grades_data: dict, student_id: str):
-    """(counted, ungraded [qid]) after resolving choice groups.
+    """(counted, ungraded [qid], choices) after resolving choice groups.
 
     ``counted`` is {qid: number} in marks mode and {qid: {rubric id: level}}
     in rubric mode. A question is ungraded while any of its slots is; outside
     a choice group its graded slots still count.
+
+    ``choices`` has an entry for each "teacher picks" group this student
+    answered more of than needed: {group id: {"answered": [qid],
+    "chosen": [qid], "pending": bool}}. A pending group counts nothing.
     """
     rubric_mode = config.get("mode") == "rubric"
     questions = config.get("questions") or []
@@ -200,12 +217,26 @@ def counted_questions(config: dict, grades_data: dict, student_id: str):
         if n:
             counted[qid] = n if rubric_mode else n[None]
 
+    def answered(qid):
+        return not all(v == NOT_ANSWERED for v in values[qid].values())
+
+    picks = ((grades_data.get("overall") or {}).get(student_id) or {}).get("chosen") or {}
     in_group = set()
     counted: Dict[str, object] = {}
+    choices: Dict[str, dict] = {}
     for g in config.get("choice_groups") or []:
         qids = [qid for qid in g["questions"] if qid in values]
         in_group |= set(qids)
         graded = [qid for qid in qids if qid not in ungraded]
+        given = [qid for qid in graded if answered(qid)]
+        if group_pick(g) == PICK_TEACHER and len(given) > int(g["answer"]):
+            chosen = [qid for qid in qids if qid in set(picks.get(g["id"]) or []) and qid in given]
+            pending = len(chosen) != int(g["answer"])
+            choices[g["id"]] = {"answered": given, "chosen": chosen, "pending": pending}
+            if not pending:
+                for qid in chosen:
+                    count(qid)
+            continue
         graded.sort(key=lambda qid: (all(v == NOT_ANSWERED for v in values[qid].values()),
                                      -sum(numbers(qid).values()), order[qid]))
         for qid in graded[:int(g["answer"])]:
@@ -213,7 +244,7 @@ def counted_questions(config: dict, grades_data: dict, student_id: str):
     for qid in values:
         if qid not in in_group:
             count(qid)
-    return counted, ungraded
+    return counted, ungraded, choices
 
 
 def marks_maximum(config: dict) -> int:
@@ -229,11 +260,12 @@ def marks_maximum(config: dict) -> int:
 
 
 def student_summary(config: dict, grades_data: dict, student_id: str) -> dict:
-    counted, ungraded = counted_questions(config, grades_data, student_id)
+    counted, ungraded, choices = counted_questions(config, grades_data, student_id)
     overall = (grades_data.get("overall") or {}).get(student_id) or {}
-    result = {"student_id": student_id, "ungraded": ungraded,
-              "complete": not ungraded, "counted": counted,
-              "comment": overall.get("comment", "")}
+    pending = [gid for gid, c in choices.items() if c["pending"]]
+    result = {"student_id": student_id, "ungraded": ungraded, "pending": pending,
+              "choices": choices, "complete": not ungraded and not pending,
+              "counted": counted, "comment": overall.get("comment", "")}
 
     if config.get("mode") == "rubric":
         by_rubric: Dict[str, List[int]] = {}
@@ -304,6 +336,27 @@ def set_final_level(config: dict, grades_data: dict, student_id: str,
     finals = grades_data.setdefault("overall", {}).setdefault(student_id, {}) \
         .setdefault("final_levels", {})
     finals[rubric_id] = level
+    return grades_data
+
+
+def set_choice(config: dict, grades_data: dict, student_id: str, group_id: str, questions) -> dict:
+    """The questions a teacher picked to count in one choice group for one student.
+
+    ``questions`` lists at most ``answer`` of the group's questions; None or an
+    empty list clears the pick. Picks are stored in the group's order.
+    """
+    group = next((g for g in config.get("choice_groups") or [] if g["id"] == group_id), None)
+    if group is None:
+        raise UserError("choice_group_invalid", group=group_id)
+    picked = list(questions or [])
+    if (len(set(picked)) != len(picked) or not set(picked) <= set(group["questions"])
+            or len(picked) > int(group["answer"])):
+        raise UserError("choice_pick_invalid", answer=group["answer"])
+    chosen = grades_data.setdefault("overall", {}).setdefault(student_id, {}).setdefault("chosen", {})
+    if picked:
+        chosen[group_id] = [qid for qid in group["questions"] if qid in set(picked)]
+    else:
+        chosen.pop(group_id, None)
     return grades_data
 
 

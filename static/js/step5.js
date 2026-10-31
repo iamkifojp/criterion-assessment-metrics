@@ -5,7 +5,7 @@ import { t, language } from "./i18n.js";
 import { goTo } from "./main.js";
 import { openAddPapers } from "./step1.js";
 import { act, app, config, criteriaOf, gradeOf, handleError, render } from "./store.js";
-import { button, coach, confirmBox, debounce, formatTime, h, progressOverlay, toast } from "./ui.js";
+import { button, coach, confirmBox, debounce, formatTime, h, modal, progressOverlay, toast } from "./ui.js";
 
 const NA = "not_answered";
 
@@ -50,6 +50,52 @@ function valueText(c, q, value) {
   return String(value);
 }
 
+function groupName(c, gid) {
+  return t("step2.choice.group", { n: (c.choice_groups || []).findIndex((g) => g.id === gid) + 1 });
+}
+
+// "Teacher picks" choice groups this student answered too many of: one
+// button each, amber until the teacher has chosen which answers count.
+function choiceButtons(c, s, res) {
+  const labelOf = new Map(c.questions.map((q) => [q.id, q.label]));
+  return Object.entries(res.choices || {}).map(([gid, ch]) => {
+    const group = groupName(c, gid);
+    const label = ch.pending ? t("step5.choice_pending", { group })
+      : `${t("step5.choice_chosen", { group, questions: ch.chosen.map((qid) => labelOf.get(qid)).join(", ") })} ✎`;
+    return h("div", {}, button(label, () => chooseAnswers(c, s, gid, ch), `small ${ch.pending ? "warn" : "ghost"}`));
+  });
+}
+
+function chooseAnswers(c, s, gid, ch) {
+  const g = c.choice_groups.find((x) => x.id === gid);
+  const picked = new Set(ch.chosen);
+  const boxes = [];
+  const sync = () => boxes.forEach(({ input, qid }) => { input.disabled = picked.size >= g.answer && !picked.has(qid); });
+  const shown = (q) => (c.mode === "rubric"
+    ? criteriaOf(c, q).map((r) => `${r.name} ${valueText(c, q, gradeOf(s.id, q.id, r.id))}`).join(", ")
+    : `${valueText(c, q, gradeOf(s.id, q.id))} / ${q.max}`);
+  const list = ch.answered.map((qid) => {
+    const q = c.questions.find((x) => x.id === qid);
+    const input = h("input", { type: "checkbox", checked: picked.has(qid), onchange: (e) => {
+      if (e.target.checked) picked.add(qid); else picked.delete(qid);
+      sync();
+    } });
+    boxes.push({ input, qid });
+    return h("label", { class: "check" }, input, `${q.label} · ${shown(q)}`);
+  });
+  sync();
+  modal({
+    title: t("step5.choose_title", { group: groupName(c, gid), name: s.display_name }),
+    body: h("div", {}, h("p", {}, t("step5.choose_hint", { answered: ch.answered.length, answer: g.answer })),
+      h("div", { class: "tick-list" }, list)),
+    actions: [
+      { label: t("common.cancel") },
+      { label: t("common.save"), kind: "primary",
+        onClick: () => act(post("/api/choice", { student_id: s.id, group_id: gid, questions: [...picked] })) },
+    ],
+  });
+}
+
 export function renderStep5() {
   const c = config();
   const summary = app.session.summary;
@@ -57,6 +103,8 @@ export function renderStep5() {
   const byId = new Map(summary.students.map((s) => [s.student_id, s]));
   const inGroup = new Set((c.choice_groups || []).flatMap((g) => g.questions));
   const incomplete = summary.students.filter((s) => !s.complete).length;
+  const ungraded = summary.students.filter((s) => s.ungraded.length).length;
+  const pending = summary.students.filter((s) => (s.pending || []).length).length;
   const rubricMode = c.mode === "rubric";
   const anyComment = Object.values(grades).some((per) => Object.values(per || {}).some((e) => (e?.comment || "").trim()));
   const cols = columns(c);
@@ -74,10 +122,12 @@ export function renderStep5() {
 
   const rows = c.students.map((s, i) => {
     const res = byId.get(s.id);
+    const waiting = new Set((c.choice_groups || []).filter((g) => (res.pending || []).includes(g.id))
+      .flatMap((g) => g.questions));
     const cells = cols.map(({ q, r, multi }) => {
       const value = gradeOf(s.id, q.id, r?.id);
       const note = (grades[s.id]?.[q.id]?.comment || "").trim();
-      const notCounted = inGroup.has(q.id) && value !== null && !(q.id in res.counted);
+      const notCounted = inGroup.has(q.id) && !waiting.has(q.id) && value !== null && !(q.id in res.counted);
       const cls = ["num-col", "grade-cell", value === null ? "missing" : "", notCounted ? "not-counted" : "",
         note ? "has-comment" : ""].join(" ");
       const action = value === null ? t("step5.click_to_grade") : t("step5.click_to_change");
@@ -109,7 +159,7 @@ ${action}` : action,
       oninput: (e) => saveComment(s.id, e.target.value), onblur: () => saveComment.flush() }, res.comment || "");
     return h("tr", { class: res.complete ? "" : "incomplete" },
       h("td", { class: "num-cell" }, String(i + 1)),
-      h("td", { class: "sticky-col" }, h("strong", {}, s.display_name)),
+      h("td", { class: "sticky-col" }, h("strong", {}, s.display_name), choiceButtons(c, s, res)),
       cells, result, h("td", {}, comment));
   });
 
@@ -125,12 +175,33 @@ ${action}` : action,
   return h("main", { class: "page full review" },
     h("h1", {}, t("step5.title")),
     coach(t(rubricMode ? "step5.coach_rubric" : "step5.coach_marks")),
-    incomplete ? h("div", { class: "banner warn" }, h("p", {}, t("step5.incomplete", { n: incomplete }))) : null,
+    ungraded ? h("div", { class: "banner warn" }, h("p", {}, t("step5.incomplete", { n: ungraded }))) : null,
+    pending ? h("div", { class: "banner warn" }, h("p", {}, t("step5.pending", { n: pending }))) : null,
     anyComment ? h("p", { class: "muted small" }, h("span", { class: "comment-dot" }), t("step5.comment_legend")) : null,
     h("div", { class: "table-scroll review-scroll" },
       h("table", { class: "review-table" }, h("thead", {}, head),
         h("tbody", {}, rows), h("tfoot", {}, stat("average"), stat("max"), stat("min")))),
+    c.host ? hostPanel(c, incomplete) : null,
     exportPanel(incomplete));
+}
+
+// Opened from CAM: CAM reads the results only once the teacher sends them.
+function hostPanel(c, incomplete) {
+  const sent = c.host_ready_at;
+  const send = async () => {
+    if (incomplete && !(await confirmBox(t("host.send_incomplete_title"),
+      t("host.send_incomplete", { n: incomplete, host: c.host.name }), t("host.send_anyway")))) return;
+    act(post("/api/host/ready", { ready: true }));
+  };
+  return h("section", { class: `card ${sent ? "" : "accent"}` },
+    h("h2", {}, t("host.send_title", { host: c.host.name })),
+    sent
+      ? [h("p", { class: "ok-text" }, t("host.sent", { time: formatTime(sent), host: c.host.name })),
+        h("div", { class: "actions left" },
+          button(t("host.send_again"), send),
+          button(t("host.unsend"), () => act(post("/api/host/ready", { ready: false })), "ghost"))]
+      : [h("p", { class: "muted" }, t("host.send_hint", { host: c.host.name })),
+        h("div", { class: "actions left" }, button(t("host.send", { host: c.host.name }), send, "primary big"))]);
 }
 
 // A number box for "Total on report" / "Final level". Empty, or the calculated

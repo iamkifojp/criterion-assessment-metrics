@@ -87,6 +87,19 @@ class MarksReportTests(ReportTestCase):
         with fitz.open(path) as doc:          # one image per answer; no handwritten name crop
             self.assertEqual(sum(len(page.get_images()) for page in doc), 3)
 
+    def test_teacher_picked_choice(self):
+        self.config["choice_groups"][0]["pick"] = "teacher"
+        path = os.path.join(self.root, "pick.pdf")
+
+        def text():
+            reports.build_student_pdf(self.session, self.config, self.grades, self.config["students"][0],
+                                      "en", path, day=date(2026, 10, 30))
+            return " ".join(self.text_of(path).split())
+
+        self.assertNotIn("not counted", text())             # both answered: waiting for a pick
+        gs.set_choice(self.config, self.grades, "s001", self.config["choice_groups"][0]["id"], ["q2"])
+        self.assertIn("your teacher chose which answers count", text())
+
     def test_japanese_report(self):
         path = os.path.join(self.root, "ja.pdf")
         reports.build_student_pdf(self.session, self.config, self.grades, self.config["students"][1],
