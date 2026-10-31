@@ -17,6 +17,15 @@ called out inline as **⚠ Reality check**.
 | 2 | **CAM Grading Workspace** | `cam_grading_workspace/app.py` | **Flask** (`>=3.0`) | Fast per-assignment marking UI backed by Google Drive/Classroom **or a local class folder** (PDF/local-mode plan, no OAuth); also hosts Exam Slicing, which runs on local folders with no OAuth (§4). |
 | 3 | **Backend engine (`engine/`)** | imported as a package | Pure Python (UI-free) | Domain model, CSV ingestion, aggregation math, DOCX parsing, JSON persistence, gojūon name collation. |
 
+**`exam_grading/` is vendored upstream code.** It is CAM2 Exam Grading
+(`iamkifojp/cam2-exam-grading`), added with `git subtree` and being wired in as
+CAM's exam engine (see `docs/CAM2_EXAM_CONVERGENCE_PLAN.md`). Never edit it in
+place: change CAM2 in its own repo, then
+`git subtree pull --prefix exam_grading <cam2 repo> main --squash`. CAM's glue
+code lives outside that folder. CAM2 also has a top-level `engine` package, so
+its tests run in their own process; `python tools/run_all_tests.py` runs both
+suites.
+
 `main.py` is **not** a fourth app — it is a UI-free verification harness that
 drives the `engine/` pipeline against the sample data (`Y7_Changing_View_Unit_Plan_v2.docx`,
 `Changing Views (Crit B)_Grades.csv`) and prints results for sanity-checking
