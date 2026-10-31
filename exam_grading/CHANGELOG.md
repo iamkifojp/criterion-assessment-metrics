@@ -6,6 +6,17 @@ year-month-day.
 
 ## [Unreleased]
 
+### Pickers inside CAM's portable bundle (2026-11-01)
+
+#### Fixed
+- **Windows pickers when run from source by an embedded Python.** The picker
+  child was started as `python -m engine.pickers`, which finds CAM2's `engine`
+  only because the working folder is on `sys.path`. CAM's portable bundle runs
+  CAM2 on an embedded Python whose `._pth` file adds neither the working
+  folder nor the script folder, and lists CAM's own `engine` package, so no
+  dialog opened. The child now gets CAM2's folder as an argument and puts it
+  first on `sys.path` itself.
+
 ### Release-readiness fixes (2026-10-31)
 
 From `doc/repository-review-2026-10-31.md`.
