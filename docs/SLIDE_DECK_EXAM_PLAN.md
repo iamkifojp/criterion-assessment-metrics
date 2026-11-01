@@ -1,6 +1,8 @@
 # Grading Google Slides final reports in CAM2: plan
 
-**Status:** v1, 2026-11-01. All decisions (D1–D12, §3) are locked by the teacher.
+**Status:** v1.1, 2026-11-01. All decisions (D1–D13, §3) are locked by the teacher.
+v1.1 adds D13 (the teacher picks each folder's type) and Phase 1W (identifying
+re-uploaded files by name, which drafts need too).
 Nothing is built yet. Phase 0 comes first.
 **Repos:** CAM = `C:\Project\criterion-assessment-metrics-public`;
 CAM2 = `C:\Project\cam2-exam-grading`, vendored in CAM at `exam_grading/`.
@@ -51,29 +53,38 @@ found by their `SCREEN nn / NN` header, whatever NN is.
    subfolder of the class's Drive `master_dir` on their personal Drive. Drive's
    **"Convert uploads to Google Docs editor format"** setting is on, so each
    upload becomes Google Slides again (D2).
-2. **CAM.** 👁 Watch picks up the folder as an Exam row (it already turns
-   every `master_dir` subfolder into a row with `folder_ref` set). The teacher
-   presses **Fetch from Drive** in the exam panel. CAM:
+2. **CAM picks up the folder.** The automatic Sync, run at start-up, on
+   return from grading, and on class add or watch (`sync_all`), includes a
+   Watch pass. That pass turns every new `master_dir` subfolder into an
+   **ordinary** row with `folder_ref` set. Each Classroom assignment (Draft A,
+   Draft B, the final report) is its own folder, so each becomes its own row.
+3. **The teacher chooses each row's type** in its ⋯ Manage (D13):
+   **Draft — comments only** (graded in the workspace, as today) or
+   **Exam (CAM2)**. This is never automatic. Draft and final folders hold the
+   same deck, so CAM cannot tell them apart.
+4. **CAM fetches.** On an Exam (CAM2) row, the teacher presses **Fetch from
+   Drive** in the exam panel. CAM:
    - exports each deck to PDF
    - puts its pages in template order
    - checks the format
    - matches students by file name
    - writes one compact slide-image PDF per student
    - then opens CAM2.
-3. **CAM2.** The papers are already waiting in Step 1, named so CAM2 matches
+5. **CAM2.** The papers are already waiting in Step 1, named so CAM2 matches
    them to the class list automatically. The teacher sets up 12 whole-slide
    questions (rubrics imported from a spreadsheet) and grades screen by screen.
    A paper that doesn't fit gets **Not standard — grade in CAM**. Then
    **Send to CAM**.
-4. **CAM.** The rubric→criterion panel applies the levels. Flagged papers,
+6. **CAM.** The rubric→criterion panel applies the levels. Flagged papers,
    extra files and decks that failed the format check appear on a
    **follow-up list** with **Grade in workspace**.
-5. **Workspace (follow-up mode).** Only the follow-up students are shown, with
+7. **Workspace (follow-up mode).** Only the follow-up students are shown, with
    all of each student's files, the task rubric, and their CAM2 levels and
    comments as a starting point. The workspace grade is the student's final
    grade for that exam.
-6. **Late work.** The teacher downloads and uploads it to the same Drive
-   folder. CAM's exam panel shows **N new files on Drive → Add to CAM2**.
+8. **Late work.** The teacher downloads and uploads it to the same Drive
+   folder. The next automatic Sync sees no new *row* (the folder is already
+   known), but CAM's exam panel shows **N new files on Drive → Add to CAM2**.
    Lateness itself is just a Window 3 comment (D7).
 
 ## 3. Decisions (locked 2026-11-01)
@@ -121,6 +132,13 @@ found by their `SCREEN nn / NN` header, whatever NN is.
   CAM records who owns the grade: CAM2, or the workspace after a follow-up.
   CAM never applies a grade from the side that doesn't own it, so a paper can
   never be graded twice.
+- **D13 – The teacher picks each folder's type, by hand (added 2026-11-01).**
+  A watched folder arrives as an ordinary row. In its ⋯ Manage, the teacher
+  chooses **Assignment**, **Draft — comments only** or **Exam (CAM2)**. CAM
+  never guesses, so the same deck in a draft folder and a final folder can't
+  end up graded in the wrong app. Once an Exam (CAM2) row has a CAM2 session,
+  CAM refuses to switch its type. Retiring the exam (its folder goes to
+  `exams/_deleted/`) is the only way back.
 
 ## 4. What exists, and what is missing
 
@@ -135,12 +153,35 @@ found by their `SCREEN nn / NN` header, whatever NN is.
 | Results | `exam_bridge.read_session` → `ExamResult`; `_sync_cam2_sessions`, `_pull_cam2_sends`; `_render_cam2_rubric_banding` | Paper marker on `ExamResult`; follow-up list; grade owner |
 | Rubric reuse | CAM2 `rubrics.import_rubrics` + `template_xlsx` | Nothing (D6) |
 | Workspace hand-off | `_publish_workspace_grades` → `cam_grades_<folder>.json`, read by the workspace's `load_cam_published` | Follow-up payload (rubric bands, CAM2 levels and comments, locked students); identifying students by file name |
-| Drafts | "Draft — comments only" assignment type | Nothing (D10) |
+| Drafts | "Draft — comments only" assignment type | Nothing (D10), except identifying re-uploaded files (Phase 1W) |
+| Choosing CAM2 for a watched row | ⋯ Manage (`manage_assignment_dialog`) offers the Draft checkbox and criteria on non-exam rows only; exams today are made by hand (Add assignment → Exam) | An **Exam (CAM2)** type for watched rows (D13, Phase 2) |
 
 ## 5. Phases
 
 Sizes: S ≈ an afternoon, M ≈ a day, L ≈ several days. Phases land in order,
-except that Phase 1 (CAM2) can run alongside Phase 0.
+except that Phase 1 (CAM2) can run alongside Phase 0, and Phase 1W stands
+alone: it can land first, because drafts need it now.
+
+### Phase 1W — Workspace: identify re-uploaded files by name · S–M (CAM repo)
+
+Drafts are graded in the workspace today (D10). After a download and
+re-upload, the teacher owns every file. `pick_student` (owner → sharer → last
+modifier → permissions) then finds only the teacher and returns "Unknown
+student" for every file.
+
+1. **Name helper.** One function strips a Drive file name to a student name:
+   it removes the template title (" - Final Report Template"), a class prefix
+   (`9.1`), words such as "Final Report", and the extension. It then matches
+   the result against the class roster and aliases with `resolve_identity`,
+   making only certain matches. Put it in `engine/` if the workspace can import
+   it there (check how `load_matching_context` reaches CAM's data), otherwise in
+   the workspace. Phase 2 reuses it.
+2. **Fallback in `pick_student`.** When every identity source is the teacher,
+   use the helper on the file name. Files that still can't be matched stay
+   visible as unassigned, never guessed.
+3. **Tests:** Classroom's "Name - Title" form, a student-renamed file, a
+   reversed name order, Japanese names, and an ambiguous name that stays
+   unassigned.
 
 ### Phase 0 — Prove the Drive route (sandbox; no product code) · S–M
 
@@ -216,12 +257,18 @@ and run `tools/run_all_tests.py`.
 A new framework-free module, `engine/slide_decks.py`, holds the logic. Drive
 calls are passed in, so tests use fakes.
 
+0. **Exam (CAM2) type in ⋯ Manage** (D13). For a watched row (`folder_ref`
+   set) that isn't an exam yet, offer **Assignment**, **Draft — comments
+   only** and **Exam (CAM2)** in `manage_assignment_dialog`, where only the
+   Draft checkbox exists today. Choosing Exam (CAM2) sets `is_exam` and records
+   in the row's `exam_sessions` entry that its papers come from Drive. It
+   refuses the switch if the row already has grades. Once a CAM2 session exists
+   for the row, the type control is replaced by a note pointing to Retire
+   exam. Only Exam (CAM2) rows show the Fetch from Drive panel below.
 1. **List** the exam's `folder_ref` with `id, name, mimeType, size,
    modifiedTime`. Sort the files into decks (Google Slides) and everything
    else (extras).
-2. **Match** each file to a student. Strip the template title (" - Final Report
-   Template"), a class prefix (`9.1`), and words such as "Final
-   Report". Then use `resolve_identity` against the class roster and aliases.
+2. **Match** each file to a student with the Phase 1W name helper.
    Ambiguous or missing matches go to the 🧩 pool and are never guessed.
 3. **Export** each deck to PDF in a temporary folder, using the Phase 0
    fallback for large decks.
@@ -267,8 +314,9 @@ calls are passed in, so tests use fakes.
 9. **No lateness.** These exams derive no late flags (D7).
 
 **Tests:**
-- the name-stripping and matching table, including Japanese names and a
-  reversed name order
+- the type switch: offered on watched non-exam rows, refused once graded,
+  locked once a CAM2 session exists
+- Drive files routed to the 🧩 pool by the Phase 1W helper
 - header mapping, including missing, repeated and extra slides, and a 4:3 deck
 - normalised page order
 - the record and new-file detection
@@ -300,10 +348,7 @@ after a workspace grade; the CSV guard.
 
 ### Phase 4 — Workspace: follow-up mode · M–L (CAM repo, `cam_grading_workspace/`)
 
-1. **Identity by file name.** When `pick_student` finds only the teacher
-   (owner, sharer, modifier and permissions), it falls back to the same
-   name-stripping and matching as Phase 2, using `load_matching_context`.
-   Unmatched files stay unassigned for the teacher.
+1. **Identity by file name** is already in place from Phase 1W.
 2. **Follow-up payload.** CAM's handoff for the exam folder carries:
    - the CAM2 rubric bands (one per criterion, D6)
    - each follow-up student's CAM2 levels per screen, final levels and
@@ -319,8 +364,7 @@ after a workspace grade; the CSV guard.
    picker, and CAM2's levels and comments as starting values. The export
    goes back to CAM and lands under Phase 3's owner rule.
 
-**Tests:** the filename fallback; payload round-trip; that locked students
-can't be exported.
+**Tests:** payload round-trip; that locked students can't be exported.
 
 ### Phase 5 — Optional: word counts · S (CAM repo)
 
