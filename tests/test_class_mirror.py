@@ -24,7 +24,7 @@ from engine.persistence import (
     term_summary_path,
 )
 
-CLASS = "Year 7 1-4 (2026-27)"
+CLASS = "Year 7 A (2026-27)"
 
 
 def _full_mirror():

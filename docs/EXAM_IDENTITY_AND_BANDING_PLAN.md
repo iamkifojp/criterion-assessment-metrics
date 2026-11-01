@@ -5,8 +5,8 @@
 Phases 4 + 6 in CAM's root `app.py` + `engine/` (models, ingestion,
 persistence); Phase 7 in `docs/`.
 **Origin:** teacher feedback from live-testing the exam loop end-to-end
-(2026-07-14, Test MYP Class, smiletutor sample PDF) plus a real Year 7 Sciences
-end-of-term paper whose cover sheet shows the school's actual grading scheme
+(2026-07-14, Test MYP Class, smiletutor sample PDF) plus a real
+end-of-term paper whose cover sheet shows a common grading scheme
 (sections = strands of ONE criterion; teacher circles a level per strand, then
 decides one final criterion grade).
 

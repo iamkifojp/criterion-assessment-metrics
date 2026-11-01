@@ -15,7 +15,7 @@ and must complete before any coding phase.
 Moving the app to a second computer surfaced what looked like settings-
 portability bugs (missing Crit D assignments, folder assignments demoted to
 manual, watch folders gone). Diagnosis shows **the shared cloud database
-`OneDrive\Documents\Gyoshu\CAM\acm_database.json` was overwritten on
+`OneDrive\Documents\School\CAM\acm_database.json` was overwritten on
 2026-07-10 15:27** and every machine has been reading the damaged file since —
 both the old private checkout and this public one point their gitignored
 `local_device_prefs.json` at the same OneDrive folder.
@@ -26,7 +26,7 @@ Evidence (read-only inspection of the data home):
 |---|---|---|---|---|---|---|---|
 | `acm_database.json` (live) | 2026-07-11 01:31 | 27 | **0** | **0** real | **all empty** | 0 | 0 / 0 |
 | `.wiped-by-test-20260710-1527` | 2026-07-10 15:27 | 25 | 1 | 0 | empty + junk `1-4` class | 0 | 0 / 0 |
-| `.bak-gojuon-20260707-121222` | 2026-07-07 11:55 | **45** | **12** | **22** | 35/33/24/28 | 667 (pre-cleanup) | 120 / 120 |
+| `.bak-gojuon-20260707-121222` | 2026-07-07 11:55 | **45** | **12** | **22** | populated | 667 (pre-cleanup) | 120 / 120 |
 | `.bak-20260706-043252` | 2026-07-06 04:24 | 45 | 12 | 22 | populated | populated | 120 / 120 |
 
 The live DB is a **fresh demo session (`Class 1`) + Sync re-ingesting the 24
@@ -96,7 +96,7 @@ grading).
    Streamlit session autosaves; it would overwrite the restored file with the
    damaged session within seconds.
 2. In OneDrive **web** (onedrive.live.com) navigate to
-   `Documents/Gyoshu/CAM/acm_database.json` → **Version history** → restore the
+   `Documents/School/CAM/acm_database.json` → **Version history** → restore the
    newest version dated **before 2026-07-10 15:27** (expect ~700-800 KB, not
    ~500 KB).
 3. Let OneDrive sync the restore down, then run the read-only verification
@@ -119,9 +119,9 @@ aside as `acm_database.json.damaged-20260711` for forensics.
 
 - ≥ 45 assignments total; ≥ 12 with non-empty `folder_ref`; ≥ 22 with `"D"` in
   `criteria` (the `(Reflection)` rows across Y7/Y8/Y9/Y10).
-- `session.classes` has `master_dir` set for Year 9 3-4 and Year 10 1Z
-  (Drive IDs starting `1XKBJ…` / `1fzrx…`).
-- Rosters: Y7=35, Y8=33, Y9=24, Y10=28 (± archived-student moves).
+- `session.classes` has `master_dir` set for the two Drive-watched classes.
+- Every class roster is populated, at its last known size (± archived-student
+  moves).
 - `teacher_remarks` and `final_override` ≈ 120 each; `late_flags` small
   (~18-30 post-cleanup keys, **not** 667 and **not** 0) if the restored version
   postdates the 07-09 cleanup — 667 means an older version was restored.

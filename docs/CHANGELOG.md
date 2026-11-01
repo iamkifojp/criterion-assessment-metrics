@@ -1668,14 +1668,14 @@ refill, matching-twin seeded→no churn, missing/richer→backfill). Run:
 The teacher-input mirror is session-only human-typed content, never real student
 identity data — the git separation in [CLAUDE.md](../CLAUDE.md) is preserved.
 
-## 2026-07-11 — audience reframe + Gyoshu-specific report grades made optional
+## 2026-07-11 — audience reframe + school-specific report grades made optional
 
 **Symptom it addresses:** two things blocked a clean public release. (1) The docs
 pitched CAM as a tool "for IB MYP **Arts** teachers," which undersells it — the
 app grew from artwork grading into a Google-Classroom grading + reporting toolkit
 useful to any MYP teacher, and the exam-slicing workflow helps any subject. (2)
 Three report-card figures — **MYP Grade (1–7)**, **Effort / English-use**, and
-**School Grade (1–10)** — are Gyoshu report-card conventions, not universal, yet
+**School Grade (1–10)** — are one school's report-card conventions, not universal, yet
 were always shown, so every public user saw school-specific fields they don't use.
 
 **What this change does:**
@@ -2493,7 +2493,7 @@ identical row to row.
 Per [LATE_FLAG_INTEGRITY_PLAN_V2.md](LATE_FLAG_INTEGRITY_PLAN_V2.md), the
 incident-2 post-mortem. Follow-up to the v1 entry below: v1's fixes work as
 designed; these two holes were **pre-existing**, exposed but not caused by v1.
-Symptom: Year 10 1Z student 101109's *Launch and Material Shift* (Crit B) was
+Symptom: one Year 10 student's Crit B assignment was
 `Late=1` in the export CSV and marked Late in CGW, but showed no Late pill in
 CAM Window 3 — and 27 other works across Year 9 / Year 10 shared the hole.
 
@@ -2521,8 +2521,8 @@ CAM Window 3 — and 27 other works across Year 9 / Year 10 shared the hole.
   of the first Sync deletes every `late_flags` key redundant against the synced
   value, keeping only real waives/forces. Runs **before** Phase A reconciliation
   (so a redundant `False` on a still-stale cell is deleted while still
-  redundant, not frozen as a phantom waive). Deliberate keys kept: 101092 /
-  101114 Feature Studies (v1 Phase 6) and 111102 Concept planning (B).
+  redundant, not frozen as a phantom waive). Deliberate keys kept: the two
+  v1 Phase 6 restores and one other Crit B override.
 - **Verified:** `app.py` byte-compiles; a sandbox harness driving
   `sync_from_cloud()` on a temp data home asserts all 23 cases from the plan's
   §7 — reconcile heals exactly the stale flag and is idempotent; legacy/exam/
@@ -2530,15 +2530,15 @@ CAM Window 3 — and 27 other works across Year 9 / Year 10 shared the hole.
   marker round-trips through save/load; the sticky-write guard creates no key on
   an untouched Save. Docs: ARCHITECTURE §8 (new reconciliation invariant),
   DATA_DICTIONARY A.7 (the two lateness layers). Live-data acceptance (press 🔄
-  Sync once on the restarted app; ~28 flags reconciled, 101109 pill appears) is
+  Sync once on the restarted app; ~28 flags reconciled, the missing Late pill appears) is
   the teacher's step per the plan's §6.
 
 ## 2026-07-09 — Late-flag integrity (deadline resets + duplicate exports)
 
 Per [LATE_FLAG_INTEGRITY_PLAN.md](LATE_FLAG_INTEGRITY_PLAN.md), which also
 serves as the incident post-mortem. Symptom: late works flagged in the grading
-workspace stopped showing the Late marker in CAM Window 3 for Year 10 1Z
-(2026-27). Not a code regression — a data-flow wipe from two interacting design
+workspace stopped showing the Late marker in CAM Window 3 for one Year 10
+class. Not a code regression — a data-flow wipe from two interacting design
 flaws. Phases 1–4 below; Phase 5 is this entry plus the ARCHITECTURE §8 /
 DATA_DICTIONARY A.1 + B.3 updates.
 
@@ -2573,10 +2573,10 @@ DATA_DICTIONARY A.1 + B.3 updates.
   a duplicate pair ingests neither file, adds no registry rows, counts the
   duplicate and names the canonical file, and a re-exported singleton with
   zeroed lates fires the tripwire.
-- **Phase 6 data repair (executed 2026-07-09).** Restored the Year 10 1Z
-  (2026-27) flags lost in the incident. **Correction to the plan:** CGW's Late
+- **Phase 6 data repair (executed 2026-07-09).** Restored the Year 10
+  class's flags lost in the incident. **Correction to the plan:** CGW's Late
   checkbox is waive-only (it only shows for auto-detected lateness), so the
-  two Feature Studies flags (students 101092, 101114 — not timestamp-late)
+  two flags on one assignment (two students who were not timestamp-late)
   were restored via the **CAM Window 3** `late_flags` override, which wins over
   the synced value and survives re-syncs — *not* by re-ticking in CGW as the
   draft plan assumed. The three stale `_2026-07-08.csv` duplicate exports were

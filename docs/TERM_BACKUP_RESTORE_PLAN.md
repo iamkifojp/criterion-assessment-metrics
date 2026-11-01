@@ -74,7 +74,7 @@ the teacher-specified folder:
   "term": "Term 1",
   "created_at": "<iso>",
   "db_path": "<source db>",             // provenance only
-  "classes": ["Year 7 1-4 (2026-27)", ...],
+  "classes": ["Year 7 A (2026-27)", ...],
   "counts": { "students": 120, "assignments": 21, "comments": 120, ... },
   "payload": {
     "assignments": [ /* full records for assignments tagged this term */ ],

@@ -63,7 +63,7 @@ class ReportingTests(unittest.TestCase):
         self.ss['excused_flags']['s2||Extra G2'] = True
         app.ensure_class_context()
         app.ensure_term_context()
-        self.definition = dict(id=str(uuid4()), name='Rocky', sort_mode='manual', members=[
+        self.definition = dict(id=str(uuid4()), name='Maple', sort_mode='manual', members=[
             dict(student_id='s2', source_class='G2'), dict(student_id='s1', source_class='G1')])
         self.ss['reporting_classes'] = [self.definition]
 
@@ -99,7 +99,7 @@ class ReportingTests(unittest.TestCase):
                                                        session={'reporting_classes': [mutation]}))
             self.assertTrue(issues)
             self.assertNotIn('s1', str(issues))
-        self.assertTrue(definition_issues([self.definition, dict(self.definition, id=str(uuid4()), name='rocky')]))
+        self.assertTrue(definition_issues([self.definition, dict(self.definition, id=str(uuid4()), name='maple')]))
 
     def test_own_group_grades_missing_and_context_equivalence(self):
         report = self.export()
@@ -140,7 +140,7 @@ class ReportingTests(unittest.TestCase):
         self.assertNotIn('s3', [r[0] for r in raw])
         text = '\n'.join(p.text for p in Document(io.BytesIO(report.docx())).paragraphs)
         self.assertLess(text.index('Aoki Ken'), text.index('Baba Emi'))
-        self.assertIn('Reporting class: Rocky', text)
+        self.assertIn('Reporting class: Maple', text)
         self.assertIn('Unit G1', text)
         self.assertIn('Unit G2', text)
         self.assertNotIn('Unit G3', text)
@@ -196,7 +196,7 @@ class ReportingTests(unittest.TestCase):
         member['student_id'] = 'empty'
         self.assertNotEqual(baseline, self.export().fingerprint)
         member['student_id'] = 's1'
-        changes = [lambda: self.definition.update(name='Andes'),
+        changes = [lambda: self.definition.update(name='Cedar'),
                    lambda: self.ss['comments_by_term'][self.term].update(s1='edited'),
                    lambda: self.ss['report_cfg'].update(show_effort=True),
                    lambda: setattr(app.gb().assignments[-1], 'is_draft', True),

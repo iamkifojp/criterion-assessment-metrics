@@ -51,7 +51,7 @@ comment-generation context. Downloaded submissions stay in their group folders.
 
 Add **custom reporting classes** in System deliverables. These are saved lists
 of existing students drawn from teaching groups, with independent ordering.
-For example, the teacher can assemble 8 Rocky and 8 Andes, then export their
+For example, the teacher can assemble 8 Maple and 8 Cedar, then export their
 final grades and already-saved comments. No student, grade or comment is copied
 into a second gradebook record.
 
@@ -75,7 +75,7 @@ Decisions confirmed by the teacher:
 At the top of System deliverables, add:
 
 1. **Report for** selector: `Current teaching group — <active class>`, followed
-   by saved entries such as `Custom — 8 Rocky` and `Custom — 8 Andes`.
+   by saved entries such as `Custom — 8 Maple` and `Custom — 8 Cedar`.
 2. **Manage reporting classes** button, opening a create/edit dialog.
 3. A concise scope summary: reporting name, member count, contributing teaching
    groups and selected term. Display any unresolved members before export.

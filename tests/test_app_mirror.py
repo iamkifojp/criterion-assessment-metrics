@@ -30,7 +30,7 @@ from engine import (  # noqa: E402
     term_summary_path,
 )
 
-CLASS = "Year 7 1-4"
+CLASS = "Year 7 A"
 OTHER = "Year 8 2-1"
 
 

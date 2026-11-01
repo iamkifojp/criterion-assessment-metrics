@@ -67,7 +67,7 @@ placement come free) — extended to carry every non-rebuildable teacher input:
 ```jsonc
 {
   "version": 2,
-  "class_name": "Year 7 1-4 (2026-27)",
+  "class_name": "Year 7 A (2026-27)",
   "updated_at": "<iso>",
   "terms":          { "Term 1": { "<sid>": "<overall comment>" } },   // v1 key, unchanged
   "remarks":        { "<sid>": "<teacher remarks>" },                  // flat, like the session map

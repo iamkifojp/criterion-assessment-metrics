@@ -35,7 +35,7 @@ from engine import (  # noqa: E402
     save_database,
 )
 
-CLASS_A = "Year 7 1-4"
+CLASS_A = "Year 7 A"
 CLASS_B = "Year 8 2-1"
 METHOD = next(iter(CALCULATION_METHODS))
 

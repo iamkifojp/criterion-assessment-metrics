@@ -427,7 +427,7 @@ CAM and CGW must agree on this slug or the handoff file is never found.
 ```jsonc
 {
   "assignment": "Artist Looking",       // CAM assignment name
-  "class":      "Year 7 1-4 (2026-27)", // CAM class name
+  "class":      "Year 7 A (2026-27)", // CAM class name
   "folder_ref": "18IKEh3hYGP…",         // Drive folder ID or local folder path
   "published":  "2026-07-05T14:32:00",  // ISO, timespec=seconds
   "students": {
@@ -477,7 +477,7 @@ a gradebook file.
 
 ```jsonc
 {
-  "class_name": "Year 7 1-4 (2026-27)", // CAM/CGW class name
+  "class_name": "Year 7 A (2026-27)", // CAM/CGW class name
   "assignment": "Painting",             // assignment display name
   "csv_path":   "…/Painting_Grades_2026-06-01.csv",  // the CSV just written
   "ts":         1720000000.0            // POSIX write time (float, advisory)
@@ -566,7 +566,7 @@ name**; every value is a JSON-safe scalar/list/dict:
 
 ```jsonc
 "unit_plans": {
-  "Year 7 1-4 (2026-27)": {
+  "Year 7 A (2026-27)": {
     "unit_title":           "Changing Views",
     "statement_of_inquiry": "Perspective shapes meaning.",
     "target_criteria":      { "B": "Developing", "D": "Evaluating" },
