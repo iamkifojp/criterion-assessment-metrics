@@ -112,7 +112,7 @@ class SafeSaveTests(StorageTestCase):
     def test_cloud_conflict_copies_stop_the_save(self):
         session, config, grades = self.new_session()
         for name in ("grades-LAPTOP-123.json", "grades (1).json",
-                     "grades (Kim's conflicted copy 2026-10-30).json", "grades 2.json"):
+                     "grades (Teacher's conflicted copy 2026-10-30).json", "grades 2.json"):
             path = os.path.join(self.folder, name)
             with open(path, "w") as fh:
                 fh.write("{}")
