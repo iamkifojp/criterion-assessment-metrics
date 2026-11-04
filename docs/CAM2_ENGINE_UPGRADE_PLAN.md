@@ -1,8 +1,12 @@
 # Upgrading CAM's vendored CAM2 to the latest dev version: assessment and plan
 
-**Status:** v2, 2026-11-04. Decisions D10–D15 (§5) are locked by the teacher. Five
-smaller points (§5.1) go ahead on the stated default unless the teacher changes them.
-Nothing is built yet.
+**Status:** v3, 2026-11-05. Decisions D10–D16 (§5) are locked by the teacher. v3
+changes D10, D11 and D13: a paper's repeated levels stay on the exam, and the teacher
+decides one grade per criterion for the assignment in Window 3. It also adds D16: an
+exam is whatever goes through CAM2, and a draft is a normal assignment without grades.
+The smaller points
+(§5.1) go ahead on the stated default unless the teacher changes them. Nothing is
+built yet.
 **Repos:** CAM = `criterion-assessment-metrics`; CAM2 = `cam2-exam-grading`,
 vendored in CAM at `exam_grading/`.
 **Depends on:** [CAM2_EXAM_CONVERGENCE_PLAN.md](CAM2_EXAM_CONVERGENCE_PLAN.md). This
@@ -34,9 +38,11 @@ changes:
 CAM's test suite catches only the first of these, so a green-looking run would be
 misleading. Marks-only exams without weighting read correctly.
 
-The teacher's decisions add one larger piece of work. CAM has to hold several grades
-on one criterion from one exam, plus marks per criterion. It can't do either safely
-today (§3.2), so this is now the core of Phases 2 and 3.
+The teacher's decisions add one new piece of work. Window 3 has to show every level
+and criterion mark on a paper, grouped by criterion, and let the teacher decide one
+grade per criterion for that assignment. This is the core of Phase 3. The gradebook
+keeps one grade per criterion per assignment, so the overall grade isn't worked out
+from dozens of slide levels.
 
 ## 2. Where things stand
 
@@ -90,7 +96,8 @@ These answer the teacher's questions of 2026-11-04.
 | Can one exam have grades on Criteria A, B, C and D? | **Yes, from the rubric panel.** It writes one grade per mapped criterion, and a test covers it (`test_exam_cam2_host.py:361`). Window 3 then shows one row per criterion | Nothing |
 | Is Window 3's grade entry limited to one criterion? | **No.** Each criterion listed on the exam gets its own row and edit dialog. It can only offer criteria already on the exam, though | Criteria arrive from CAM2 (Phase 3) |
 | Is Window 1 limited to one criterion? | **The marks panel is.** "Counts toward criterion" takes one letter, and Apply deletes the exam's grades on every other criterion (`app.py:7540-7541`). The rubric panel isn't | Fix (I2) |
-| Can one exam have several grades on one criterion? | **No.** They save and load (5 of 5 kept), but the screens break (I12) | Phase 2 and 3 |
+| Can one exam have several grades on one criterion? | **No.** They save and load (5 of 5 kept), but the screens break (I12) | Not needed: each criterion gets one decided grade (D10) |
+| Can CAM keep every level on a paper? | **Yes.** `ExamResult.levels` holds each question's levels, and Window 3 lists them question by question (`app.py:8740`). They aren't grouped by criterion, and no grade can be decided from them there | Phase 3 |
 | Can marks sit on a criterion? | **No.** A gradebook grade must be a whole number from 0 to 8 (`models.py:53-61`), so 15/20 can't be one. Marks stay on the exam record, which has no per-criterion marks | New field (D13) |
 
 ## 4. Issues
@@ -108,7 +115,7 @@ These answer the teacher's questions of 2026-11-04.
 | I9 | Licence notices missing from CAM's bundle | High, **live today** (was Medium) |
 | I10 | Documents describe the old behaviour | Low |
 | I11 | This Mac's `main` is 24 commits behind | Precondition |
-| I12 | Several grades on one criterion break the screens | Blocker for D10 (new) |
+| I12 | Several grades on one criterion would break the screens | Avoided by D10 (new) |
 | I13 | A student waiting for a grade can count as Missing = 0 | High (new) |
 | I14 | CAM2 can't take slide-shaped pages yet | Precondition for slide decks (new) |
 
@@ -195,7 +202,7 @@ plan's rule that CAM's numbers always match CAM2's. D12 removes the suggestion.
 ### I7. Tests don't guard any of this
 
 At CAM2 `main`, 2 of CAM's 267 tests fail (`test_exam_bridge.py:214`,
-`test_exam_cam2_host.py:370`), and both are I1. Nothing covers I2, I3, I5, I6, I12 or
+`test_exam_cam2_host.py:370`), and both are I1. Nothing covers I2, I3, I5, I6 or
 I13. Updating those two tests would turn the suite green with every other issue still
 in place.
 
@@ -234,8 +241,8 @@ D15 and Phase 4 fix this for new releases. §5.1 P5 covers the published ones.
 - The docstring at `app.py:7560`.
 - The convergence plan's D3 and D4, which D10 and D11 amend.
 - `SLIDE_DECK_EXAM_PLAN.md` was written against the pinned CAM2. Its step 6 and D6
-  need rereading against D10 to D13, and its Phase 3 grade-owner rule needs to work
-  with several grades per criterion.
+  need rereading against D10 to D13, and its Phase 3 grade-owner lock moves from the
+  Window 1 panel to the Window 3 decision. Its D10 and D13 use the old draft label (P8).
 
 ### I11. This Mac's `main` is 24 commits behind
 
@@ -244,11 +251,15 @@ All 24 missing commits are the convergence work, which also changes CAM's databa
 handling. Updating is a real step if this checkout runs against real data, so it's
 in Phase 0 and not done casually.
 
-### I12. Several grades on one criterion break the screens
+### I12. Several grades on one criterion would break the screens
+
+v2 of this plan carried each slide level into the gradebook as its own grade. D10 no
+longer does, so none of this needs fixing. It's kept as the reason for that decision.
 
 The data layer copes: five grades on B from one exam save and load, and the
 calculation counts all five. Everything keyed on (student, exam, criterion) doesn't.
-Each of these was checked with fictional data:
+The first three rows were checked with fictional data, and the others come from the
+code:
 
 | Where | What happens with B 3, 4, 4, 5, 4 from one exam |
 |---|---|
@@ -257,19 +268,23 @@ Each of these was checked with fictional data:
 | Excel "Classroom Entry" (`app.py:5544`) | **Shows 3 only**, with no sign that there are four more |
 | Rubric panel (`app.py:7608`) | Keeps one grade per criterion, then Apply deletes the rest |
 | Marks panel (`app.py:7540`) | Apply deletes all of them |
-| Rubric panel check (`app.py:7594-7597`) | Blocks two rubrics on one criterion, which D11 now allows |
 
-The Raw Scores sheet, the report-card table and the trend chart list every grade, but
-nothing says which slide or question each came from. `CriterionScore` has no field
-for it.
+Repeated grades would also swamp the year. With two earlier assignments at 7 and a
+deck on Criterion B:
+
+| Deck | Simple average | 60/40 recency | Weighted median | EMA |
+|---|---|---|---|---|
+| One grade, 4 | 6.00 | 5.80 | 7.00 | 6.10 |
+| Five slide levels, all 4 | 4.86 | 4.71 | 4.00 | 4.50 |
 
 ### I13. A student waiting for a grade can count as Missing = 0
 
 `missing_assignment_rows` (`app.py:3414`) treats an exam as Missing = 0 for a student
 with no grade on it, once any classmate has one. A paper not yet finished in CAM2 is
-already caught by this. It matters much more under D12 and D13: a student whose paper
-has only marks, waiting for the teacher to set a level, would count as 0 on every
-criterion listed on the exam.
+already caught by this. It matters much more under D10: a student waiting for the
+teacher's decision would count as 0 on every criterion listed on the exam. Once one
+criterion is decided, the student stops counting as missing, so any undecided criterion
+just stays out of the calculation.
 
 ### I14. CAM2 can't take slide-shaped pages yet
 
@@ -282,41 +297,58 @@ and Drive phases, or PDFs prepared by hand.
 
 ## 5. Decisions
 
-Numbering continues from the convergence plan. All locked by the teacher on
-2026-11-04.
+Numbering continues from the convergence plan. D10–D15 were locked by the teacher on
+2026-11-04. On 2026-11-05 the teacher changed D10, D11 and D13 and added D16.
 
-- **D10 · Grades come from CAM2.** (amends D4) CAM2 is strictly for exam grading.
-  Drafts, such as art lesson drafts, stay in the grading workspace. The teacher using
-  CAM2 chooses the criterion rubrics option, and records marks or levels on the paper.
-  For each criterion CAM maps:
-  - **A final level typed in CAM2** carries over as one grade.
-  - **No final level, levels on the paper:** every level carries over as its own
-    grade, unaveraged. Five B slides give five B grades.
-  - **Nothing recorded:** nothing is written, and an existing grade stays as it is.
+- **D16 · An exam is whatever goes through CAM2.** This is the difference between the
+  types in Window 1:
 
-  CAM never averages, suggests or re-keys. A question marked Not answered, or not
-  counted because of a choice group, doesn't become a grade. It stays visible in
-  Window 3. To count a criterion once, the teacher types a final level in CAM2, which
-  needs **Overall criterion results** on in Step 5.
+  | Type | What it is | Graded in | Grades |
+  |---|---|---|---|
+  | Assignment | Normal assignment | Grading workspace | Yes |
+  | Assignment without grades | Normal assignment, such as an art lesson draft | Grading workspace | No, comments only |
+  | Exam | Any exam, including a visual art final report imported from Google Drive | CAM2 | Yes, per D10 |
+
+  A visual art final report is an exam, even though it's a slide deck and not a written
+  paper. Today every exam already opens in CAM2 (`app.py:7701`, `7755`). A folder watched
+  on Drive can't yet be made an exam, which the slide-deck plan's D13 and Phase 2 add.
+- **D10 · The teacher decides each criterion's grade for the assignment, in Window 3.**
+  (amends D4) The teacher using CAM2 chooses the criterion rubrics option, and records
+  marks or levels on the paper.
+  - **The paper's levels stay on the exam record.** They're evidence for the decision,
+    not gradebook grades, and they never enter the overall calculation.
+  - **Window 3 groups them by criterion** for the student in focus, then asks for one
+    decision: `Criterion B · Screen 01: 5 · Screen 02: 4 · Screen 03: 5 · Screen 06: 4 ·
+    Screen 07: 6`, then a 0–8 dropdown for this assignment's Criterion B.
+  - **That decision is the one gradebook grade** for that student, assignment and
+    criterion. The later overall grade works from these, as with any other assignment.
+  - **A final level typed in CAM2** is already a decision, so it carries over as that
+    grade. Window 3 shows it, and the teacher can change it there.
+  - **Nothing decided:** nothing is written, the criterion stays out of the calculation,
+    and an existing grade stays as it is.
+
+  CAM never averages or suggests. A question marked Not answered, or not counted because
+  of a choice group, stays visible in Window 3 and isn't part of the decision.
 - **D11 · A paper can carry everything at once.** (amends D3) Marks and any number of
-  levels on any criteria can sit on one paper, and all of it carries over. Marks ticked
-  on a criterion go to that same criterion in CAM, and levels go to theirs. Marks and
-  levels are never converted into each other. Several rubrics or marks may map to one
-  criterion, so the "two rubrics" check goes.
+  levels on any criteria can sit on one paper, and all of it reaches CAM. Marks ticked
+  on a criterion show under that same criterion in Window 3, next to its levels. Marks
+  and levels are never converted into each other. Several rubrics or marks may map to
+  one criterion, so the "two rubrics" check goes: they share one group and one decision.
+  If two rubrics on one criterion both have a typed final level, neither is written.
+  Window 3 shows both, and the teacher decides.
 - **D12 · Weighted marks are never converted by the app.** Weighting belongs to CAM2's
   sections. CAM shows CAM2's weighted result beside the raw total
   (`weighted 50.0% · raw 10/50`) and never bands from either. A teacher may add
   weighted marks into a final mark for a criterion, then set the level by hand, either
-  as a final level in CAM2 or in CAM. In CAM2, weighting is switched on for a paper and
+  as a final level in CAM2 or in Window 3. In CAM2, weighting is switched on for a paper and
   shared across at least two sections with marks (`weighting_on`), so the rule applies
   to that paper's marks whenever it's on. This replaces the earlier recommendation to
   band from the percentage.
 - **D13 · Criterion marks carry over.** This is the teacher's main use: rubric grading
   across the slides of Y8 and Y9 final-report portfolios, as well as written papers. A
   new optional `ExamResult.criterion_marks` holds each criterion's marks as CAM2
-  reports them. They show in the Window 1 panel and Window 3 under the mapped criterion.
-  They aren't gradebook grades and don't enter the calculation until the teacher sets
-  a 0–8 level.
+  reports them. They show in Window 3 in that criterion's group, next to any levels.
+  They aren't gradebook grades. Only the teacher's 0–8 decision enters the calculation.
 - **D14 · Pin the CAM2 version with all the fixes applied.** That is the new tag from
   Phase 1, not `7d34779`.
   - CAM's bundle runs CAM2 from source under its own Python, so it needs **no compiled
@@ -335,35 +367,37 @@ Numbering continues from the convergence plan. All locked by the teacher on
 These came up while working through the decisions. Each default stands unless the
 teacher changes it.
 
-- **P1 · How repeated levels count in the calculated grade.** *Default: each level
-  counts as one grade, as D10 says.* A deck can outweigh the rest of the year. With two
-  earlier assignments at 7 and a deck on Criterion B:
-
-  | Deck | Simple average | 60/40 recency | Weighted median | EMA |
-  |---|---|---|---|---|
-  | One final level, 4 | 6.00 | 5.80 | 7.00 | 6.10 |
-  | Five slide levels, all 4 | 4.86 | 4.71 | 4.00 | 4.50 |
-
-  The panel says so before Apply ("5 grades on B count as 5 pieces of evidence"), and a
-  typed final level makes the criterion count once. The alternative is for the exam to
-  count once per criterion while every level stays visible, which needs changes to the
-  calculation. The On checkbox can't exclude one level, because it works per assignment
-  (`sync_active_into_scores`, `app.py:3522`).
-- **P2 · One Apply click.** *Default: Send to CAM fills in the panel, and the teacher
-  presses Apply once.* There are no per-student dropdowns for CAM2's grades. A fully
-  automatic write isn't safe: someone must confirm the rubric-to-criterion mapping, and
-  a re-send shouldn't silently change gradebook grades.
-- **P3 · Plain marks exams.** *Default: remove the pre-filled band there too.* Today
-  each dropdown starts at `suggested_band()`, and Apply writes it even if the teacher
-  never touched it. That is the app converting marks into a grade. The dropdown starts
-  blank, and blank writes nothing. This is the one change for marks-only exams.
-- **P4 · Rubrics that don't go to 8.** *Default: keep today's scaling, shown in the
-  panel (`exam_bridge.to_band`).* CAM's gradebook only holds 0–8, so a rubric going to 6
-  has to be scaled or refused. Scaling a level isn't converting marks, but it's still
-  the app changing a number, so the teacher may prefer a refusal.
+- **P1 · How repeated levels count. Settled in v3:** they don't count directly. The
+  teacher's decision is the only grade per criterion (D10), so a deck counts as one
+  assignment, however many slides it has.
+- **P2 · What stays in Window 1.** *Default: the rubric-to-criterion mapping, a progress
+  count per criterion ("18 of 28 decided"), and one Apply button for final levels typed
+  in CAM2.* Rubrics named `Criterion A` to `Criterion D` map by themselves, so a deck
+  graded only with levels needs nothing here. A fully automatic write of typed levels
+  isn't safe, because someone must confirm the mapping.
+- **P3 · Plain marks exams.** *Default: an exam with no marks on any criterion keeps
+  Window 1's class-wide marks panel, but without the pre-filled band.* Today each
+  dropdown starts at `suggested_band()`, and Apply writes it even if the teacher never
+  touched it. That is the app converting marks into a grade. The dropdown starts blank,
+  and blank writes nothing. This is the one change for marks-only exams.
+- **P4 · Rubrics that don't go to 8.** *Default: Window 3 lists their levels as given
+  (`Screen 03: 5/6`), and the teacher decides on 0–8, so nothing is scaled.* Only a
+  final level typed in CAM2 on such a rubric is still scaled, as today
+  (`exam_bridge.to_band`), and the panel shows it. The teacher may prefer a refusal.
 - **P5 · Published releases.** *Default: no change until the teacher agrees.* Phase 0
   proposes adding the notices to the `v2026.11.01` release page, and the zip stays as
   it is until the next release. Editing a public release needs the teacher's go-ahead.
+- **P6 · Changes after a decision.** *Default: the decision stays, and Window 3 flags it
+  ("levels changed since you decided").* A re-send never changes a grade the teacher set
+  in CAM. A paper not finished in CAM2 shows its levels, but can't be decided until it's
+  finished and sent again, as today.
+- **P7 · No average beside the dropdown.** *Default: Window 3 shows the levels and no
+  calculated figure*, which keeps D10's "never averages or suggests". An average could
+  be added later as a read-only aid if the teacher wants it.
+- **P8 · The draft label.** *Default: "Draft — comments only" becomes "Assignment —
+  no grades" in Add assignment and ⋯ Manage (`app.py:7119`, `7313`), to match D16.* Only
+  the wording changes. Existing drafts keep working, because the stored `is_draft` flag
+  stays the same.
 
 ---
 
@@ -401,7 +435,7 @@ anything new arrives, the same order the convergence plan used.
 
 *Done when:* the I5 reproduction no longer upgrades or misroutes a session.
 
-### Phase 2 — CAM: correct Apply, bridge and storage, on the current pin · L
+### Phase 2 — CAM: correct Apply, bridge and storage, on the current pin · M
 
 - **Fix I2 first.** Apply replaces a student's grades only on criteria with a new
   decision, and leaves the others alone. `score_count` counts real grades. The marks
@@ -411,53 +445,62 @@ anything new arrives, the same order the convergence plan used.
   whenever they exist. This works on both engines.
 - Report the exam's mode as `marks`, `rubric` or `mixed`. An older CAM treats
   anything but `rubric` as marks, which is safe.
-- **Say which grade is which (I12).** Add optional `CriterionScore.exam_item` (the
-  question label, or `final`) and `exam_value` (the value CAM2 sent). The save format
-  gains both. An older CAM ignores them on load and drops them on save, so an unlabelled
-  grade is treated as one grade for that criterion.
+- **Say where a grade came from.** Add optional `CriterionScore.exam_value` (the final
+  level CAM2 sent, if any). An older CAM ignores it on load and drops it on save, so a
+  grade without it counts as the teacher's.
 - **Re-send rule.** For each student and mapped criterion:
-  - a typed final level replaces that criterion's earlier CAM2 grades with one;
-  - levels replace them with one grade per level;
-  - nothing new changes nothing;
-  - a grade the teacher edited in CAM (`value` differs from `exam_value`) is kept and
-    listed, never overwritten silently.
+  - a typed final level fills an empty grade, or updates one CAM2 sent earlier
+    (`value` equals `exam_value`);
+  - a grade the teacher set or edited in CAM is kept and listed, never overwritten
+    silently;
+  - levels and marks never write a grade;
+  - nothing new changes nothing.
 - Add optional fields to `ExamResult`: `percent`, `weighted` and `criterion_marks`
   (D12, D13). Records already in a database must load unchanged, and an older CAM must
   still load new ones.
 - `_validate_exam_result` rejects non-string keys in `levels` and `final_levels`.
-- **Fix I13.** A student with an exam result and no grade shows as ⏳ awaiting grade and
-  stays out of the calculation, not Missing = 0.
-- Tests: turn §3.1, the I2 table and the I12 table into permanent tests. Those needing
-  a v2 session skip until `model.VERSION >= 2`, then run from Phase 4.
+- **Fix I13.** A student with an exam result and no grade shows as ⏳ awaiting decision
+  and stays out of the calculation, not Missing = 0.
+- Tests: turn §3.1 and the I2 table into permanent tests, and add one that nothing ever
+  writes a second grade for one student, exam and criterion. Those needing a v2 session
+  skip until `model.VERSION >= 2`, then run from Phase 4.
 
-*Done when:* the I2 reproduction keeps both grades, five grades on one criterion
-survive a re-send, and marks-only and rubric behaviour on the current pin is otherwise
-unchanged. The I2 fix can ship by itself.
+*Done when:* the I2 reproduction keeps both grades, and marks-only and rubric behaviour
+on the current pin is otherwise unchanged. The I2 fix can ship by itself.
 
-### Phase 3 — CAM: Window 1 and Window 3 · L
+### Phase 3 — CAM: decide per criterion in Window 3 · M–L
 
-- **Window 1 panel** (D10, D11, P2). One panel for marks, rubric and mixed exams:
-  - one row per student, read-only, showing what will carry over per criterion, such
-    as `A 6 · B 5, 5, 6 · C 15/20 (marks)`;
-  - the mapping row, with several rubrics allowed on one criterion;
-  - the P1 message, and a summary of what Apply will change before it writes;
-  - one Apply button.
-- **Teacher-set levels** (D12, D13, P3). Marks and weighted results get a blank 0–8
-  dropdown under the criterion, and blank writes nothing. The app never pre-fills one.
-- Route from the Phase 2 mode (`app.py:3588`, `7454`, `8771`).
-- **Window 3** (I12). Grade rows get a key and label per item, such as
-  `Deck · Screen 03 · B: 5`. `edit_grade_dialog` and `find_score` take the item. Each
-  question shows by its own type, and criterion marks and the weighted result are shown
-  read-only. A criterion with only marks can be given a level there.
-- **Exports** (I12). Classroom Entry shows every grade in its cell (`3, 4, 4, 5, 4`),
-  never only the first. Raw Scores and the report-card table gain the item.
+- **Window 3 exam block** (D10, D11, D13, P4, P6, P7). Under `📝 <exam>`, one group per
+  mapped criterion:
+  - each question's level or mark, by its label, plus criterion marks and the weighted
+    result, all read-only;
+  - one 0–8 dropdown for this assignment's grade on that criterion, blank until decided,
+    with no suggestion. Choosing a level writes the one `CriterionScore`. Choosing blank
+    clears it;
+  - a final level typed in CAM2 shown as the current decision, labelled as from CAM2;
+  - the "levels changed since you decided" flag.
+
+  Levels on a rubric mapped to no criterion are listed apart, with a pointer to Window
+  1. The existing rows with each question's comment stay available below the groups.
+- **Keep everything in step.** A decision updates `asg.criteria` and `score_count`, so
+  the grade rows above, Window 2 and the exports agree. No other screen changes, because
+  the gradebook still holds one grade per criterion.
+- **Window 1 panel** (P2, P3). The mapping, with several rubrics allowed on one
+  criterion; the progress count; and Apply for typed final levels, with a summary of what
+  it will change before it writes. An exam with no marks on any criterion keeps the
+  class-wide marks panel, with blank dropdowns.
+- Route from the Phase 2 mode (`app.py:3588`, `7454`, `8771`). Show ⏳ awaiting decision
+  (I13).
+- Rename the draft type (P8), including Window 3's `· Draft ·` caption and the message
+  at `app.py:8644`.
 - Round-half-up for any new percentage display, not Python's `round()`.
 - Sandbox browser check: temp prefs, temp `db_custom_path`, fictional class. Include
-  the 12-screen fixture from the slide-deck plan, which gives A 1, B 5, C 2 and D 5
-  grades.
+  the 12-screen fixture from the slide-deck plan. Its A 1, B 5, C 2 and D 5 levels must
+  end as at most one gradebook grade on each criterion, with the calculated grade the
+  same however many slides fed the decision.
 
-*Done when:* Window 3 opens for a student with repeated grades and edits the right one,
-no export hides a grade, and a blank dropdown can't change a grade.
+*Done when:* a deck's levels show grouped in Window 3, one decision writes one grade, a
+blank dropdown can't invent a grade, and a re-send can't change a teacher's decision.
 
 ### Phase 4 — Pull CAM2, notices, bundle · M–L
 
@@ -487,8 +530,9 @@ no export hides a grade, and a blank dropdown can't change a grade.
 - Sandbox end to end with `exam_grading/tools/make_sample_exam.py` and a real browser:
   marks; rubric with and without final levels; levels on one criterion across many
   questions; marks ticked on a criterion; mixed from both starting choices; weighted;
-  choice groups; and a v1 session upgraded mid-grading. Each must Sync, Apply and show in
-  Windows 2 and 3, leaving session folders byte-identical after Sync.
+  choice groups; and a v1 session upgraded mid-grading. Each must Sync, be decided in
+  Window 3 or carried by Apply, and show in Windows 2 and 3, leaving session folders
+  byte-identical after Sync.
 - **On a Windows computer:** build the bundle and boot it with its embedded Python. CAM
   starts, CAM2 opens in host mode and sends to CAM, and the `Licences` folder is there.
 
@@ -503,7 +547,9 @@ no export hides a grade, and a blank dropdown can't change a grade.
 - Add `CHANGELOG.md` and release notes that say plainly:
   - update **every computer before opening an exam**, because opened exams can't go
     back;
-  - CAM2's levels carry over as given, and how to make a criterion count once;
+  - exams go through CAM2, and "Draft — comments only" is now "Assignment — no grades";
+  - a paper's levels show in Window 3, and the teacher decides one grade per criterion
+    for the assignment, unless a final level was typed in CAM2;
   - marks are never turned into grades by the app, and bands are no longer pre-filled;
   - what `file_from_newer_version` means on a computer not yet updated.
 
@@ -518,16 +564,13 @@ session.
    Never prune existing `.bak-*` files.
 3. Open one low-stakes exam. Check its counts against the Phase 0 numbers, and that its
    existing gradebook grades are unchanged.
-4. Then open the rest as needed. Re-Apply an older rubric exam only after reading the
-   panel's summary. Its single confirmed grade could become several levels unless a
-   final level is typed in CAM2.
+4. Then open the rest as needed. Grades already applied from older rubric exams stay as
+   they are, and neither a re-send nor Apply replaces them silently.
 
 **Rollback:** revert CAM to the previous release and restore `exams/` from the step 2
 copy. A v2 session can't be opened by older code. CAM2 also leaves a v1 copy in
 `backups/` when it upgrades, but that backup is per day, so don't rely on it. Grades
-entered after the upgrade would need re-entering. An older CAM keeps repeated grades,
-but its Window 3 crashes on them (I12), so don't roll back after applying them without
-restoring the database backup too.
+entered after the upgrade would need re-entering.
 
 *Done when:* all computers are updated and every sampled exam matches its numbers from
 before the upgrade.
@@ -547,7 +590,7 @@ and are unchanged, and neither repo's code was modified.
 
 I2 was reproduced through CAM's test harness with saving stubbed out. I4 and I5 were
 reproduced with real launcher processes. §3.1 came from probes against the real bridge.
-For I12 and P1:
+For I12:
 
 - The save format, calculation methods and Classroom Entry and `find_score` selection
   rules were run with fictional grades, using copies of the last two.
