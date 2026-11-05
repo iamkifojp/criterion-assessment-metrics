@@ -6,7 +6,8 @@ brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by th
 Q4's trial still sets the F6 wording in Phase 3. The smaller points
 (§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done.
 Phase 1's code is built on CAM2's `phase1-slides-and-comment-limits` branch, not yet merged
-or tagged (see its progress note). Nothing in Phases 2 to 6 is built yet.
+or tagged (see its progress note). Phase 2W is built on CAM's `cam2-upgrade-phase2w` branch
+(see its progress note). Nothing else in Phases 2 to 6 is built on this branch.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -753,6 +754,40 @@ to the workspace in this upgrade, as F5's first stage says.
 
 *Done when:* in that browser check, no trigger loses typed text, and a deadline change
 leaves students whose Late flag didn't change untouched.
+
+**Progress, 2026-11-06.** Built from `main`, on fictional data only. Both "done when" points
+were met in the browser check below.
+
+- **The deadline case on the old code, now run:** in a sandbox with a typed comment on a
+  student whose Late flag didn't change, a deadline change emptied the comment and saved all
+  four students. I15's reading of the code was right.
+- **Tests:** CAM 299 and CAM2 216, on this desktop with Node, so none skipped. There's now a
+  JavaScript test that runs the real page functions through Node, and it skips where there's no
+  Node.
+- **Browser, in a sandbox on Windows:** typing then ticking with real clicks and keys, then
+  driving the page's own controls by script for the rest: tick and untick, the Late tick,
+  a deadline change in both directions (only the students whose flag changed were saved, and a
+  waived one stayed put), an older comment with and without its line, comments rewritten and
+  extended through CAM's published file, linked partners, a renamed tick, and a reload.
+- **Choices this phase settled:**
+  - **The line and the text are joined by a space, not a new line as in CAM2.** CAM's
+    `clean_comment` doesn't remove a new line, which would show in the comments log, and a
+    space leaves the export and CAM's screens as they are today.
+  - **A comment restored from a draft's published feedback forgets its remembered line,** so
+    it's compared with the line its ticks give. A comment edited in CAM keeps it, so an edit
+    that leaves the line in place still has it replaced.
+  - **A save's reply no longer overwrites newer text.** It's older than anything typed or
+    ticked while it was on its way, and it could otherwise bring old text back.
+  - **`comment_line` needs no bump to `CACHE_VERSION`,** since it's optional.
+- **Not checked:** an older workspace on another computer, which from reading its code drops
+  the field on save. Draft restoring ran in a server test only, not in the browser.
+- **Found, and left as it is:**
+  - **Linking partners still replaces the second student's comment** with the first's
+    (`_sync_group_grades`), so text typed on the second is lost. Linking is a deliberate step
+    and isn't one of I15's three triggers, but it is typed text being lost.
+  - **A task whose keyword list was never edited comes back after a reload with only the
+    ticked keywords.** This came up in the sandbox. It's outside this phase's change, and
+    wasn't compared with the old code.
 
 ### Phase 3 — CAM: decide per criterion in Window 3 · M–L
 

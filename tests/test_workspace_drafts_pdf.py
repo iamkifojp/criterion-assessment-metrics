@@ -23,6 +23,12 @@ from cam_grading_workspace.pdf_view import visible_pages, prune_pdf_cache
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def fitz_open():
+    """A new PDF, imported late so a computer without PyMuPDF still skips cleanly."""
+    import fitz
+    return fitz.open()
+
+
 class WorkspaceUiTests(unittest.TestCase):
     def test_draft_badges_and_grade_columns(self):
         node = shutil.which(os.environ.get("CAM_TEST_NODE", "node"))
@@ -83,6 +89,129 @@ checkColumns(['A', 'B']);
 assert.equal(gradeChipText(st), 'Σ8');
 SELECTED_CRITERIA = ['A'];
 assert.equal(gradeChipText(st), '0');
+"""
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_generated_line_never_loses_typed_text(self):
+        node = shutil.which(os.environ.get("CAM_TEST_NODE", "node"))
+        if not node:
+            self.skipTest("Node.js is required for workspace UI checks")
+        source = (ROOT / "cam_grading_workspace/app.py").read_text(encoding="utf-8")
+        functions = []
+        for start in ("function isLate(", "function autoComment(", "function generatedLine(",
+                      "function applyGeneratedLine(", "function applyDeadlineToLate(",
+                      "function remapKeywordLabel(", "async function save("):
+            begin = source.index(start)
+            functions.append(source[begin:source.index("\n}\n", begin) + 2])
+        script = r"""
+const assert = require('node:assert/strict');
+let DEADLINE = '', IS_DRAFT = false, STUDENTS = [];
+const KEYWORDS = [{label: 'Shading', type: 'positive'}, {label: 'Colour', type: 'positive'},
+                  {label: 'Detail', type: 'growth'}];
+const byKey = {};
+const gradeSum = () => 0, renderRoster = () => {}, refreshRow = () => {}, cssEsc = s => s;
+const tableWrap = {querySelector: () => null};
+let saves = [];
+""" + "\n".join(functions).replace("async function save(", "async function realSave(") + r"""
+const save = st => saves.push(st.key);
+const student = fields => ({key: 'k', keywords: [], comment: '', files: [], ...fields});
+const tick = (st, ...labels) => {
+  const before = generatedLine(st);
+  st.keywords = labels;
+  applyGeneratedLine(st, before);
+};
+
+// Tick first, then type, then tick again: only the line changes.
+let st = student();
+tick(st, 'Shading');
+assert.equal(st.comment, 'Strengths: Shading.');
+st.comment += ' Typed text.';
+tick(st, 'Shading', 'Detail');
+assert.equal(st.comment, 'Strengths: Shading. Areas to develop: Detail. Typed text.');
+tick(st);
+assert.equal(st.comment, 'Typed text.');
+assert.equal(st.comment_line, '');
+
+// Type first, then tick.
+st = student({comment: 'Typed first.', comment_line: ''});
+tick(st, 'Colour');
+assert.equal(st.comment, 'Strengths: Colour. Typed first.');
+
+// An older saved comment has no remembered line: compare with its ticks.
+st = student({comment: 'Strengths: Shading. Older text.', keywords: ['Shading']});
+tick(st, 'Colour');
+assert.equal(st.comment, 'Strengths: Colour. Older text.');
+assert.equal(st.comment_line, 'Strengths: Colour.');
+st = student({comment: 'Strengths: Shading.', keywords: ['Shading'], comment_line: null});
+tick(st, 'Colour');
+assert.equal(st.comment, 'Strengths: Colour.');
+
+// A comment that doesn't start with the line stays whole, with the line in front.
+st = student({comment: 'No line here.', keywords: ['Shading']});
+tick(st, 'Colour');
+assert.equal(st.comment, 'Strengths: Colour. No line here.');
+st = student({comment: 'Edited in CAM.', keywords: ['Shading'], comment_line: 'Strengths: Shading.'});
+tick(st, 'Colour');
+assert.equal(st.comment, 'Strengths: Colour. Edited in CAM.');
+
+// The Late tick replaces the line the same way.
+st = student({comment: 'Strengths: Shading. Typed.', keywords: ['Shading'],
+              comment_line: 'Strengths: Shading.', late_marked: false});
+let before = generatedLine(st);
+st.late_marked = true;
+applyGeneratedLine(st, before);
+assert.equal(st.comment, 'Strengths: Shading. Late submission. Typed.');
+
+// A deadline change touches only students whose Late flag changed.
+const late = student({key: 'late', comment: 'Typed.', late_marked: false,
+                      files: [{created_time: '2026-10-10T09:00:00'}]});
+const same = student({key: 'same', comment: 'Left alone.', keywords: ['Shading'], late_marked: false,
+                      files: [{created_time: '2026-10-01T09:00:00'}]});
+const waived = student({key: 'waived', comment: 'Waived.', late_marked: false, late_manual: true,
+                        files: [{created_time: '2026-10-10T09:00:00'}]});
+STUDENTS = [late, same, waived];
+DEADLINE = '2026-10-05T12:00';
+assert.deepEqual(applyDeadlineToLate().map(s => s.key), ['late']);
+assert.equal(late.comment, 'Late submission. Typed.');
+assert.equal(same.comment, 'Left alone.');
+assert.equal(same.comment_line, undefined);
+assert.equal(waived.comment, 'Waived.');
+DEADLINE = '2026-10-20T12:00';
+assert.deepEqual(applyDeadlineToLate().map(s => s.key), ['late']);
+assert.equal(late.comment, 'Typed.');
+
+// A renamed tick updates the comment and the remembered line together.
+st = student({comment: 'Strengths: Shading. Typed.', keywords: ['Shading'],
+              comment_line: 'Strengths: Shading.'});
+STUDENTS = [st];
+saves = [];
+remapKeywordLabel('Shading', 'Tone');
+assert.equal(st.comment_line, 'Strengths: Tone.');
+assert.equal(saves.length, 1);
+tick(st, 'Tone');
+assert.equal(st.comment, 'Strengths: Tone. Typed.');
+
+// A save's reply can't undo typing that happened while it was on its way.
+(async () => {
+  const typing = student({comment: 'Before.', comment_line: ''});
+  byKey.k = typing;
+  let reply;
+  global.fetch = (url, options) => {
+    assert.equal(JSON.parse(options.body).comment_line, '');
+    return new Promise(resolve => { reply = resolve; });
+  };
+  const pending = realSave(typing);
+  typing.comment = 'Before. And more.';
+  reply({json: async () => ({students: [{key: 'k', comment: 'Before.', comment_line: '', graded: true}]})});
+  await pending;
+  assert.equal(typing.comment, 'Before. And more.');
+  assert.equal(typing.graded, true);
+  const settled = realSave(typing);
+  reply({json: async () => ({students: [{key: 'k', comment: 'From the server.', comment_line: ''}]})});
+  await settled;
+  assert.equal(typing.comment, 'From the server.');
+})().catch(error => { console.error(error); process.exit(1); });
 """
         result = subprocess.run([node, "-e", script], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -207,6 +336,91 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(self.loaded["is_draft"])
         self.assertEqual(self.student["comment"], "Explain your artist choice.")
         self.assertTrue(self.student["graded"])
+
+    def save_comment(self, key, comment, line):
+        response = self.client.post("/api/save", json={
+            "key": key, "comment": comment, "comment_line": line, "keywords": ["Context"]})
+        self.assertEqual(response.status_code, 200)
+        return response.get_json()
+
+    def test_comment_line_survives_save_and_reload(self):
+        key = self.student["key"]
+        saved = self.save_comment(key, "Strengths: Context. Typed.", "Strengths: Context.")
+        self.assertEqual(saved["student"]["comment_line"], "Strengths: Context.")
+        self.load()
+        self.assertEqual(self.student["comment"], "Strengths: Context. Typed.")
+        self.assertEqual(self.student["comment_line"], "Strengths: Context.")
+        self.assertEqual(self.loaded["students"][0]["comment_line"], "Strengths: Context.")
+        # A save that doesn't mention it, as an older page's wouldn't, keeps it.
+        self.client.post("/api/save", json={"key": key, "comment": "Strengths: Context. More."})
+        self.assertEqual(self.student["comment_line"], "Strengths: Context.")
+        # Anything but text means no remembered line.
+        self.save_comment(key, "Typed.", {"not": "text"})
+        self.assertIsNone(self.student["comment_line"])
+
+    def test_saved_file_without_comment_line_loads_unchanged(self):
+        key = self.student["key"]
+        self.save_comment(key, "Strengths: Context. Typed.", "Strengths: Context.")
+        path = Path(self.ws.cache_file_path())
+        cache = json.loads(path.read_text(encoding="utf-8"))
+        entry = next(v for v in cache.values()
+                     if isinstance(v, dict) and key in (v.get("students") or {}))
+        del entry["students"][key]["comment_line"]
+        path.write_text(json.dumps(cache), encoding="utf-8")
+        self.load()
+        self.assertEqual(self.student["comment"], "Strengths: Context. Typed.")
+        self.assertEqual(self.student["keywords"], ["Context"])
+        self.assertIsNone(self.student["comment_line"])
+
+    def test_linked_partners_share_the_comment_line(self):
+        with fitz_open() as doc:
+            doc.new_page().insert_text((60, 60), "Fictional partner work")
+            doc.save(self.folder / "Ben Okafor.pdf")
+        self.load()
+        ada, ben = sorted(self.ws.STATE["students"])
+        self.save_comment(ada, "Strengths: Context. Typed.", "Strengths: Context.")
+        # Linking copies it to a partner who hasn't been graded.
+        response = self.client.post("/api/group/link", json={"a_key": ada, "b_key": ben})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        students = self.ws.STATE["students"]
+        self.assertEqual(students[ben]["comment"], "Strengths: Context. Typed.")
+        self.assertEqual(students[ben]["comment_line"], "Strengths: Context.")
+        # A save on either one reaches both, and comes back for the partner's row.
+        saved = self.save_comment(ben, "Strengths: Colour. Typed.", "Strengths: Colour.")
+        self.assertEqual(students[ada]["comment_line"], "Strengths: Colour.")
+        self.assertEqual({s["comment_line"] for s in saved["students"]}, {"Strengths: Colour."})
+        self.load()
+        self.assertEqual(self.ws.STATE["students"][ben]["comment_line"], "Strengths: Colour.")
+
+    def test_comment_edited_in_cam_keeps_the_remembered_line(self):
+        key = self.student["key"]
+        self.save_comment(key, "Strengths: Context. Typed.", "Strengths: Context.")
+        published = {self.student["name"]: {"grades": {}, "comment": "Edited in CAM."}}
+        with patch.object(self.ws, "load_cam_published", return_value=published):
+            self.load()
+        self.assertEqual(self.student["comment"], "Edited in CAM.")
+        # The page sees it no longer starts with the line, so the text stays whole.
+        self.assertEqual(self.student["comment_line"], "Strengths: Context.")
+
+    def test_restored_draft_feedback_forgets_the_remembered_line(self):
+        key = self.student["key"]
+        self.save_comment(key, "Strengths: Context. Typed.", "Strengths: Context.")
+        restored = {"is_draft": True, "published_feedback": {self.student["name"]: {
+            "comment": "Strengths: Colour. Restored.", "keywords": ["Colour"]}}}
+        real = self.ws.load_assignment_options
+        with patch.object(self.ws, "load_assignment_options",
+                          side_effect=lambda folder: {**real(folder), **restored}):
+            self.load()
+        self.assertEqual(self.student["comment"], "Strengths: Colour. Restored.")
+        self.assertEqual(self.student["keywords"], ["Colour"])
+        self.assertIsNone(self.student["comment_line"])
+
+    def test_export_holds_the_whole_comment_and_no_new_column(self):
+        self.save_comment(self.student["key"], "Strengths: Context. Typed.", "Strengths: Context.")
+        path = Path(self.client.get("/api/export").get_json()["path"])
+        text = path.read_text(encoding="utf-8-sig")
+        self.assertIn("Strengths: Context. Typed.", text)
+        self.assertNotIn("comment_line", text)
 
     def test_no_deadline_export_reuses_existing_file_date(self):
         self.ws.STATE["deadline"] = ""

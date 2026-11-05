@@ -755,6 +755,9 @@ def write_cache():
                     "grades": st.get("grades", {}),
                     "keywords": st.get("keywords", []),
                     "comment": st.get("comment", ""),
+                    # The line last generated from the ticks, which the comment
+                    # starts with. Absent on older saves; see applyGeneratedLine.
+                    "comment_line": st.get("comment_line"),
                     "graded": st.get("graded", False),
                     "late_marked": st.get("late_marked"),
                     # True = the teacher set this Late value by hand (tick or
@@ -1014,6 +1017,7 @@ def load_cache_entry(folder_id):
             "grades": _normalize_grades(st),
             "keywords": st.get("keywords", []),
             "comment": st.get("comment", ""),
+            "comment_line": st.get("comment_line"),
             "graded": st.get("graded", False),
             "late_marked": st.get("late_marked"),
             "late_manual": st.get("late_manual", False),
@@ -1096,6 +1100,7 @@ def load_saved_grades(folder_id):
                     "grades": _normalize_grades(st),
                     "keywords": st.get("keywords", []),
                     "comment": st.get("comment", ""),
+                    "comment_line": st.get("comment_line"),
                     "graded": st.get("graded", False),
                     "late_marked": st.get("late_marked"),
                     "late_manual": st.get("late_manual", False),
@@ -1399,6 +1404,7 @@ def group_by_student(files, saved, roster=None, aliases=None):
             "grades": dict(prev.get("grades", {})),
             "keywords": prev.get("keywords", []),
             "comment": prev.get("comment", ""),
+            "comment_line": prev.get("comment_line"),
             "graded": prev.get("graded", False),
             # None = no explicit late decision yet (frontend defaults it from the
             # deadline); True/False = teacher's persisted Late checkbox override.
@@ -1570,6 +1576,7 @@ def _sync_group_grades(anchor_key):
         tst["grades"] = dict(src.get("grades", {}))
         tst["keywords"] = list(src.get("keywords", []))
         tst["comment"] = src.get("comment", "")
+        tst["comment_line"] = src.get("comment_line")
         tst["late_marked"] = src.get("late_marked")
         tst["late_manual"] = src.get("late_manual", False)
         tst["graded"] = has_assessment(tst, STATE.get("is_draft"))
@@ -2226,6 +2233,9 @@ def api_load():
             if record is not None:
                 student["comment"] = record.get("comment", "")
                 student["keywords"] = list(record.get("keywords") or [])
+                # Restored text may not start with the old line, so compare it
+                # with what these ticks give, as for an older saved comment.
+                student["comment_line"] = None
 
     # Reconcile CAM's published grades (written at every dashboard handoff —
     # CAM is the source of truth, so its values are the latest the teacher
@@ -2458,6 +2468,9 @@ def api_save():
                 tst["keywords"] = list(data["keywords"])
             if "comment" in data:
                 tst["comment"] = data["comment"]
+            if "comment_line" in data:
+                line = data["comment_line"]
+                tst["comment_line"] = line if isinstance(line, str) else None
             if "late_marked" in data:
                 tst["late_marked"] = data["late_marked"]
             if "late_manual" in data:
@@ -4407,9 +4420,10 @@ function makeRow(st) {
     cb.checked = !!st.late_marked;
     cb.title = "Late submission — untick to waive (permission given)";
     cb.addEventListener("change", () => {
+      const before = generatedLine(st);
       st.late_marked = cb.checked;
       st.late_manual = true;   // hand-set: sticky against deadline re-derivation
-      st.comment = autoComment(st);
+      applyGeneratedLine(st, before);
       const ta = tr.querySelector("textarea.comment"); if (ta) ta.value = st.comment;
       save(st);
       renderRoster();              // late badge on the card follows the checkbox
@@ -4425,9 +4439,10 @@ function makeRow(st) {
     const cb = document.createElement("input"); cb.type="checkbox"; cb.value=k.label;
     cb.checked = st.keywords.includes(k.label);
     cb.addEventListener("change", () => {
+      const before = generatedLine(st);
       if (cb.checked) { if(!st.keywords.includes(k.label)) st.keywords.push(k.label); }
       else st.keywords = st.keywords.filter(x => x!==k.label);
-      st.comment = autoComment(st);
+      applyGeneratedLine(st, before);
       const ta = tr.querySelector("textarea.comment"); if (ta) ta.value = st.comment;
       save(st);
     });
@@ -4460,6 +4475,39 @@ function autoComment(st) {
   return parts.join(" ");
 }
 
+/* The line a student's comment starts with before a tick or Late change: the
+   one last written, or for a comment saved before that was remembered, the one
+   its ticks give. Call this BEFORE changing the ticks or the Late flag. */
+function generatedLine(st) {
+  return typeof st.comment_line === "string" ? st.comment_line : autoComment(st);
+}
+
+/* Replace only the generated line, keeping whatever the teacher wrote. A comment
+   that doesn't start with the old line, such as one edited in CAM, stays whole
+   with the new line in front: repeating some text is better than losing any. */
+function applyGeneratedLine(st, before) {
+  const line = autoComment(st);
+  const text = st.comment || "";
+  const rest = (before && text.startsWith(before))
+    ? text.slice(before.length).replace(/^\s+/, "") : text;
+  st.comment = [line, rest].filter(Boolean).join(" ");
+  st.comment_line = line;
+}
+
+/* Re-derive Late from the deadline. Only a student whose flag changes is
+   rewritten; a hand-set flag (late_manual) is sticky. Returns those to save. */
+function applyDeadlineToLate() {
+  return STUDENTS.filter(st => {
+    if (st.late_manual) return false;
+    const late = isLate(st);
+    if (!!st.late_marked === late) return false;
+    const before = generatedLine(st);
+    st.late_marked = late;
+    applyGeneratedLine(st, before);
+    return true;
+  });
+}
+
 /* ---------- Save -> update state, mirror partners, roster re-sort ---------- */
 function refreshRow(st) {
   // Sync a partner's existing row inputs to mirrored values WITHOUT rebuilding
@@ -4481,11 +4529,13 @@ function refreshRow(st) {
 async function save(st) {
   st.graded = IS_DRAFT ? !!(st.comment || st.keywords.length) : !!gradeSum(st) || (st.grades && Object.keys(st.grades).length > 0);
   let affected = [st];
+  const sentComment = st.comment, sentLine = st.comment_line;
   try {
     const res = await fetch("/api/save", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({key:st.key, grades:st.grades, keywords:st.keywords,
-                            comment:st.comment, late_marked:st.late_marked,
+                            comment:st.comment, comment_line:st.comment_line,
+                            late_marked:st.late_marked,
                             late_manual:!!st.late_manual,
                             cam_modified:st.cam_modified || []})
     });
@@ -4494,7 +4544,12 @@ async function save(st) {
                : (data.student ? [data.student] : []);
     list.forEach(s2 => {
       const local = byKey[s2.key]; if (!local) return;
+      // The teacher may have typed or ticked again while this save was on its
+      // way. The reply is older than that, so it must not replace the comment.
+      const moved = local === st && (st.comment !== sentComment || st.comment_line !== sentLine);
+      const comment = local.comment, line = local.comment_line;
       Object.assign(local, s2);
+      if (moved) { local.comment = comment; local.comment_line = line; }
       if (local.key !== st.key) refreshRow(local);   // update mirrored partner rows
     });
     if (list.length) affected = list.map(s2 => byKey[s2.key]).filter(Boolean);
@@ -4595,6 +4650,11 @@ function remapKeywordLabel(oldLabel, newLabel) {
     }
     if (st.comment && st.comment.indexOf(oldLabel) !== -1) {
       st.comment = st.comment.split(oldLabel).join(newLabel);  // literal replace
+      touched = true;
+    }
+    // The remembered line follows, so the comment still starts with it.
+    if (st.comment_line && st.comment_line.indexOf(oldLabel) !== -1) {
+      st.comment_line = st.comment_line.split(oldLabel).join(newLabel);
       touched = true;
     }
     if (touched) save(st);            // persist the migrated marks for this student
@@ -4705,14 +4765,11 @@ $("#deadlineInput").addEventListener("change", () => {
   pushSettings();
   // The deadline is the ground truth, so re-derive every student's Late flag
   // from it (this resets prior auto-derived flags; manual ticks/waivers
-  // (late_manual) are sticky and left untouched) and refresh the auto-comments.
-  STUDENTS.forEach(st => {
-    if (!st.late_manual) st.late_marked = isLate(st);
-    st.comment = autoComment(st);
-  });
+  // (late_manual) are sticky and left untouched). Everyone else is left alone.
+  const changed = applyDeadlineToLate();
   renderTable();
   renderRoster();
-  STUDENTS.forEach(st => save(st));   // persist the recomputed late flag + comment
+  changed.forEach(st => save(st));   // persist the recomputed late flag + comment
 });
 $("#exportBtn").addEventListener("click", exportCsv);
 $("#colSlider").addEventListener("input", e => setCols(e.target.value));

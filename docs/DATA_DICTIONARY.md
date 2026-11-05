@@ -340,6 +340,10 @@ handled on read:
   "grades":       { "A": "7" },   // per-criterion, values are STRINGS
   "keywords":     ["Accurate Proportion"],
   "comment":      "Strengths: Accurate Proportion.",
+  "comment_line": "Strengths: Accurate Proportion.",
+                                  // the line last generated from the ticks, which
+                                  // the comment starts with. null/absent = not
+                                  // remembered, so the ticks' line is compared.
   "graded":       true,
   "late_marked":  null,           // true | false | null (null = never assessed)
   "late_manual":  false,          // true = teacher hand-set late_marked (tick or
@@ -361,6 +365,13 @@ migration (`upgrade_entry`, §B.8) **defaults `late_manual` to `false` only when
 the key is absent** and otherwise carries a hand-set value through verbatim — it
 must never strip or force it (that would silently un-stick every teacher-set
 Late tick, the 2026-07-09 late-flag incident).
+
+`comment_line` is **CGW-internal** too, and optional, so it needs no schema bump.
+A tick, a Late change or a deadline change replaces only this line at the start of
+`comment`, and keeps what follows. A comment that doesn't start with it stays whole,
+with the new line in front. It isn't written to the export CSV, whose comment column
+stays the whole comment. An older workspace drops it on save, which only means the
+ticks' line is compared next time.
 
 **Legacy shape** (older entries, still present):
 
@@ -389,10 +400,10 @@ The five live entries in the sample `grading_cache.json` span two entry shapes:
 | `+ class_folder_id, criteria, deadline` | Current entry. |
 
 Consumers should treat `class_folder_id`, `criteria`, `deadline`,
-`cam_extra`, `cam_name` and the per-student `cam_modified` / `late_manual` as
-**optional** (missing `late_manual` → `false`, i.e. auto-derived) —
+`cam_extra`, `cam_name` and the per-student `cam_modified` / `late_manual` /
+`comment_line` as **optional** (missing `late_manual` → `false`, i.e. auto-derived) —
 `load_cache_entry` defaults them (`criteria → []`, `deadline → ""`,
-`cam_extra → {}`, `cam_name → None`, `cam_modified → []`) so an older entry
+`cam_extra → {}`, `cam_name → None`, `cam_modified → []`, `comment_line → None`) so an older entry
 loads without error.
 
 ### B.5 Related files (not the cache, but adjacent)
