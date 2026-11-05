@@ -4,8 +4,9 @@
 v6 merges [CAM2_FEEDBACK_FOR_CAM.md](CAM2_FEEDBACK_FOR_CAM.md) into Phases 1 to 6 and
 brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by the teacher.
 Q4's trial still sets the F6 wording in Phase 3. The smaller points
-(§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done,
-and nothing in Phases 1 to 6 is built yet except CAM2's hand-over fix (I5).
+(§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done.
+Phase 1's code is built on CAM2's `phase1-slides-and-comment-limits` branch, not yet merged
+or tagged (see its progress note). Nothing in Phases 2 to 6 is built yet.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
