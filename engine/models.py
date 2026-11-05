@@ -87,6 +87,12 @@ class CriterionScore:
                   grading workspace's Late column. This is the *data* layer of
                   lateness; the app keeps a separate manual override map
                   (``late_flags``) that a teacher can use to waive or force it.
+    exam_value  : the 0-8 grade CAM2's final level gave when this grade was
+                  written, or None. ``value == exam_value`` means the grade is
+                  still CAM2's, so a re-send may update it; anything else, and
+                  any grade without it, counts as the teacher's.
+    exam_basis  : short hash of the levels and marks a decision on an exam saw
+                  (``exam_bridge.exam_basis``), or "" when there was none.
     """
 
     criterion: Criterion
@@ -100,6 +106,8 @@ class CriterionScore:
     include_in_report: bool = True
     note: str = ""
     late: bool = False
+    exam_value: Optional[int] = None
+    exam_basis: str = ""
 
     def __post_init__(self) -> None:
         self.criterion = Criterion(self.criterion)
@@ -134,16 +142,23 @@ class ExamResult:
     # Results read from a CAM2 session folder. Every field defaults to "not
     # from CAM2", so CGW-era records load and save exactly as before. CAM2 has
     # already settled choice groups and final levels; these are kept as read.
-    #   mode: "" (CGW CSV), "marks" or "rubric"
+    #   mode: "" (CGW CSV), "marks", "rubric" or "mixed"; the paper's questions
+    #     decide it, and each question is filed by its own shape
     #   not_answered: labels the student did not answer (counted as 0 and
     #     left out of ``questions``)
     #   counted: labels whose marks/levels count after choice groups
     #   complete: False while a question is ungraded or a "teacher picks"
     #     choice is still open in CAM2
-    #   levels: rubric mode, label -> {CAM2 rubric id: level or "not_answered"}
-    #   final_levels: rubric mode, CAM2 rubric id -> final 0-8 level (teacher's
-    #     or suggested); Stage 3 maps rubric ids to CAM criteria per exam
+    #   levels: label -> {CAM2 rubric id: level or "not_answered"}
+    #   final_levels: CAM2 rubric id -> final level (the current pin also gives
+    #     its suggestion here; newer CAM2 only a typed one); Stage 3 maps rubric
+    #     ids to CAM criteria per exam
     #   question_comments: label -> the comment written on that question
+    #   percent: CAM2's overall percentage of the marks, as CAM2 worked it out
+    #     (weighted when ``weighted``); None when the paper has no marks
+    #   weighted: CAM2's weighting applies to this paper's marks (D12)
+    #   criterion_marks: CAM2 rubric id -> {"total", "max", "percent"} as CAM2
+    #     reports them (D13). Never a grade: only the teacher's decision is one
     mode: str = ""
     session_id: str = ""
     not_answered: List[str] = field(default_factory=list)
@@ -152,10 +167,9 @@ class ExamResult:
     levels: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     final_levels: Dict[str, int] = field(default_factory=dict)
     question_comments: Dict[str, str] = field(default_factory=dict)
-
-    @property
-    def percent(self) -> float:
-        return (self.total / self.max_total * 100.0) if self.max_total else 0.0
+    percent: Optional[float] = None
+    weighted: bool = False
+    criterion_marks: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def suggested_band(self) -> int:
         """Proportional 0-8 band suggestion from the raw total."""

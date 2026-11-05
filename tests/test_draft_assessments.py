@@ -141,7 +141,8 @@ class DraftTests(unittest.TestCase):
                   calculation_method=lambda sid: "Weighted Median", Criterion=Criterion,
                   aggregate_student_criterion=aggregate_student_criterion)
         functions_from(ROOT / "app.py", ["excused_assignments_for", "draft_assignment_names",
-            "assessment_exclusions_for", "missing_assignment_rows", "missing_zero_points",
+            "assessment_exclusions_for", "awaiting_exam_decision",
+            "missing_assignment_rows", "missing_zero_points",
             "aggregate_with_policy", "qualifying_assignment_count", "draft_feedback_for"], ns)
         empty = self.book.get_or_create("10002")
         self.assertEqual([r["name"] for r in ns["missing_assignment_rows"](empty)], ["Final"])

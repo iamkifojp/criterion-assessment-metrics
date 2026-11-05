@@ -109,12 +109,27 @@ class ExamSession:
     folder: str
     session_id: str
     exam_name: str
-    mode: str                           # "marks" or "rubric" ("" before Step 2)
+    mode: str                           # "marks", "rubric" or "mixed" ("" before Step 2)
     ready_at: Optional[str]             # host_ready_at: "Send to CAM" was clicked
     question_labels: List[str]
     rubrics: List[dict]                 # [{"id": "r1", "name": "Criterion A", "max": 8}]
-    max_total: int                      # marks mode; 0 in rubric mode
+    max_total: int                      # of the marks questions; 0 when there are none
     papers: List[SessionPaper] = field(default_factory=list)
+
+
+def _exam_mode(shapes: List[dict], started_as: str) -> str:
+    """What a paper's questions are, from the shape of ``question_values``: a
+    ``None`` key is a marks question, any other key a rubric. CAM2's own
+    ``mode`` is only the teacher's starting choice, so it decides only when no
+    question has a shape yet. An older CAM treats anything but ``"rubric"`` as
+    marks, which is safe for ``"mixed"``."""
+    marks = any(None in shape for shape in shapes)
+    rubric = any(key is not None for shape in shapes for key in shape)
+    if marks and rubric:
+        return "mixed"
+    if rubric:
+        return "rubric"
+    return "marks" if marks else started_as
 
 
 def read_session(folder: str, assignment: Optional[str] = None) -> ExamSession:
@@ -132,14 +147,17 @@ def read_session(folder: str, assignment: Optional[str] = None) -> ExamSession:
     except errors.UserError as exc:
         raise ExamSessionError(folder, exc.code, str(exc)) from exc
 
-    mode = config.get("mode") or ""
     questions = config.get("questions") or []
     labels = {q["id"]: q["label"] for q in questions}
     roster = {r["id"]: r for r in config.get("roster") or []}
     summaries = {s["student_id"]: s
                  for s in summary_mod.class_summary(config, grades)["students"]}
     assignment = assignment or config.get("exam_name") or ""
-    max_total = summary_mod.marks_maximum(config) if mode != "rubric" else 0
+    # A question's keys don't depend on the student, so an empty id gives them.
+    mode = _exam_mode([summary_mod.question_values(config, grades, "", q) for q in questions],
+                      config.get("mode") or "")
+    has_marks = mode in ("marks", "mixed")
+    max_total = summary_mod.marks_maximum(config) if has_marks else 0
 
     papers = []
     for student in config.get("students") or []:
@@ -159,19 +177,25 @@ def read_session(folder: str, assignment: Optional[str] = None) -> ExamSession:
             given = {rid: v for rid, v in values.items() if v is not None}
             if given and all(v == EXAM_NOT_ANSWERED for v in given.values()):
                 result.not_answered.append(label)
-            elif mode == "rubric" and given:
+            elif None in values:
+                if isinstance(given.get(None), int):
+                    result.questions[label] = given[None]
+            elif given:
                 result.levels[label] = given
-            elif mode != "rubric" and isinstance(given.get(None), int):
-                result.questions[label] = given[None]
             comment = str((entries.get(q["id"]) or {}).get("comment") or "").strip()
             if comment:
                 result.question_comments[label] = comment
-        if mode == "rubric":
-            result.final_levels = {rid: r["final"] for rid, r in summary["rubrics"].items()
-                                   if r["final"] is not None}
-        elif "marks" in summary:
-            result.total = int(summary["marks"]["total"])
+        for rid, rubric in (summary.get("rubrics") or {}).items():
+            if rubric.get("final") is not None:
+                result.final_levels[rid] = rubric["final"]
+            if rubric.get("marks"):
+                result.criterion_marks[rid] = dict(rubric["marks"])
+        marks = summary.get("marks")
+        if has_marks and marks:
+            result.total = int(marks["total"])
             result.max_total = max_total
+            result.percent = marks.get("percent")
+            result.weighted = bool(marks.get("weighted"))
         external = (roster.get(student.get("roster_id")) or {}).get("external_id") or ""
         papers.append(SessionPaper(student_id=sid, external_id=str(external),
                                    name=workflow.display_name(config, student),
@@ -360,6 +384,61 @@ def to_band(level: int, rubric_max: int) -> int:
     if rubric_max and rubric_max != 8:
         level = int(cam2_module("grading_summary").round_half_up(level * 8 / rubric_max))
     return max(0, min(8, level))
+
+
+def final_level_default(current: Optional[int], exam_value: Optional[int], sent: int) -> int:
+    """What a final level's dropdown shows: CAM2's grade while the grade is
+    empty or still CAM2's own, otherwise the grade the teacher set."""
+    if current is None or current == exam_value:
+        return sent
+    return current
+
+
+def final_level_action(current: Optional[int], exam_value: Optional[int],
+                       chosen: int, sent: int) -> str:
+    """What Apply does with one student's mapped final level (Phase 2's re-send
+    rule, which runs here and never at Sync). All values are on the 0-8 scale.
+
+    ``current`` and ``exam_value`` come from the existing grade (None when there
+    is none, or when it has no record of CAM2's value), ``chosen`` is the
+    dropdown and ``sent`` is CAM2's level.
+
+    * ``"write"``: nothing is there yet, or the teacher moved the dropdown, so
+      write ``chosen``. Only a visible, deliberate choice replaces their grade.
+    * ``"update"``: the grade is still what CAM2 sent, and CAM2 now sends another.
+    * ``"same"``: the grade already equals CAM2's.
+    * ``"keep"``: the teacher set or edited the grade. It stays, and the caller
+      lists it."""
+    if current is None or chosen != current:
+        return "write"
+    if current == sent:
+        return "same"
+    if current == exam_value:
+        return "update"
+    return "keep"
+
+
+def exam_basis(result: ExamResult, rubric_ids=()) -> str:
+    """Short hash of the levels and marks a decision on one criterion sees, so
+    Window 3 can later say "levels changed since you decided" (P6). Sync
+    replaces the result, so this is all that remains of the earlier one.
+
+    ``rubric_ids`` are the rubrics mapped to that criterion. With none, the
+    decision came from the whole paper's marks, so those are the basis."""
+    rubric_ids = sorted(str(rid) for rid in rubric_ids)
+    if rubric_ids:
+        basis = {
+            "levels": {label: {rid: per[rid] for rid in rubric_ids if rid in per}
+                       for label, per in result.levels.items()
+                       if any(rid in per for rid in rubric_ids)},
+            "marks": {rid: result.criterion_marks[rid] for rid in rubric_ids
+                      if rid in result.criterion_marks},
+        }
+    else:
+        basis = {"questions": result.questions, "total": result.total,
+                 "max_total": result.max_total}
+    text = json.dumps(basis, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def name_crop(folder: str, student_id: str) -> str:

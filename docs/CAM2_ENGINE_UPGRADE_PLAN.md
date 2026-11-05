@@ -6,7 +6,8 @@ brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by th
 Q4's trial still sets the F6 wording in Phase 3. The smaller points
 (§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done.
 Phase 1's code is built on CAM2's `phase1-slides-and-comment-limits` branch, not yet merged
-or tagged (see its progress note). Nothing in Phases 2 to 6 is built yet.
+or tagged (see its progress note). Phase 2 is built on CAM's `cam2-upgrade-phase2` branch
+(see its progress note). Nothing in Phases 2W to 6 is built yet.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -727,6 +728,40 @@ when" above isn't met in a tagged version yet.
 
 *Done when:* the I2 reproduction keeps both grades, and marks-only and rubric behaviour
 on the current pin is otherwise unchanged. The I2 fix can ship by itself.
+
+**Progress, 2026-11-06.** Built on the current pin, fictional data only.
+
+- **Tests on the pin:** CAM 353 (8 skipped, all waiting for a version 2 session), CAM2 216.
+- **Those 8 tests, run once outside the repo:** in a throwaway copy with CAM2's
+  `phase1-slides-and-comment-limits` branch at `3696d1e` as `exam_grading/`, they all pass.
+  Only the two I1 tests fail there (`test_rubric_session_levels_and_final_levels` and
+  `test_rubric_exam_confirms_levels_per_mapped_criterion`), as I7 expects. They wait for
+  Phase 4, which must run this again on the tag it pins.
+- **Older CAM:** the engine at `1c41655` loads what this branch writes and resaves it,
+  losing only the new keys, so a grade then counts as the teacher's. The tracked sample
+  database saves identically through both.
+- **Browser, in a sandbox on Windows:** Apply, a re-send with a new final level, a grade
+  edited in Window 3 being kept and listed, ⏳ rows, and adding a criterion on the marks
+  panel. Window 2's "awaiting decision" tag and the report pack's row weren't exercised.
+- **Choices this phase settled:**
+  - **The re-send rule runs at Apply, not at Sync.** On this pin `final_levels` also holds
+    CAM2's suggestions, and P2 wants someone to confirm the mapping.
+  - **`exam_value` is on the 0–8 scale,** because the rule compares it with the grade.
+    The raw level stays in the note.
+  - **An update keeps the comment, late flag and report flag.** A blank comment takes the
+    new one. Phase 3's re-send handling (Q3) is what brings a corrected comment through.
+  - **Changing the marks panel's criterion now adds a grade, not moves it,** and Apply says
+    so. There's no way to remove one until Phase 3's blank dropdown, and D18 means that
+    gap never reaches a release.
+  - **The `ExamResult.percent` property is gone.** Nothing called it, and it clashed with
+    the new field.
+  - **Window 1's dropdowns follow the grade.** Streamlit keeps a keyed selectbox's old value
+    when its `index` changes, so a stale dropdown could have overwritten a newer grade.
+  - **In Window 3, ⏳ rows stay clickable.** The dialog starts blank, and a blank save writes
+    nothing. A paper not finished in CAM2 can be excused but not given a grade (P6).
+- **For Phase 3:** the `exam_basis` flag isn't shown yet, Window 1 and Window 3 still route
+  on `mode == "rubric"`, and the panel still blocks two rubrics on one criterion. Apply
+  already writes nothing when both have a final level (D11).
 
 ### Phase 2W — CAM: the workspace keeps typed comments (F4) · S–M
 
