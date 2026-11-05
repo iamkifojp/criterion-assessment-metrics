@@ -33,7 +33,7 @@ Draft comments are always included (`app.py:6354`), so exams currently get less 
 
 ## To fix in the same release
 
-**F4: the grading workspace overwrites typed comments.** This is in CAM's own code, so the CAM2 pull won't fix it, and no other work depends on it. It can be fixed at any time, and it reaches teachers with the upgrade release, since D18 holds all releases until then.
+**F4: the grading workspace overwrites typed comments.** This is in CAM's own code, so the CAM2 pull won't fix it, and no other work depends on it. It can be fixed at any time, and it reaches teachers with the upgrade release, since D18 holds all releases until then. Planned as Phase 2W of the [upgrade plan](CAM2_ENGINE_UPGRADE_PLAN.md).
 
 `autoComment` rebuilds the whole comment from the ticks, so typed text is lost in three places in `cam_grading_workspace/app.py`:
 
@@ -56,7 +56,7 @@ None of these change the current upgrade.
 | **F1:** highest level for a question | Nothing to read. CAM can ignore the ceilings | Adds to the session file, as F2 does (see below) |
 | **F2:** notes and highlights on answers | `engine/exam_bridge.py` reads the note text with each question's comment, and F6's block includes it | Without this, notes never reach CAM's records or term comments |
 | **F3:** one comment list in both apps | Nothing while F5 is the plan | On hold. F5 would replace it |
-| **F5:** move drafts and assignments into CAM2, and retire the workspace | Tell CAM2 when a task is a whole submission, read the same CSV the workspace writes (still to check), and later remove the workspace, OAuth and Drive code | **Leave D16 as it is for now.** The workspace stays in use until CAM2 has proved it can take over, so Phase 3's draft check mark is still right. Amend D16 when F5 is agreed |
+| **F5:** move drafts and assignments into CAM2, and retire the workspace | Tell CAM2 when a task is a whole submission, read the same CSV the workspace writes (still to check), and later remove the workspace, OAuth and Drive code | **Direction agreed; D16 stays as it is for now** (upgrade plan, Q6). The workspace stays in use until CAM2 has proved it can take over, so Phase 3's draft check mark is still right. Amend D16 at F5's last stage |
 | **F7:** a permanent place for a year's work | `<class cloud folder>/assignments/<task>/`, chosen once, and later a view of a student's work over time | **Design one student ID across years before the first year's data builds up.** Classes are separate for each year today |
 | **F8:** compact and delete on CAM2's start screen | Nothing to read: compacting leaves `cam2_session.json` and `grades.json` alone, so Sync won't re-read the session, and name crops stay for Window 2 | Deleting an exam in CAM moves it to `exams/_deleted/` (`exam_bridge.py:376`), which doesn't free space, so CAM may need a way to show or empty that folder |
 

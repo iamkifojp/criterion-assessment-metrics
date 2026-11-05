@@ -1,29 +1,33 @@
 # Upgrading CAM's vendored CAM2 to the latest dev version: assessment and plan
 
-**Status:** v5, 2026-11-05. Decisions D10–D18 (§5) are locked by the teacher. v5 adds
-the Google Apps Script route that turns Classroom submissions into PDFs (Appendix A). v3
-changed D10, D11 and D13: a paper's repeated levels stay on the exam, and the teacher
-decides one grade per criterion for the assignment in Window 3. v4 corrects D16: a
-draft keeps the label "Draft — comments only" and is set up from a normal assignment.
-It also adds D17: CAM2 learns slide-shaped pages first, and fetching from Drive waits.
-The smaller points
-(§5.1) go ahead on the stated default unless the teacher changes them. Nothing is
-built yet.
+**Status:** v6, 2026-11-05. **Fixed:** the teacher accepted every answer in §5.2 that day.
+v6 merges [CAM2_FEEDBACK_FOR_CAM.md](CAM2_FEEDBACK_FOR_CAM.md) into Phases 1 to 6 and
+brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by the teacher. Two
+things are still to do under §5.2: Q4's trial sets the F6 wording in Phase 3, and Q7 needs
+the teacher to check the school's emails. The smaller points
+(§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done,
+and nothing in Phases 1 to 6 is built yet except CAM2's hand-over fix (I5).
+
+Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
+exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
+added D17. v5 added the Apps Script route (Appendix A).
+
 **Repos:** CAM = `criterion-assessment-metrics`; CAM2 = `cam2-exam-grading`,
 vendored in CAM at `exam_grading/`.
 **Depends on:** [CAM2_EXAM_CONVERGENCE_PLAN.md](CAM2_EXAM_CONVERGENCE_PLAN.md). This
 plan keeps its numbering and amends its D3 and D4. It also feeds
 [SLIDE_DECK_EXAM_PLAN.md](SLIDE_DECK_EXAM_PLAN.md), which is not built yet.
-**Colleagues' feedback:** [CAM2_FEEDBACK_FOR_CAM.md](CAM2_FEEDBACK_FOR_CAM.md) lists what
-it means for CAM. Exam comments in term comments (Phase 3) and keeping CAM2's feedback
-document out of the bundle (Phase 4) are part of this plan. The workspace's comment bug
-goes in the same release. The rest waits for a later CAM2 update.
+**Colleagues' feedback:** in this upgrade are F4, the workspace's comment bug (Phase 2W),
+F6, exam comments in term comments (Phase 3), and keeping development documents out of
+the bundle (Phase 4). The others wait for a later CAM2 update (§6.1). The details stay in
+CAM2's `Feedback-and-Upgrades.md`.
 
 Read `CLAUDE.md` first. Phases 0 and 6 touch real data, and the sandbox, backup and
 permission rules there apply. Never edit `exam_grading/` in place: change CAM2,
 then `git subtree pull`.
 
-Line numbers below refer to CAM `origin/main` at `2554d46`.
+Line numbers below refer to CAM `origin/main` at `2554d46`. They still hold at `c40fd93`,
+which adds only Phase 0's report and its test.
 
 ---
 
@@ -54,18 +58,19 @@ from dozens of slide levels.
 
 | | Commit | Date | Notes |
 |---|---|---|---|
-| CAM `origin/main` | `2554d46` | 2026-11-01 | Release `v2026.11.01` plus docs and one CAM2 test-fixture pull |
+| CAM `origin/main` | `c40fd93` | 2026-11-05 | App code as at `2554d46`; adds Phase 0's report and docs |
 | CAM2 pinned in CAM | `1a40845` | 2026-11-01 | Vendored tree is byte-identical to this commit (`f513ea4`) |
-| CAM2 `v0.3.0-dev` | `0555e7c` | 2026-11-03 | Test build with colleagues now |
-| CAM2 `main` | `7d34779` | 2026-11-04 | 21 commits past the pin; only docs differ from the tag |
+| CAM2 `v0.3.1-dev` | `c1a0594` | 2026-11-05 | Latest tag. Has the hand-over fix (I5) and no slide pages (I14) |
+| CAM2 `main` | `5931f22` | 2026-11-05 | 29 commits past the pin; only documents differ from the tag |
 
-What the 21 commits add: exam sections, weighting, mixed papers (each question
+What the 29 commits add: exam sections, weighting, mixed papers (each question
 graded with marks or a rubric), a new student report and gradebook, report options,
-packaging, licence notices and sample exams. Session files go to **version 2**.
+packaging, licence notices, sample exams, the hand-over fix and the feedback document.
+Session files go to **version 2**.
 
 ### What stays compatible
 
-Checked in a sandbox (§7):
+Checked in a sandbox (§7), and the pull and both test suites again at `5931f22`:
 
 - `git subtree pull` onto `origin/main` merges with no conflicts, and the result
   matches CAM2's tree exactly.
@@ -74,7 +79,7 @@ Checked in a sandbox (§7):
   and `launcher.py --host` and "Send to CAM" still work.
 - Marks-only exams read identically on both engines (15/20 on each).
 - Reading is still read-only: a session folder is byte-identical after CAM reads it.
-- CAM2's own suite passes in its vendored location (328 tests, 1 skipped).
+- CAM2's own suite passes in its vendored location (331 tests, 1 skipped).
 
 ## 3. What CAM can do today
 
@@ -114,7 +119,7 @@ These answer the teacher's questions of 2026-11-04.
 | I2 | Apply can delete a grade with no warning | Blocker (data loss) |
 | I3 | Mixed papers lose or misfile results | Blocker (data integrity) |
 | I4 | Opening a session upgrades it for good | Blocker for rollout |
-| I5 | Launcher hands exams to whichever version is running | High, **live today** |
+| I5 | Launcher hands exams to whichever version is running | High. Fixed in CAM2 `v0.3.1-dev`, **still live in CAM until the pull** |
 | I6 | Weighted exams: CAM and CAM2 disagree | High |
 | I7 | Tests don't guard any of this | Medium |
 | I8 | Criterion marks are ignored | High (was Medium; D13 needs them) |
@@ -123,7 +128,9 @@ These answer the teacher's questions of 2026-11-04.
 | I11 | This Mac's `main` is 24 commits behind | Resolved by 2026-11-05 |
 | I12 | Several grades on one criterion would break the screens | Avoided by D10 (new) |
 | I13 | A student waiting for a grade can count as Missing = 0 | High (new) |
-| I14 | CAM2 doesn't recognise slide-shaped pages | Precondition for slide decks; fixed in Phase 1 (new) |
+| I14 | CAM2 doesn't recognise slide-shaped pages | Precondition for slide decks; fixed in Phase 1 |
+| I15 | The grading workspace overwrites typed comments (CAM2 F4) | High (data loss), **live today** (new in v6) |
+| I16 | Exam comments often miss the term comment (CAM2 F6) | High (new in v6) |
 
 ### I1. Rubric exams arrive with no levels
 
@@ -198,6 +205,17 @@ which opened it and upgraded it, so that CAM could no longer read its own exam. 
 standalone `v0.3.0-dev` running can hit it today. Colleagues are trying that build
 now. See the interim advice in Phase 0.
 
+**Fixed in CAM2 `v0.3.1-dev`, which doesn't reach CAM until the pull.** `running_instance()`
+now compares versions and stops any other running version, older or newer
+(`launcher.py`). So:
+
+- The launcher inside `v2026.11.01` still has the old behaviour, and the interim advice
+  stands until the upgrade is on all three computers.
+- After the upgrade, CAM's CAM2 and a standalone CAM2 of another version stop each other
+  whenever one is started. Grades are already saved, but a comment still being typed in
+  the stopped one's tab could be lost. Building both from one tag (D14, D18) makes this
+  rare.
+
 ### I6. Weighted exams: CAM and CAM2 disagree
 
 With weighting on, CAM2's result is a percentage from section shares. CAM still
@@ -231,7 +249,11 @@ D13 now carries them over.
 - `exam_grading/licences/NOTICE.txt` describes CAM2's own download, with its zip
   names and tags, so it can't ship unchanged inside CAM's bundle.
 - `EXAM_DEV_PATHS` (`tools/build_windows_bundle.py:53`) doesn't cover the new
-  `Exam-Section-Plan.md` or `requirements-build.txt`, so both would ship.
+  `Exam-Section-Plan.md`, `Feedback-and-Upgrades.md`, `requirements-build.txt` or
+  `licences/`, so all four would ship, including that CAM2-only notice. CAM2's code
+  doesn't read `licences/` when it runs.
+- The same tool removes only `docs/*_PLAN.md` (`build_windows_bundle.py:100`), so CAM's
+  own `docs/CAM2_FEEDBACK_FOR_CAM.md` would ship too.
 - CAM's `>=` ranges resolve to whatever is current when the bundle is built, so a
   notice listing exact versions wouldn't stay true. CAM2 solves this by pinning exact
   versions for its builds in `requirements-build.txt`.
@@ -310,6 +332,57 @@ Tested with fictional PDFs at 13.333 × 7.5 in, 10 × 5.625 in and 10 × 7.5 in:
 
 Phase 1 fixes this (D17).
 
+### I15. The grading workspace overwrites typed comments (CAM2 F4)
+
+`autoComment` (`cam_grading_workspace/app.py:4453`) rebuilds a comment from its ticks
+alone, and three places assign the result over whatever is there:
+
+| Line | What sets it off | Who loses text |
+|---|---|---|
+| `4430` | Changing a tick | That student |
+| `4412` | Changing the Late tick | That student |
+| `4711` | Changing the deadline | **Every student in the task**, saved at once by line `4715` |
+
+This comes from reading the code, which has no branch that keeps the text, and hasn't
+been run. A draft has no grades, so a deadline change can empty everything a teacher
+wrote on it. This is CAM's own code, so the CAM2 pull doesn't fix it.
+
+**It's more than a browser change.** `/api/save` copies only the fields it knows
+(`app.py:2445-2465` in the workspace), so a new remembered line is dropped unless the
+server carries it. So do linked partners (`1572`), the rebuilt student list (`1401`) and
+the student data sent to the page (`757`, `1016`, `1098`). The comment can also change in
+two other ways: a comment edited in CAM (`2263`) and a renamed tick (`4597`).
+
+**Workaround until the release:** tick first, then type, and set the deadline before
+writing any comments.
+
+### I16. Exam comments often miss the term comment (CAM2 F6)
+
+`compile_prompt` (`app.py:6218`) takes evidence only from `student.scores`
+(`_current_term_evidence`, `app.py:6117`), and then only the highest and lowest pieces
+(`select_evidence`, `app.py:6342`). The defaults are one of each (`app.py:847-848`). So:
+
+- A question's comment never reaches the prompt. It stays in
+  `ExamResult.question_comments`.
+- An overall comment reaches it only if a grade was applied and the exam ranks at the
+  top or bottom. Draft comments are always included (`app.py:6354`), so exams get less
+  than drafts do.
+
+**Applying grades creates a second problem.** Apply copies one overall comment onto
+every criterion (`app.py:7671`), and each copy competes in the ranking on its own. Run
+against `select_evidence` with fictional data, an exam at A 7, B 7, C 6, D 6 and four
+assignments at 4 or 5, with two strengths allowed, gives two strengths that are the same
+exam comment. A middling exam still drops out completely.
+
+**Two details the first draft of this plan missed:**
+
+- **A teacher can edit the copy.** Window 3's edit dialog tells the teacher to "Edit or
+  clear this to change what feeds the comments log and the generated overall comment"
+  (`app.py:8635`). A block that reads only `ExamResult.comment` would break that promise.
+- **A re-sent comment can go stale.** Sync replaces the exam result
+  (`_ingest_cam2_session`, `app.py:4179`) and leaves the grades alone. Under P6 no Apply
+  follows, so a comment corrected in CAM2 would never reach the grade.
+
 ---
 
 ## 5. Decisions
@@ -337,6 +410,8 @@ Numbering continues from the convergence plan. D10–D15 were locked by the teac
   Phase 3 changes that to Assignment or Exam, plus the check mark. Add assignment is a
   form, so the check mark can't appear only for Assignment. It stays visible and has no
   effect on an exam.
+
+  F5's direction is agreed (Q6), and D16 stands until F5's last stage.
 - **D17 · CAM2 learns slide-shaped pages first, and fetching from Drive waits.** CAM2
   doesn't read from Google Drive, and that's fine for now: school network restrictions
   block sharing to a personal account, so fetching directly isn't possible anyway. CAM2
@@ -430,7 +505,9 @@ teacher changes it.
 - **P6 · Changes after a decision.** *Default: the decision stays, and Window 3 flags it
   ("levels changed since you decided").* A re-send never changes a grade the teacher set
   in CAM. A paper not finished in CAM2 shows its levels, but can't be decided until it's
-  finished and sent again, as today.
+  finished and sent again, as today. Sync replaces the exam result, so the old levels
+  aren't there to compare with. The flag needs a small record taken at the decision
+  (Phase 2).
 - **P7 · No average beside the dropdown.** *Default: Window 3 shows the levels and no
   calculated figure*, which keeps D10's "never averages or suggests". An average could
   be added later as a read-only aid if the teacher wants it.
@@ -440,12 +517,41 @@ teacher changes it.
   downloads Google Slides as `.pptx`, which CAM2 can't read, so no converter is needed on
   the laptop, and the slide-deck plan's D2 stands. No CAM or CAM2 code depends on the
   script, and any PDF named with the student's name works the same way.
+- **P10 · Saving the workspace's generated line (F4).** *Default: the comment is the
+  generated line, then the teacher's text, as in CAM2.* Each student saves the line last
+  generated. **Text is never lost, even if that means repeating some.** If the comment
+  doesn't start with the remembered line, for example after an edit in CAM, the text
+  stays and the new line goes in front. A saved comment with no remembered line is
+  compared with the line its ticks would have given before this change.
+- **P11 · A deadline change.** *Default: it rewrites and saves only students whose Late
+  flag changed.* Everyone else is left alone.
+- **P12 · What the exam block holds (F6).** *Default: comments only, with no levels or
+  grades,* so it respects **No numbers** and D10, and those already appear in the
+  criterion results. It covers every exam on this term, whether or not a grade has been
+  decided, and an unfinished paper's comments too, because the teacher sent them. A
+  comment on a question not counted because of a choice group stays out.
+
+### 5.2 Questions settled for v6
+
+The teacher accepted each answer below on 2026-11-05, and Phases 1 to 6 are written on
+them. The last column names the phases each answer affects. Q7's check is still the
+teacher's to make.
+
+| # | Question | Answer | Affects |
+|---|---|---|---|
+| Q1 | **One CAM2 pull or two?** F1 and F2 raise the session version again, so I4 happens again. More feedback is still to come | **Two.** The Phase 1 tag holds slide pages only. Waiting has no end date, and it would also hold back the Licences folder and the I5 and F4 fixes (D18). Phase 0 found no real sessions, so a second version costs one more "update every computer first" notice. D18's single release then covers this upgrade only | Phases 1, 2, 4, 5 |
+| Q2 | **Should exams still compete for the strength and growth places in the term comment?** | **No.** Since they're always included, exam scores leave the ranking, and the places go to assignments. Otherwise one exam can take every place (I16). The cost: "highest-scoring pieces" no longer includes an exam, so the block's instruction has to cover strengths and growth | Phase 3 |
+| Q3 | **Which overall comment does the block use if the teacher edits it in Window 3?** | **The edited one.** If grades exist for the exam, use their comments, each different text once, and otherwise `ExamResult.comment`. Clearing them removes it. A re-send updates only copies the teacher hasn't edited | Phase 3 |
+| Q4 | **How large is a "large place"?** One instruction may not do it in a default 100-word comment, and one exam can bring about 5,000 characters of comments | **Try it before fixing the wording.** Generate comments for fictional students, and the teacher judges. Keep the overall comment whole. Set a limit on question comments only if that trial needs it | Phase 3 |
+| Q5 | **Does D18 still hold for F4?** A deadline change can wipe a whole task's comments, and the fix can't reach the teacher's computers before the release | **Yes,** with the workaround, since the teacher has already chosen one release. Do Phase 2W early, so an exception is quick if comments are lost | Phases 2W, 5 |
+| Q6 | **Is F5 agreed?** CAM2's table says "Direction agreed", and CAM's note says amend D16 "when F5 is agreed" | **Record it as direction agreed, with D16 standing until F5's last stage.** Nothing in Phases 1 to 6 changes. Build nothing else in the workspace, and Phase 4M only checks that it runs on a Mac from a local folder | Phases 3, 4M |
+| Q7 | **Does a student's school email stay the same from year to year?** CAM's student ID comes from it (`student_id_from_email`, `engine/ingestion.py:319`), and exam sessions store that ID. F7 asks for one ID across years before a year's data builds up | **Check now, and build nothing in this upgrade.** If the email stays, the ID may already be stable. If not, design F7's ID before the next intake | §6.1 only |
 
 ---
 
 ## 6. Phases
 
-Order: 0 → 1 and 2 (independent of each other) → 3 → 4 → 4M → 5 → 6, with 4M's first
+Order: 0 → 1, 2 and 2W (independent of each other) → 3 → 4 → 4M → 5 → 6, with 4M's first
 step (the Gatekeeper check) worth doing early because it can be done at any time. One
 commit per phase,
 with tests. Phases 2 and 3 land on the **current pin** so the reader is right before
@@ -490,9 +596,11 @@ anything new arrives, the same order the convergence plan used.
 
 ### Phase 1 — CAM2: safe hand-over and slide pages, tagged · M (CAM2 repo)
 
-- Fix the first "next build" item in CAM2's `PLAN.md`: `running_instance()` compares
-  versions through `/api/ping`, and a different running version is stopped and
-  replaced after saving, or refuses the hand-over with a clear message.
+- **Hand-over: done in `v0.3.1-dev`.** `running_instance()` compares versions and stops
+  any other version. What remains is the two-direction test below.
+- **What the tag holds (Q1).** Slide pages and the fixes below. **F1, F2 and F8 to F15
+  stay out,** so the session stays at version 2. No work on them starts in this tag's
+  branch.
 - **Slide pages (D17, I14)**, from item 1 of the slide-deck plan's Phase 1:
   - add `Slide 16:9` and `Slide 4:3` to `PAPER_SIZES_MM` and `GRIDS`, at about 5 mm
     cells with the cells square (about 51 × 29 and 51 × 38);
@@ -505,9 +613,12 @@ anything new arrives, the same order the convergence plan used.
 - **Measure crop size** with a fictional photo-heavy deck. A whole slide is a 2667 × 1500
   PNG. If a class's folder is too big, bring in the slide-deck plan's JPEG crops
   (Phase 1, item 2) too. Its other Phase 1 items stay in that plan.
-- Include the other fixes waiting at that point.
+- Include the other fixes waiting at that point, and check the Windows unblock advice on
+  a real computer, as CAM2's `PLAN.md` asks.
 - Tests:
-  - hand-over in both directions: older launcher with newer server, and newer with older;
+  - hand-over in both directions: older launcher with newer server, and newer with older.
+    Today's test (`test_another_version_is_stopped_before_the_new_one_starts`) covers one
+    case of "different";
   - detection of 13.333 × 7.5 in, 10 × 5.625 in and 10 × 7.5 in, with A4, B5 and A3
     unchanged;
   - grid and range round trips for both slide sizes;
@@ -519,8 +630,9 @@ anything new arrives, the same order the convergence plan used.
 - Cut the new CAM2 tag (D14) and build its downloads: Mac here, **Windows on a Windows
   computer**. Share it with colleagues, since they're the ones exposed.
 
-*Done when:* the I5 reproduction no longer upgrades or misroutes a session, and a 16:9
-PDF is recognised and can be sliced into whole-slide questions and graded.
+*Done when:* the I5 reproduction, run with launchers at or after `v0.3.1-dev`, no longer
+upgrades or misroutes a session, `model.VERSION` is still 2, and a 16:9 PDF is recognised
+and can be sliced into whole-slide questions and graded.
 
 ### Phase 2 — CAM: correct Apply, bridge and storage, on the current pin · M
 
@@ -545,6 +657,9 @@ PDF is recognised and can be sliced into whole-slide questions and graded.
 - Add optional fields to `ExamResult`: `percent`, `weighted` and `criterion_marks`
   (D12, D13). Records already in a database must load unchanged, and an older CAM must
   still load new ones.
+- **Record what a decision saw (P6).** Add optional `CriterionScore.exam_basis`, a short
+  hash of that criterion's levels and marks. Window 3 compares it with the current result
+  to show the flag. An older CAM drops it on save, and then the flag just doesn't show.
 - `_validate_exam_result` rejects non-string keys in `levels` and `final_levels`.
 - **Fix I13.** A student with an exam result and no grade shows as ⏳ awaiting decision
   and stays out of the calculation, not Missing = 0.
@@ -554,6 +669,32 @@ PDF is recognised and can be sliced into whole-slide questions and graded.
 
 *Done when:* the I2 reproduction keeps both grades, and marks-only and rubric behaviour
 on the current pin is otherwise unchanged. The I2 fix can ship by itself.
+
+### Phase 2W — CAM: the workspace keeps typed comments (F4) · S–M
+
+This doesn't depend on any other phase, and D18 holds its release back with the rest
+(Q5). Do it early. It's CAM's own code, so it needs no CAM2 change. It's the one change
+to the workspace in this upgrade, as F5's first stage says.
+
+- **Browser:** replace the three assignments (I15) with one function that follows P10,
+  using the state from before the change. The deadline handler follows P11.
+- **Server:** add one optional per-student field for the remembered line, and carry it
+  through `/api/save`, linked partners, the rebuilt student list and the data sent to the
+  page. A saved file without it must load unchanged, and an older CAM on another computer
+  drops it, which falls back to P10's comparison.
+- **Keep the other routes right:** a renamed tick updates the remembered line too
+  (`remapKeywordLabel`), and a comment edited in CAM or restored from a draft's published
+  feedback follows P10.
+- **Change no export.** The CSV's comment column stays the whole comment.
+- **Tests.** There's no JavaScript test set-up and no Node on this Mac:
+  - server round trips in the workspace's tests, including linked partners;
+  - a sandbox browser check on a fictional task (temp prefs, temp `db_custom_path`): each
+    of the three triggers with typed text, an older saved comment with no remembered line,
+    a comment edited in CAM, linked partners and a renamed tick. **Run the deadline case on
+    today's code first,** since it has only been read so far.
+
+*Done when:* in that browser check, no trigger loses typed text, and a deadline change
+leaves students whose Late flag didn't change untouched.
 
 ### Phase 3 — CAM: decide per criterion in Window 3 · M–L
 
@@ -581,18 +722,30 @@ on the current pin is otherwise unchanged. The I2 fix can ship by itself.
 - **Add assignment** (D16). Type becomes Assignment or Exam, with a **Draft — comments
   only** check mark, replacing the third option at `app.py:7119`. ⋯ Manage keeps its
   check mark. Existing drafts are unaffected.
-- **Exam comments in the term comment** (CAM2 F6). The teacher wants these to have a
-  large place in a student's term comment.
-  - A Window 3 decision copies the overall comment onto its `CriterionScore`, as Apply
-    does today (`comment=r.comment`, `app.py:7546`, `7671`), so nothing is lost.
-  - Add an always-included `[CURRENT TERM — EXAM FEEDBACK]` block beside the draft block
-    (`app.py:6354`), with the overall comment and `question_comments` for each exam this
-    term, and tell the LLM to give it particular weight.
-  - Leave out exams excused for that student (`assessment_exclusions_for`), and don't
-    send the same overall comment twice if the exam is also chosen as evidence.
-  - Check the prompt's length with 15 question comments of up to 300 characters. It may
-    need a limit per exam.
-  - Assignments stay chosen by ranking.
+- **Exam comments in the term comment** (F6, I16, P12, Q2 to Q4). The teacher wants these
+  to have a large place in a student's term comment.
+  - **Keep the comment on a decision.** A Window 3 decision copies the overall comment
+    onto its `CriterionScore`, as Apply does today (`comment=r.comment`, `app.py:7546`,
+    `7671`), so the edit dialog and comments log keep working.
+  - **Add the block.** An always-included `[CURRENT TERM — EXAM FEEDBACK]` block beside
+    the draft block (`app.py:6354`). It reads `student.exam_results` for this class's exams
+    this term, so it works before any grade is decided. Build it in one function, so the
+    second pull can add F2's notes in one place.
+  - **Overall comment (Q3).** If the exam has grades for this student, use their comments,
+    each different text once. Otherwise use `ExamResult.comment`. Clearing the comments
+    in Window 3 removes it from the block.
+  - **Re-sends (Q3).** In `_ingest_cam2_session`, a grade whose comment equals the previous
+    result's comment takes the new one. An edited comment is kept.
+  - **Exams leave the ranking (Q2).** `_current_term_evidence` skips exam scores, which is
+    also what stops the comment being sent twice. Grades still count in the criterion
+    results and the trend. Assignments stay chosen by ranking.
+  - **Leave out** exams excused for that student (`assessment_exclusions_for`). Pass
+    comments through `clean_comment`, as evidence is, which drops the `Strengths:` and
+    `Areas to develop:` labels from CAM2's comments.
+  - **Fix the wording and any limit from a trial (Q4).** Use fictional students with long
+    comments: 15 question comments of 300 characters, and two exams in one term. The block
+    tells the LLM to use this as a main source for both strengths and growth. If a limit is
+    needed, keep the overall comment whole and say how many question comments were left out.
 - Round-half-up for any new percentage display, not Python's `round()`.
 - Sandbox browser check: temp prefs, temp `db_custom_path`, fictional class. Include
   the 12-screen fixture from the slide-deck plan. Its A 1, B 5, C 2 and D 5 levels must
@@ -600,9 +753,16 @@ on the current pin is otherwise unchanged. The I2 fix can ship by itself.
   same however many slides fed the decision.
 
 *Done when:* a deck's levels show grouped in Window 3, one decision writes one grade, a
-blank dropdown can't invent a grade, a re-send can't change a teacher's decision, and a
-test shows an exam's overall and question comments in the term comment prompt whether or
-not the exam ranks among the student's highest or lowest pieces.
+blank dropdown can't invent a grade, a re-send can't change a teacher's decision, and
+tests show that:
+
+- an exam's overall and question comments are in the prompt whatever its grades, and
+  before any grade is decided;
+- an excused exam's aren't;
+- a comment edited or cleared in Window 3 is respected;
+- an exam on four criteria sends its overall comment once and takes no strength or growth
+  place;
+- a re-sent comment replaces only copies the teacher hasn't edited.
 
 ### Phase 4 — Pull CAM2, notices, bundle · M–L
 
@@ -610,8 +770,10 @@ not the exam ranks among the student's highest or lowest pieces.
   vendored tree hash equals the tag's.
 - Update `test_exam_bridge.py:214` and `test_exam_cam2_host.py:370` to the new rules,
   and un-skip the v2 tests.
-- Add `Exam-Section-Plan.md`, `Feedback-and-Upgrades.md` and `requirements-build.txt` to
-  `EXAM_DEV_PATHS`, and extend `test_windows_bundle.py`.
+- Add `Exam-Section-Plan.md`, `Feedback-and-Upgrades.md`, `requirements-build.txt` and
+  `licences` to `EXAM_DEV_PATHS`, since CAM's own `Licences` folder below replaces the last.
+  Also remove CAM's `docs/CAM2_FEEDBACK_FOR_CAM.md` from the bundle, and extend
+  `test_windows_bundle.py` to cover all five.
 - **Notices (D15).** The bundle gains a `Licences` folder, with:
   - a notice written for CAM's bundle: CAM and CAM2 are MIT, PyMuPDF is used under the
     AGPL, and so the bundle as a whole is under the AGPL;
@@ -635,7 +797,7 @@ not the exam ranks among the student's highest or lowest pieces.
   choices; weighted;
   choice groups; and a v1 session upgraded mid-grading. Each must Sync, be decided in
   Window 3 or carried by Apply, and show in Windows 2 and 3, leaving session folders
-  byte-identical after Sync.
+  byte-identical after Sync. Its comments must reach the term comment prompt.
 - **On a Windows computer:** build the bundle and boot it with its embedded Python. CAM
   starts, CAM2 opens in host mode and sends to CAM, and the `Licences` folder is there.
 
@@ -680,7 +842,8 @@ CAM2 decided, since there's no Intel Mac to build and test on.
   check of the final zip, and a check that links and signatures survive unzipping, as
   CAM2's Mac build does.
 - **Sandbox end to end from an unzipped copy:** temp prefs and `db_custom_path`, on a Mac
-  account with no developer Python. CAM starts, Browse works, the workspace opens, and
+  account with no developer Python. CAM starts, Browse works, the workspace opens a local
+  folder with a subfolder per student and needs no Google sign-in (F5's route), and
   CAM2 opens in host mode and sends to CAM. **This Mac's prefs point at real data, so the
   test must not run under them.**
 - **A cross-computer check:** one fictional data folder synced between the Mac bundle and
@@ -698,6 +861,9 @@ matrix as Phase 4. Nothing is released yet.
   for D10 to D13 and D16, and for D17: slide sizes are done, its Drive phases are
   deferred, so its "Phase 0 comes first" no longer applies, and Appendix A stands in for
   its Fetch from Drive step.
+- Update `CAM2_FEEDBACK_FOR_CAM.md`: what shipped, and the second pull's starting point.
+  Say in the manual how a term comment now uses exam comments, and how ticks and typed
+  comments combine in the workspace.
 - Add `CHANGELOG.md` and release notes that say plainly:
   - update **every computer before opening an exam**, because opened exams can't go
     back;
@@ -707,29 +873,62 @@ matrix as Phase 4. Nothing is released yet.
   - a paper's levels show in Window 3, and the teacher decides one grade per criterion
     for the assignment, unless a final level was typed in CAM2;
   - marks are never turned into grades by the app, and bands are no longer pre-filled;
-  - what `file_from_newer_version` means on a computer not yet updated.
+  - what `file_from_newer_version` means on a computer not yet updated;
+  - in the workspace, ticks and deadline changes no longer overwrite typed comments, so
+    the tick-first workaround can stop;
+  - every exam's overall and question comments now go into the term comment prompt, and
+    so to the AI service the teacher has chosen, and exams no longer take the strength
+    and growth places;
+  - a later CAM2 update will raise the session version again, so the "update every
+    computer first" step will come back (Q1).
 
 ### Phase 6 — Roll out to real data · S (explicit permission required)
 
 "Testing the app" isn't permission. Each step needs the teacher's go-ahead in that
 session.
 
-1. Update every computer, and the standalone CAM2 on each.
-2. Back up: `acm_database.json.bak-cam2-upgrade-YYYYMMDD-HHMMSS` beside the database,
+1. Run `tools/exam_exposure_report.py` again, with permission. Phase 0's count of zero is
+   from 2026-11-05, and any real exam opened since changes it.
+2. Update every computer, and the standalone CAM2 on each, to the same tag.
+3. Back up: `acm_database.json.bak-cam2-upgrade-YYYYMMDD-HHMMSS` beside the database,
    and a dated copy of each class's `exams/` folder **before any exam is opened**.
    Never prune existing `.bak-*` files.
-3. Open one low-stakes exam. Check its counts against the Phase 0 numbers, and that its
+4. Open one low-stakes exam. Check its counts against the step 1 numbers, and that its
    existing gradebook grades are unchanged.
-4. Then open the rest as needed. Grades already applied from older rubric exams stay as
+5. Then open the rest as needed. Grades already applied from older rubric exams stay as
    they are, and neither a re-send nor Apply replaces them silently.
+6. In the workspace, change one tick on a low-stakes task that already has typed comments,
+   and check that the text stays. **Don't try the deadline first on real work.**
+7. Generate one term comment on a student with an exam, as the teacher would normally.
+   The teacher judges whether the exam has a large enough place (Q4).
 
-**Rollback:** revert CAM to the previous release and restore `exams/` from the step 2
+**Rollback:** revert CAM to the previous release and restore `exams/` from the step 3
 copy. A v2 session can't be opened by older code. CAM2 also leaves a v1 copy in
 `backups/` when it upgrades, but that backup is per day, so don't rely on it. Grades
-entered after the upgrade would need re-entering.
+entered after the upgrade would need re-entering. The older workspace ignores the
+remembered line, so the F4 bug simply returns.
 
-*Done when:* all computers are updated and every sampled exam matches its numbers from
-before the upgrade.
+*Done when:* all computers are updated, every sampled exam matches its numbers from
+before the upgrade, and steps 6 and 7 passed.
+
+### 6.1 After this upgrade
+
+These aren't in Phases 1 to 6. The details are in `CAM2_FEEDBACK_FOR_CAM.md` and CAM2's
+`Feedback-and-Upgrades.md`. They stay on record here because of what they ask of this
+upgrade.
+
+| Entry | What it asks of this upgrade |
+|---|---|
+| **F1, F2:** session version 3 | Don't let Phase 1's tag raise the version (Q1). Keep the bridge routing per question, and the F6 block in one function, so notes are one addition. F1's ceilings need nothing from CAM: `read_session` doesn't read them, and rubrics stay out of 8 |
+| **F3** | Nothing. It's on hold, because F5 would replace it |
+| **F5:** retire the workspace | D16 stands until its last stage (Q6). Add nothing to the workspace beyond Phase 2W |
+| **F7:** a year's work and one student ID | Answer Q7. `exam_results` is keyed by exam name alone (`models.py:179`), so one student with a same-named exam in two classes would collide, and that needs fixing before students carry across years. `_walk_class` skips only `exams/`, so a new `assignments/` folder would be scanned for CSVs |
+| **F8:** compact and delete | Nothing to read. CAM uses only `crops/__name__/` (`exam_bridge.py:370`), and Sync reads only the session and grades files. Showing or emptying `exams/_deleted/` is separate CAM work |
+| **F9 to F15** | Nothing. Comparing exams over time stays in CAM (F14) |
+
+**The second pull:** change CAM2, tag it, and `git subtree pull`. Add the F2 note fields to
+`test_exam_bridge.py` with it. Release notes repeat the "update every computer first"
+step.
 
 ---
 
@@ -739,10 +938,20 @@ Everything ran in a throwaway clone with `HOME` and `CAM2_APP_DATA` redirected t
 folder, on fictional data. The real prefs and database were checked before and after
 and are unchanged, and neither repo's code was modified.
 
-| Suite | Pin `1a40845` | CAM2 `main` `7d34779` |
-|---|---|---|
-| CAM | 267 pass (1 skipped) | **2 failures**, both I1 |
-| CAM2 | 216 pass (1 skipped) | 328 pass (1 skipped) |
+| Suite | Pin `1a40845` | CAM2 `main` `7d34779` | CAM2 `main` `5931f22` (v6) |
+|---|---|---|---|
+| CAM | 267 pass (1 skipped) | **2 failures**, both I1 | 292 run, **the same 2 failures** (1 skipped) |
+| CAM2 | 216 pass (1 skipped) | 328 pass (1 skipped) | 331 pass (1 skipped) |
+
+CAM's count rose because of Phase 0's report tests. The v6 run was a trial pull in a
+throwaway clone with `HOME` and `CAM2_APP_DATA` redirected, and its tree matched CAM2's.
+It used the same PyMuPDF 1.28.2 and Pillow 12.3.0 as before.
+
+For v6, every line number in the feedback note was checked against the code. I15 comes
+from reading the code and hasn't been run. I16's ranking example ran against the real
+`select_evidence` with fictional data, and the prompt itself wasn't generated. The rest of
+I16 and §6.1's rows come from reading the code. `compile_prompt` wasn't run, and neither
+were F1, F2, F7 and F8, which exist only as proposals.
 
 I2 was reproduced through CAM's test harness with saving stubbed out. I4 and I5 were
 reproduced with real launcher processes. §3.1 came from probes against the real bridge.
@@ -770,7 +979,8 @@ tool's source. The published zips themselves weren't opened.
 - Any real session or database, so how many real exams are exposed is unknown until
   Phase 0.
 - The Japanese screens.
-- CAM2's I5 fix, and everything in Phases 2 to 4, none of which exists yet.
+- CAM2's I5 fix with real launcher processes. Its own tests pass, but the I5 reproduction
+  hasn't been repeated, which Phase 1 does. Everything in Phases 2 to 4 doesn't exist yet.
 - Whether the licence approach is legally sufficient. D15 follows what CAM2 already does.
 
 ---
