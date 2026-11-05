@@ -1483,14 +1483,17 @@ def qualifying_assignment_count() -> int:
     """How many of the current term's assignments feed the auto-default sizing.
 
     Qualifying = On in the current term (``current_term_assignment_names``),
-    criteria-bearing (assignment-table ``criteria != "—"`` — formative events and
-    still-unbanded exams carry "—" and don't count), and **not** a ``(Reflection)``
-    task (an adjunct of its parent assignment). Banded exams count. Counted overall,
+    criteria-bearing (assignment-table ``criteria != "—"`` — formative events carry
+    "—" and don't count), and **not** a ``(Reflection)`` task (an adjunct of its
+    parent assignment). An exam counts once it has a grade: it lists its mapped
+    criteria from the moment it syncs, so "—" doesn't say that. Counted overall,
     never per criterion."""
     names = current_term_assignment_names()
     n = 0
     for r in assignment_table():
         if r["name"] not in names or r["criteria"] == "—" or r.get("is_draft"):
+            continue
+        if r.get("is_exam") and r.get("avg") is None:
             continue
         if r["name"].strip().lower().endswith("(reflection)"):
             continue
@@ -3434,8 +3437,9 @@ def missing_assignment_rows(student, names=None) -> list:
     """Assignment-table rows the student has no scores in, among the selected
     criteria-bearing assignments — the Missing = 0 candidates. Excused
     assignments are excluded (they leave the pipeline entirely), as are
-    formative events and exams that haven't been banded yet (their criteria
-    column is '—', so there is no 0-8 scale to zero)."""
+    formative events (their criteria column is '—', so there is no 0-8 scale to
+    zero) and exams with no grade yet. ``zero_criteria`` says which of a row's
+    criteria actually count as 0."""
     rows = assignment_table()
     if names is None:
         names = {r["name"] for r in rows if assignment_on(r["name"])}
@@ -6179,7 +6183,9 @@ def _current_term_evidence(student) -> list:
     growth place and aren't sent twice (Q2). Their grades still count in the
     criterion results and the trend."""
     names = current_term_assignment_names() - assessment_exclusions_for(student.student_id)
-    names -= {a.name for a in gb().assignments if getattr(a, "is_exam", False)}
+    cls = st.session_state.get("active_class", "")
+    names -= {a.name for a in gb().assignments
+              if getattr(a, "is_exam", False) and getattr(a, "class_name", "") == cls}
     items = []
     for bucket in student.scores.values():
         for sc in bucket:
@@ -7230,10 +7236,9 @@ def add_assignment_dialog() -> None:
 
     An **assignment** carries the chosen criterion immediately: each student
     shows an editable "0 (missing)" cell under it in Window 3 where the
-    teacher enters individual grades. An **exam** starts with raw marks off
-    the 0-8 scale: its analytics dialog offers 🛠 Exam setup (the grading
-    workspace's question programmer), and grades arrive via the exported exam
-    CSV, then get graded in Window 1's 📝 Exam grading panel."""
+    teacher enters individual grades. An **exam** opens in CAM2, and its results
+    arrive at Sync. Its grades are then decided in Window 3, or in Window 1's
+    📝 Exam grading panel for a plain marks exam or typed final levels."""
     st.caption(f"Class: **{st.session_state['active_class']}** · "
                f"Term: **{current_term()}**")
     with st.form("add_asg_form"):
@@ -7739,6 +7744,13 @@ def _exam_mapped_letters(asg) -> list:
                   key=CRIT_ORDER.index)
 
 
+def _exam_orphan_letters(asg, mapping: dict) -> list:
+    """Criteria with a grade on this exam that no rubric counts toward any more,
+    as after a remap. Those grades still count, and Window 3 has no group for them."""
+    graded = {sc.criterion.value for _, sc in scores_for_assignment(asg.name) if sc.is_valid}
+    return sorted(graded - set(mapping.values()), key=CRIT_ORDER.index)
+
+
 def _refresh_exam_counts(asg, also_criteria=()) -> None:
     """Make an exam's criteria and ``score_count`` match the grades it really
     has. ``also_criteria`` are the ones just mapped or chosen."""
@@ -7831,6 +7843,11 @@ def _render_cam2_rubric_banding(asg, results) -> None:
     if changed:
         _refresh_exam_counts(asg, mapping.values())
         persist()
+    orphans = _exam_orphan_letters(asg, mapping)
+    if orphans:
+        st.caption(f"⚠ This exam still has grades on Criterion {', '.join(orphans)}, which "
+                   "no rubric counts toward now, and they still count. To take one off, "
+                   "click it in Window 3 and choose **No grade**.")
     if not mapping:
         st.info("Map at least one rubric to a criterion to grade this exam.")
         return
@@ -8063,7 +8080,7 @@ def show_analytics_dialog(name: str) -> None:
         # question-by-question analysis lives in CAM2's own review step.
         st.caption(f"📝 Rubric exam (CAM2)  ·  {match['date']:%b %d, %Y}  ·  "
                    f"{match['submissions']} paper(s)")
-        if match["criteria"] == "—":
+        if match["avg"] is None:
             st.caption("Map its rubrics in Window 1's 📝 Exam grading panel, then "
                        "decide each student's grades in Window 3 to bring this "
                        "exam into the criterion math.")
@@ -8080,8 +8097,8 @@ def show_analytics_dialog(name: str) -> None:
         b.metric("Avg raw score", a2)
         totals = [r.total for _, r in results if r.complete]
         cc.metric("Spread (sd)", round(pstdev(totals), 2) if len(totals) > 1 else 0.0)
-        d.metric("Graded", "Crit " + match["criteria"]
-                 if match["criteria"] != "—" else "not yet")
+        graded_on = match.get("graded_criteria") or []
+        d.metric("Graded", "Crit " + ",".join(graded_on) if graded_on else "not yet")
 
         labels = next((a_.question_labels for a_ in gb().assignments
                        if a_.name == name and getattr(a_, "is_exam", False)), [])
@@ -8120,8 +8137,8 @@ def show_analytics_dialog(name: str) -> None:
                     else:
                         ic[1].caption("— no name crop on disk —")
 
-        if match["criteria"] == "—":
-            st.caption("Assign 0–8 grades in Window 1's 📝 Exam grading panel "
+        if match["avg"] is None:
+            st.caption("Give 0–8 grades in Window 1's 📝 Exam grading panel or Window 3 "
                        "to bring this exam into the criterion math.")
             return
         # Bands were applied — fall through to the normal band distribution.
@@ -8750,6 +8767,10 @@ def render_window2() -> None:
                                                 table_by_name.get(nm, {})):
                         # A paper is in, with no grade yet: never counted as a 0.
                         tag = " _(awaiting decision)_"
+                    elif (table_by_name.get(nm, {}).get("is_exam")
+                          and not zero_criteria(table_by_name[nm])):
+                        # Nobody has a grade on this exam yet, so no 0 counts.
+                        tag = " _(not graded yet)_"
                     else:
                         tag = ""
                     st.markdown(f"- {nm}{tag}")
@@ -8837,7 +8858,8 @@ def render_window3() -> None:
                    "mark or excuse it.  **⏳ Awaiting Grade** = folder still "
                    "being graded, excluded from the trend and grade math.  "
                    "**⏳ Awaiting** on an exam = paper in, your decision still "
-                   "to come, also excluded.")
+                   "to come, also excluded.  **Not graded yet** on an exam = nobody "
+                   "has a grade on that criterion, so it isn't counted for anyone.")
         active_names = [r["name"] for r in assignment_table()
                         if assignment_on(r["name"])]
         table_by_name = {r["name"]: r for r in assignment_table()}

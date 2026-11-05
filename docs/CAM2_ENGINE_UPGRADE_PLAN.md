@@ -897,7 +897,7 @@ the wording without settling everything.
   - **Exam comments did feed both strengths and growth** in every comment read.
   - **Still to check:** real comments on the teacher's usual model, and Japanese text, which
     the trial didn't cover.
-- **Tests on the pin:** CAM 445 (8 skipped, all waiting for a version 2 session), CAM2 216.
+- **Tests on the pin:** CAM 449 (8 skipped, all waiting for a version 2 session), CAM2 216.
 - **Outside the repo,** with CAM2's `phase1-slides-and-comment-limits` branch at `3696d1e`
   as `exam_grading/`: those 8 pass, and only the two I1 tests fail, as I7 expects.
 - **Browser, in a sandbox on Windows,** on that branch and then the pin: the 12-screen
@@ -931,6 +931,17 @@ the wording without settling everything.
   - **A grade decided in the pop-up lost the overall comment,** because the comment box started
     empty, which counts as clearing it (Q3). A new grade on a paper now starts with its overall
     comment, and clearing the box is still respected.
+- **A second review found what else assumed a listed criterion means a graded one:**
+  - **The automatic calculation method** counted an exam with no grades, so a sync could flip
+    it for the class. An exam now counts once it has a grade.
+  - **The analytics dialog** said `Graded: Crit A,B,C,D` with no grades. It now names only
+    criteria that have grades.
+  - **Window 2's list** called an exam nobody has graded plain missing work, beside a caption
+    saying it counts as 0. It now says `not graded yet`.
+  - **Remapping a rubric** left grades on the old criterion counting with no notice. Window 1
+    now names them and says how to take one off.
+  - **Evidence for the term comment** dropped an assignment that shared a name with another
+    class's exam. It now looks only at the active class's exams.
 - **Checked since the first run, in a sandbox on Windows:** the real app on fictional exams,
   partly by mouse and partly by script: the pop-up showing the paper's comment, saving it, a student with no paper showing 0
   on the graded criterion only, and adding then removing a plain marks exam's grade. **Window

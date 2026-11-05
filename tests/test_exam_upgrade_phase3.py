@@ -259,6 +259,37 @@ class AbsentStudentTests(_DialogBase):
         self.assertEqual(self.asg.criteria, ["A", "B", "C", "D"])
 
 
+class ExamCriteriaAreNotGradesTests(_DeckBase):
+    """An exam lists its criteria from Sync, so that doesn't mean it has grades."""
+
+    def test_an_ungraded_exam_doesnt_count_toward_the_auto_method(self):
+        before = app.qualifying_assignment_count()
+        self.decide("B", 5)
+        self.assertEqual(app.qualifying_assignment_count(), before + 1)
+
+    def test_a_remap_leaves_grades_that_are_named_as_still_counting(self):
+        self.decide("B", 5)
+        self.decide("D", 4)
+        self.assertEqual(app._exam_orphan_letters(self.asg, {"r1": "A", "r2": "B", "r4": "D"}), [])
+        self.assertEqual(app._exam_orphan_letters(self.asg, {"r1": "A"}), ["B", "D"])
+
+    def test_a_grade_no_longer_valid_isnt_named(self):
+        self.decide("B", 5)
+        self.grade("B").is_valid = False
+        self.assertEqual(app._exam_orphan_letters(self.asg, {}), [])
+
+    def test_an_assignment_named_like_another_classs_exam_stays_in_the_evidence(self):
+        self.gb.assignments[0].class_name = "Another class"
+        self.gb.assignments.append(Assignment(name=EXAM, class_name=CLASS, criteria=["A"]))
+        self.ss["active"][EXAM] = True
+        self.aoki.scores[Criterion.A] = [CriterionScore(
+            Criterion.A, 6, datetime(2026, 11, 1), assignment=EXAM, comment="Ordinary work.")]
+        with mock.patch.object(app, "current_term_assignment_names", lambda: {EXAM}), \
+                mock.patch.object(app, "assessment_exclusions_for", lambda sid: set()):
+            evidence = app._current_term_evidence(self.aoki)
+        self.assertEqual(len(evidence), 1)
+
+
 class ReportRowTests(_DeckBase):
     """The report's marks table says the same as Window 3."""
 
