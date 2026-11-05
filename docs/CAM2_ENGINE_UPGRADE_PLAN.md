@@ -13,6 +13,74 @@ Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
 added D17. v5 added the Apps Script route (Appendix A).
 
+## Picking up on another computer
+
+Written 2026-11-06, for the next session on the Mac. A session's chat and memory stay on the
+computer they ran on, so this is what the next session needs. Trust this plan and the repos
+over any older memory there.
+
+**Do these first:**
+
+1. **Update both repos.** Run `git status` first, and don't overwrite local changes. Then
+   `git switch main` and `git pull --ff-only` in the CAM and CAM2 checkouts. This only updates
+   code. Don't launch anything yet.
+2. **Add the phase check to the user-level `~/.claude/CLAUDE.md`,** if it isn't there, creating
+   the file if needed and keeping what's already in it. Use the text below.
+3. **Then run that check on Phase 1,** and report back before building anything.
+
+```markdown
+## Before starting a new phase, check the earlier phases are finished
+
+Applies to every repository and any work planned in phases, stages or steps.
+
+When I ask to start, plan or build a new phase, or when you are about to move on to the next one yourself, stop before writing any code and do this first:
+
+1. Check every earlier phase for anything still open: unfixed bugs or review findings, open or unmerged pull requests, failing or skipped tests, checks marked "not run" or "still to do", and left-over steps in the plan. Check the code, git and the pull requests as well as the plan, because documents can be out of date.
+2. Remind me, even if everything is clear. List what's still open, phase by phase, or say that you found nothing open.
+3. If anything is open, recommend finishing it first, and wait for my answer before starting the new phase. If I choose to go ahead anyway, record what's being left open.
+
+**Why:** when I moved on to later phases with issues still open in earlier ones, the problems piled up and took a long review to untangle.
+```
+
+**Where things stand:** Phases 0, 2, 2W and 3 are on CAM's `main`, after a review of each, and
+all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). Nothing is released
+(D18). The next step is finishing Phase 1, because Phase 4 needs its tag.
+
+**Still open in Phase 1:**
+
+| Step | Where it can happen |
+|---|---|
+| Review CAM2 PR #1 (`phase1-slides-and-comment-limits`), which hasn't been reviewed. Phases 2 and 3 each needed fixes after review, so expect some | The Mac |
+| The teacher tries Appendix A on a small real assignment, in the school account | School, on the Mac. PDFs stay in the data folder, never in a repo |
+| Retry the level click that once sent no request (Phase 1's progress note) | The Mac |
+| Merge the PR, set CAM2's version, cut the tag, build the Mac download | The Mac, after the review |
+| Check the Windows unblock advice, and build the Windows download | **A Windows computer only** |
+| Share the build with colleagues | Once both downloads exist |
+
+**Also worth doing on the Mac:** Phase 4M's Gatekeeper check needs a download on a Mac that
+didn't build it, and it decides whether the free Mac route works at all.
+
+**Decisions made since v6 that later phases rely on:**
+
+- Linked partners share the first graded member's grade, and their comments and ticks combine.
+- A keyword list must never shrink on reload.
+- Phase 4 has to read CAM2's adjusted report figures (see Phase 3's progress note), and its test
+  matrix needs its own sessions, because `make_sample_exam.py` takes only an output folder.
+
+**Testing safely on the Mac:**
+
+- **Its prefs may point at real data,** so never launch the app or run its tests directly in the
+  checkout. Copy only `git ls-files -co --exclude-standard` to a temp folder, so no prefs or
+  settings come along. Point `CAM_DB_PATH`, `CAM2_APP_DATA`, `CAM2_DOCUMENTS_OVERRIDE`,
+  `CAM_DOCUMENTS_OVERRIDE` and `HOME` into temp, unset any `ONEDRIVE*` variables, then run
+  `tools/run_all_tests.py` there.
+- **Without Node, tests skip that ran on Windows,** including the ones that run the workspace's
+  page code, and the skip count will be higher. Those were checked on Windows. Say so when
+  reporting a result, and don't count it as a failure.
+- **The real database isn't to be touched** without explicit permission (`CLAUDE.md`).
+
+---
+
 **Repos:** CAM = `criterion-assessment-metrics`; CAM2 = `cam2-exam-grading`,
 vendored in CAM at `exam_grading/`.
 **Depends on:** [CAM2_EXAM_CONVERGENCE_PLAN.md](CAM2_EXAM_CONVERGENCE_PLAN.md). This
