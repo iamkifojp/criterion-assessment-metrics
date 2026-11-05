@@ -14,6 +14,10 @@ vendored in CAM at `exam_grading/`.
 **Depends on:** [CAM2_EXAM_CONVERGENCE_PLAN.md](CAM2_EXAM_CONVERGENCE_PLAN.md). This
 plan keeps its numbering and amends its D3 and D4. It also feeds
 [SLIDE_DECK_EXAM_PLAN.md](SLIDE_DECK_EXAM_PLAN.md), which is not built yet.
+**Colleagues' feedback:** [CAM2_FEEDBACK_FOR_CAM.md](CAM2_FEEDBACK_FOR_CAM.md) lists what
+it means for CAM. Exam comments in term comments (Phase 3) and keeping CAM2's feedback
+document out of the bundle (Phase 4) are part of this plan. The workspace's comment bug
+goes in the same release. The rest waits for a later CAM2 update.
 
 Read `CLAUDE.md` first. Phases 0 and 6 touch real data, and the sandbox, backup and
 permission rules there apply. Never edit `exam_grading/` in place: change CAM2,
@@ -577,6 +581,18 @@ on the current pin is otherwise unchanged. The I2 fix can ship by itself.
 - **Add assignment** (D16). Type becomes Assignment or Exam, with a **Draft — comments
   only** check mark, replacing the third option at `app.py:7119`. ⋯ Manage keeps its
   check mark. Existing drafts are unaffected.
+- **Exam comments in the term comment** (CAM2 F6). The teacher wants these to have a
+  large place in a student's term comment.
+  - A Window 3 decision copies the overall comment onto its `CriterionScore`, as Apply
+    does today (`comment=r.comment`, `app.py:7546`, `7671`), so nothing is lost.
+  - Add an always-included `[CURRENT TERM — EXAM FEEDBACK]` block beside the draft block
+    (`app.py:6354`), with the overall comment and `question_comments` for each exam this
+    term, and tell the LLM to give it particular weight.
+  - Leave out exams excused for that student (`assessment_exclusions_for`), and don't
+    send the same overall comment twice if the exam is also chosen as evidence.
+  - Check the prompt's length with 15 question comments of up to 300 characters. It may
+    need a limit per exam.
+  - Assignments stay chosen by ranking.
 - Round-half-up for any new percentage display, not Python's `round()`.
 - Sandbox browser check: temp prefs, temp `db_custom_path`, fictional class. Include
   the 12-screen fixture from the slide-deck plan. Its A 1, B 5, C 2 and D 5 levels must
@@ -584,7 +600,9 @@ on the current pin is otherwise unchanged. The I2 fix can ship by itself.
   same however many slides fed the decision.
 
 *Done when:* a deck's levels show grouped in Window 3, one decision writes one grade, a
-blank dropdown can't invent a grade, and a re-send can't change a teacher's decision.
+blank dropdown can't invent a grade, a re-send can't change a teacher's decision, and a
+test shows an exam's overall and question comments in the term comment prompt whether or
+not the exam ranks among the student's highest or lowest pieces.
 
 ### Phase 4 — Pull CAM2, notices, bundle · M–L
 
@@ -592,8 +610,8 @@ blank dropdown can't invent a grade, and a re-send can't change a teacher's deci
   vendored tree hash equals the tag's.
 - Update `test_exam_bridge.py:214` and `test_exam_cam2_host.py:370` to the new rules,
   and un-skip the v2 tests.
-- Add `Exam-Section-Plan.md` and `requirements-build.txt` to `EXAM_DEV_PATHS`, and
-  extend `test_windows_bundle.py`.
+- Add `Exam-Section-Plan.md`, `Feedback-and-Upgrades.md` and `requirements-build.txt` to
+  `EXAM_DEV_PATHS`, and extend `test_windows_bundle.py`.
 - **Notices (D15).** The bundle gains a `Licences` folder, with:
   - a notice written for CAM's bundle: CAM and CAM2 are MIT, PyMuPDF is used under the
     AGPL, and so the bundle as a whole is under the AGPL;
