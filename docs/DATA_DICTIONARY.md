@@ -141,18 +141,41 @@ still loads the file (it would drop these keys on its next save).
 
 | Key | Shape | Meaning |
 |---|---|---|
-| `mode` | `"marks"` \| `"rubric"` | CAM2 grading mode (absent = an old CGW exam). |
+| `mode` | `"marks"` \| `"rubric"` \| `"mixed"` | What the paper's questions are, from each question's shape, not CAM2's starting choice (absent = an old CGW exam). An older CAM treats anything but `"rubric"` as marks. |
 | `session_id` | str | The CAM2 session the result was read from. |
 | `not_answered` | [label] | Questions marked *Not answered* (count as 0; not in `questions`). |
 | `counted` | [label] | Questions that count after CAM2's choice groups (best N or teacher picks). |
 | `complete` | `false` | Present only when a question is ungraded or a teacher-picks choice is open. |
-| `levels` | {label: {rubric id: level \| `"not_answered"`}} | Rubric mode: each question's level per criterion. |
-| `final_levels` | {rubric id: int} | Rubric mode: final level per rubric (teacher's, else CAM2's round-half-up suggestion). Not range-checked to 0–8, since a CAM2 rubric may run to 100. Window 1 maps each rubric to a CAM criterion (C.8) and scales a rubric whose maximum is not 8. |
+| `levels` | {label: {rubric id: level \| `"not_answered"`}} | Each rubric question's level per criterion. Evidence for the teacher, never a grade. Keys must be strings. |
+| `final_levels` | {rubric id: int} | Final level per rubric. The current CAM2 pin gives the teacher's, else its round-half-up suggestion; newer CAM2 gives only a typed one. Keys must be strings. Not range-checked to 0–8, since a CAM2 rubric may run to 100. Window 1 maps each rubric to a CAM criterion (C.8) and scales a rubric whose maximum is not 8. |
 | `question_comments` | {label: str} | The comment written on each question. |
+| `percent` | number | CAM2's overall percentage of the marks, weighted when `weighted` is set. CAM never bands from it. Absent when the paper has no marks. |
+| `weighted` | `true` | CAM2's weighting applies to this paper's marks. Present only when it does. |
+| `criterion_marks` | {rubric id: {`total`, `max`, `percent`}} | Each criterion's marks as CAM2 reports them. Never a grade. Reaches CAM from CAM2 session version 2. |
 
-In rubric mode `total` and `max_total` are 0. Labels are CAM2 question labels
-(unique within an exam); rubric ids are CAM2's (`r1`, …), with names in the
-session's `rubrics`.
+With no marks questions `total` and `max_total` are 0. Labels are CAM2 question
+labels (unique within an exam); rubric ids are CAM2's (`r1`, …), with names in
+the session's `rubrics`.
+
+**Exam fields on a `CriterionScore`** (CAM2 engine upgrade, Phase 2). Both are
+optional and written only when set, so every other score saves as before. An
+older CAM ignores them on load and drops them on save.
+
+| Key | Shape | Meaning |
+|---|---|---|
+| `exam_value` | int 0–8 | The grade CAM2's final level gave when this grade was written, after scaling. While `value` equals it, the grade is still CAM2's and a re-send may update it at Apply. Otherwise, or without it, the grade is the teacher's: it stays, and Apply lists it. |
+| `exam_basis` | str | Short hash of the levels and marks the decision saw, for Window 3's "levels changed since you decided" flag (P6). |
+
+**Grades on an exam.** At most one per student, exam and criterion. The paper's
+levels and marks are evidence, and only the teacher's 0–8 decision is a grade. It's
+made in Window 3, one per criterion, and a decision made there has no `exam_value`,
+so a re-send can't change it. Window 1's Apply carries over final levels typed in
+CAM2. A plain marks exam keeps Window 1's class-wide panel, whose dropdowns start
+blank. Sync replaces the `ExamResult` and never writes a grade, though a grade's
+comment still equal to the earlier result's takes the new one. Apply changes only
+criteria with a new final level. A student with a result and no grade on the exam is
+⏳ awaiting a decision (`awaiting_exam_decision`): no invented 0, on any criterion. A
+student with no result is Missing = 0, as with any assignment.
 
 ### A.5 File Count / Files — read-only completeness pass (the "Awaiting Grade" gate)
 
@@ -781,10 +804,11 @@ ownership indexes or class mirrors.
   "8A": {
     "Unit 3 Test": {
       "folder": "Unit 3 Test",          // <class folder>/exams/<folder>/
-      "mode": "rubric",                 // "marks" | "rubric"
+      "mode": "rubric",                 // "marks" | "rubric" | "mixed"
       "session_id": "f3f0…",
       "rubrics": [{"id": "r1", "name": "Criterion A", "max": 8}],
       "criteria": {"r1": "A", "r2": "—"},   // teacher's mapping, "—" = not counted
+      "questions": {"Q1": {"rubrics": ["r1"], "max": 0}},  // label -> its rubrics, marks max
       "papers": {"100001": "s001"}          // roster key -> CAM2 paper id
     }
   }
@@ -794,12 +818,13 @@ ownership indexes or class mirrors.
 - **`folder`** is recorded when the exam is first opened in CAM2 (or first
   synced) and never changes, so renaming the exam in CAM keeps its session.
   Two exam names that sanitise to one folder name get `"<name> (2)"`.
-- **`mode`, `session_id`, `rubrics`, `papers`** are rewritten by every Sync
-  that reads the session. `papers` drives the Window 1 name-crop preview.
-- **`criteria`** is the teacher's: written when a rubric exam's levels are
-  applied in Window 1, and used as the dropdowns' defaults afterwards. Before
-  that, each rubric defaults from its name ("Criterion B", "Crit. B", "基準B",
-  "B" → B).
+- **`mode`, `session_id`, `rubrics`, `questions`, `papers`** are rewritten by
+  every Sync that reads the session. `papers` drives the Window 1 name-crop
+  preview, and `questions` lets Window 3 group each question under its criteria.
+- **`criteria`** is the teacher's: written when a mapping is changed in Window 1,
+  and it wins from then on. Without an entry, a rubric maps by its name
+  ("Criterion B", "Crit. B", "基準B", "B" → B). Several rubrics may share a
+  criterion.
 - The Sync registry (`ingested_files`) holds one row per session folder with
   `"kind": "cam2"`, a `hash` of `cam2_session.json` + `grades.json`, a
   `stamp` (`[mtime_ns, size]` of each of the two files, for the cheap

@@ -3,11 +3,11 @@
 **Status:** v6, 2026-11-05. **Fixed:** the teacher accepted every answer in §5.2 that day.
 v6 merges [CAM2_FEEDBACK_FOR_CAM.md](CAM2_FEEDBACK_FOR_CAM.md) into Phases 1 to 6 and
 brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by the teacher.
-Q4's trial still sets the F6 wording in Phase 3. The smaller points
+Q4's trial set the F6 wording in Phase 3. The smaller points
 (§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done.
 Phase 1's code is built on CAM2's `phase1-slides-and-comment-limits` branch, not yet merged
-or tagged (see its progress note). Phase 2W is built on CAM's `cam2-upgrade-phase2w` branch
-(see its progress note). Nothing else in Phases 2 to 6 is built on this branch.
+or tagged (see its progress note). Phases 2, 2W and 3 are on CAM's `main` (see their progress
+notes). Phases 4 to 6 aren't built yet, and Phase 4 needs the Phase 1 tag.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -729,6 +729,40 @@ when" above isn't met in a tagged version yet.
 *Done when:* the I2 reproduction keeps both grades, and marks-only and rubric behaviour
 on the current pin is otherwise unchanged. The I2 fix can ship by itself.
 
+**Progress, 2026-11-06.** Built on the current pin, fictional data only.
+
+- **Tests on the pin:** CAM 353 (8 skipped, all waiting for a version 2 session), CAM2 216.
+- **Those 8 tests, run once outside the repo:** in a throwaway copy with CAM2's
+  `phase1-slides-and-comment-limits` branch at `3696d1e` as `exam_grading/`, they all pass.
+  Only the two I1 tests fail there (`test_rubric_session_levels_and_final_levels` and
+  `test_rubric_exam_confirms_levels_per_mapped_criterion`), as I7 expects. They wait for
+  Phase 4, which must run this again on the tag it pins.
+- **Older CAM:** the engine at `1c41655` loads what this branch writes and resaves it,
+  losing only the new keys, so a grade then counts as the teacher's. The tracked sample
+  database saves identically through both.
+- **Browser, in a sandbox on Windows:** Apply, a re-send with a new final level, a grade
+  edited in Window 3 being kept and listed, ⏳ rows, and adding a criterion on the marks
+  panel. Window 2's "awaiting decision" tag and the report pack's row weren't exercised.
+- **Choices this phase settled:**
+  - **The re-send rule runs at Apply, not at Sync.** On this pin `final_levels` also holds
+    CAM2's suggestions, and P2 wants someone to confirm the mapping.
+  - **`exam_value` is on the 0–8 scale,** because the rule compares it with the grade.
+    The raw level stays in the note.
+  - **An update keeps the comment, late flag and report flag.** A blank comment takes the
+    new one. Phase 3's re-send handling (Q3) is what brings a corrected comment through.
+  - **Changing the marks panel's criterion now adds a grade, not moves it,** and Apply says
+    so. The grade pop-up's **No grade** choice (Phase 3) removes one, and D18 means the gap
+    before it never reaches a release.
+  - **The `ExamResult.percent` property is gone.** Nothing called it, and it clashed with
+    the new field.
+  - **Window 1's dropdowns follow the grade.** Streamlit keeps a keyed selectbox's old value
+    when its `index` changes, so a stale dropdown could have overwritten a newer grade.
+  - **In Window 3, ⏳ rows stay clickable.** The dialog starts blank, and a blank save writes
+    nothing. A paper not finished in CAM2 can be excused but not given a grade (P6).
+- **For Phase 3:** the `exam_basis` flag isn't shown yet, Window 1 and Window 3 still route
+  on `mode == "rubric"`, and the panel still blocks two rubrics on one criterion. Apply
+  already writes nothing when both have a final level (D11).
+
 ### Phase 2W — CAM: the workspace keeps typed comments (F4) · S–M
 
 This doesn't depend on any other phase, and D18 holds its release back with the rest
@@ -907,6 +941,95 @@ tests show that:
 - material over the limit leaves out whole question comments, keeps every overall comment,
   and reports the number left out.
 
+**Progress, 2026-11-06.** Built on the current pin, fictional data only. Every "done when"
+above is covered by tests. The Q4 trial ran on fictional students (below), and it improved
+the wording without settling everything.
+
+- **The Q4 trial.** Fresh agents on the Sonnet family wrote each comment from the real
+  compiled prompt, seeing nothing about the trial. The app's default is `claude-sonnet-4-6`,
+  so this isn't exactly that model, and each row is a small sample of synthetic comments.
+  "Copied" counts words inside a run of 5 or more that also appears in the exam source.
+
+  | Round | Wording | Comments | Length against target | Copied | Longest run |
+  |---|---|---|---|---|---|
+  | 1 | "in your own words rather than repeating their phrases" | 8 | 100–110% | 11–29% | 12 words |
+  | 2 | "no run of five or more words matches" | 8 | 92–107% | 0–7% | 5 words |
+  | 3 | Round 2's, and the word limit as a ceiling | 4 | 88–102% | 0–12% | 9 words |
+
+  - **Copying is much reduced, not gone.** Round 3 kept round 2's wording on copying and still
+    gave a 9-word run in three of four comments, so round 2's result was partly chance.
+  - **Copying didn't get worse as the source shrank.** The limit (P13) keeps the material in
+    reach, but this trial doesn't show it reduces copying.
+  - **Padding isn't solved.** A 47-word source gave 89 words against a 100-word limit, but 153
+    against a 150-word limit. The ceiling didn't noticeably shorten comments with plenty of
+    material (88–98%).
+  - **A conflict this exposed is fixed.** The closing "Base the narrative ONLY on…" line left
+    out the exam block.
+  - **Exam comments did feed both strengths and growth** in every comment read.
+  - **Still to check:** real comments on the teacher's usual model, and Japanese text, which
+    the trial didn't cover.
+- **Tests on the pin, with Phases 2, 2W and 3 together:** CAM 473 (8 skipped, all waiting for a
+  version 2 session), CAM2 216.
+- **Older CAM, rerun with all three:** the engine at `1c41655` reads a mixed exam with the new
+  fields and resaves it, losing only the new keys.
+- **Outside the repo,** with CAM2's `phase1-slides-and-comment-limits` branch at `3696d1e`
+  as `exam_grading/`: those 8 pass, and only the two I1 tests fail, as I7 expects.
+- **Browser, in a sandbox on Windows,** on that branch and then the pin: the 12-screen
+  fixture with its A 1, B 5, C 2 and D 5 levels grouped, a decision, blank clearing it, Apply
+  with its summary, the changed-levels flag and Keep grade, an unfinished paper, a mixed and
+  a weighted exam, the plain marks panel, Add assignment, and the exam block in a compiled
+  prompt. Generating a comment through an AI wasn't run.
+- **Choices this phase settled:**
+  - **Window 1 has no per-student dropdowns for an exam with rubrics.** P2 keeps the mapping,
+    the progress count and one Apply, so the re-send rule no longer has a dropdown to read.
+  - **A decision made in Window 3 has no `exam_value`,** even if it equals CAM2's level, so a
+    re-send can never change it.
+  - **A typed final level is shown and isn't written until Apply,** because someone must
+    confirm the mapping (P2). On this pin the suggested levels also arrive as final levels,
+    and they show the same way until Phase 4.
+  - **Keep grade was added beside the flag.** Without it, the flag could be cleared only by
+    changing the grade and changing it back.
+  - **P13 in numbers:** exams can always use 4,000 characters, and up to 6,000 less what drafts
+    and assignments use. Only question comments can be left out, so very long drafts or
+    several overall comments can take the total past 6,000.
+  - **`ExamResult.suggested_band` is gone,** since nothing may suggest a grade from marks.
+- **Three problems found in review, and fixed (2026-11-06, the teacher's go-ahead):**
+  - **A student with no paper counted 0 on every mapped criterion once any classmate had one
+    grade.** Now they count 0 only on a criterion where a classmate has a grade (D10). Window
+    3 shows the others as `not graded yet`, still clickable, and a report lists only the zeros.
+    The row on a manually created exam with no grades yet used to say `0 (missing)` too, though
+    the math never counted it, and now says the same.
+  - **Some exam grades couldn't be removed:** on a plain marks exam, and on a criterion no
+    longer mapped. The grade pop-up now offers **No grade** on any exam's grade. Saving it also
+    keeps the exam's mapped criteria listed, which the pop-up used to drop.
+  - **A grade decided in the pop-up lost the overall comment,** because the comment box started
+    empty, which counts as clearing it (Q3). A new grade on a paper now starts with its overall
+    comment, and clearing the box is still respected.
+- **A second review found what else assumed a listed criterion means a graded one:**
+  - **The automatic calculation method** counted an exam with no grades, so a sync could flip
+    it for the class. An exam now counts once it has a grade.
+  - **The analytics dialog** said `Graded: Crit A,B,C,D` with no grades. It now names only
+    criteria that have grades.
+  - **Window 2's list** called an exam nobody has graded plain missing work, beside a caption
+    saying it counts as 0. It now says `not graded yet`.
+  - **Remapping a rubric** left grades on the old criterion counting with no notice. Window 1
+    now names them and says how to take one off.
+  - **Evidence for the term comment** dropped an assignment that shared a name with another
+    class's exam. It now looks only at the active class's exams.
+- **Checked since the first run, in a sandbox on Windows:** the real app on fictional exams,
+  partly by mouse and partly by script: the pop-up showing the paper's comment, saving it, a student with no paper showing 0
+  on the graded criterion only, and adding then removing a plain marks exam's grade. **Window
+  2's `awaiting decision` tag** also showed correctly, which Phase 2 hadn't run. **The report's
+  rows** ran in tests, not through a downloaded report.
+- **For Phase 4:**
+  - update the two I1 tests, and recheck the Window 3 wording once only typed final levels
+    arrive;
+  - **read CAM2's adjusted figures.** The CAM2 going into the tag lets a teacher type over a
+    report's total or percentage (`report_total`, `report_percent`, `adjusted`), and
+    `read_session` reads only the calculated `total` and `percent`, so a report could say 18/20
+    with CAM showing 15/20. Show the adjusted figure beside the calculated one, read-only, and
+    add it to the matrix. This comes from reading the code, and hasn't been run.
+
 ### Phase 4 — Pull CAM2, notices, bundle · M–L
 
 - `git subtree pull --prefix exam_grading <cam2> <tag> --squash`, then confirm the
@@ -933,6 +1056,8 @@ tests show that:
 - **Say where they are.** Add a short line in English and Japanese in the README, the
   bundle's start-up instructions and CAM's About or Help area, with the same wording
   approach as CAM2's READ ME FIRST. Release notes mention the licence.
+- Read CAM2's adjusted report figures in `read_session`, and show them beside the calculated
+  ones (see Phase 3's progress note).
 - `python tools/run_all_tests.py` passes, including with PyMuPDF 2.0.
 - Sandbox end to end with `exam_grading/tools/make_sample_exam.py` and a real browser:
   marks; rubric with and without final levels; levels on one criterion across many
