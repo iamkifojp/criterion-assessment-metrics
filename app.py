@@ -3464,10 +3464,23 @@ def missing_assignment_rows(student, names=None) -> list:
     return out
 
 
+def zero_criteria(row) -> list:
+    """The criteria a student with no work on this assignment counts as 0 on.
+
+    Every listed one, except on an exam. An exam lists its mapped criteria as soon as
+    it syncs, and each is decided separately, so one that nobody has a grade on yet
+    stays out of the calculation for everyone (D10)."""
+    letters = [c.strip() for c in row["criteria"].split(",") if c.strip()]
+    if row.get("is_exam"):
+        graded = row.get("graded_criteria") or []
+        return [c for c in letters if c in graded]
+    return letters
+
+
 def missing_zero_points(student, crit_letter: str, names=None) -> list:
     """Synthetic (timestamp, 0) points a criterion earns from missing work."""
     return [(r["date"], 0) for r in missing_assignment_rows(student, names)
-            if crit_letter in [c.strip() for c in r["criteria"].split(",")]]
+            if crit_letter in zero_criteria(r)]
 
 
 def aggregate_with_policy(student, crit_letter: str, names=None):
@@ -3629,6 +3642,7 @@ def assignment_table():
                                len({s.student_id for s, _ in pairs}),
                                len(raw_totals), n_rubric),
             "avg": round(mean(valid), 2) if valid else None,
+            "graded_criteria": sorted({sc.criterion.value for _, sc in pairs if sc.is_valid}),
             "spread": round(pstdev(valid), 2) if len(valid) > 1 else 0.0,
             "lates": lates,
             "n_scores": len(pairs),
@@ -5990,8 +6004,9 @@ def _student_docx(document, student, method, include_effort_school=True):
             cells[3].text = f"{r['date']:%b %d}"
             cells[4].text = "awaiting decision"
         elif r and r.get("criteria", "—") != "—":
-            for crit in [c.strip() for c in r["criteria"].split(",")
-                         if c.strip() in CRIT_ORDER]:
+            listed = [c.strip() for c in r["criteria"].split(",")]
+            for crit in [c for c in (listed if excused_now else zero_criteria(r))
+                         if c in CRIT_ORDER]:
                 cells = marks.add_row().cells
                 cells[0].text = asg
                 cells[1].text = crit
@@ -7712,6 +7727,18 @@ def _exam_decision_basis(student, asg_name: str, letter: str) -> str:
     return exam_bridge.exam_basis(result, [rid for rid, to in mapping.items() if to == letter])
 
 
+def _exam_grade_label(value) -> str:
+    """A choice in the grade pop-up. Only an exam's existing grade offers None."""
+    return "No grade" if value is None else str(value)
+
+
+def _exam_mapped_letters(asg) -> list:
+    """The criteria this exam's rubrics count toward, graded or not."""
+    meta = _exam_meta(asg)
+    return sorted(set(exam_bridge.rubric_mapping(meta.get("rubrics"), meta.get("criteria")).values()),
+                  key=CRIT_ORDER.index)
+
+
 def _refresh_exam_counts(asg, also_criteria=()) -> None:
     """Make an exam's criteria and ``score_count`` match the grades it really
     has. ``also_criteria`` are the ones just mapped or chosen."""
@@ -8893,13 +8920,15 @@ def render_window3() -> None:
             # one click away from being marked, zeroed-out, or excused.
             if r["criteria"] == "—":
                 continue
+            zeros = zero_criteria(r)
             for crit in [c.strip() for c in r["criteria"].split(",")
                          if c.strip() in CRIT_ORDER]:
                 any_cell = True
                 cc = st.columns([3, 1.2], vertical_alignment="center")
                 cc[0].caption(f"{asg}  ·  {r['date']:%b %d}")
                 label = (f"{crit}: excused" if excused_now
-                         else f"{crit}: 0 (missing)")
+                         else f"{crit}: 0 (missing)" if crit in zeros
+                         else f"{crit}: not graded yet")
                 if cc[1].button(label, key=f"cell_missing_{asg}_{crit}",
                                 width="stretch"):
                     edit_grade_dialog(student.student_id, asg, crit)
@@ -8934,25 +8963,37 @@ def edit_grade_dialog(sid: str, asg: str, crit: str) -> None:
     sc = find_score(student, asg, crit)
     is_missing = sc is None
     row = next((r for r in assignment_table() if r["name"] == asg), None)
+    is_exam_row = row is not None and row["is_exam"]
     awaiting = is_missing and row is not None and awaiting_exam_decision(student, row)
+    # A criterion nobody has a grade on yet: nothing injects a 0 here either.
+    ungraded = is_missing and is_exam_row and not awaiting and crit not in zero_criteria(row)
     st.markdown(f"**{asg}**  ·  Criterion {crit} ({Criterion(crit).label})  ·  "
                 f"{student_label(student)}"
                 + ("  ·  _awaiting decision (not counted yet)_" if awaiting
+                   else "  ·  _not graded yet (not counted)_" if ungraded
                    else "  ·  _missing (counts as 0)_" if is_missing else ""))
     k = f"{sid}||{asg}||{crit}"   # unique widget keys per cell
     cur = int(sc.value) if sc else 0
     # Awaiting a decision starts blank, so saving can't invent a 0. A paper not
     # finished in CAM2 can't be decided yet (P6), though it can be excused.
     unfinished = awaiting and not student.exam_results[asg].complete
-    new_val = st.selectbox("Grade (0-8)", list(range(9)),
-                           index=None if awaiting else cur,
+    no_zero = awaiting or ungraded
+    # An exam's grade can be taken off here too. On a plain marks exam, or a
+    # criterion no longer mapped, there's no blank dropdown in Window 3 to do it.
+    removable = sc is not None and is_exam_row
+    new_val = st.selectbox("Grade (0-8)",
+                           ([None] if removable else []) + list(range(9)),
+                           index=None if no_zero else cur + (1 if removable else 0),
+                           format_func=_exam_grade_label,
                            placeholder=("Not finished in CAM2" if unfinished
                                         else "No grade yet"),
                            disabled=unfinished, key=f"ed_val_{k}",
                            help=("Finish this paper in CAM2 and send it to CAM "
                                  "again." if unfinished else
                                  "Leave blank to keep waiting. A comment is "
-                                 "saved only with a grade." if awaiting else None))
+                                 "saved only with a grade." if no_zero else
+                                 "Choose “No grade” to take this grade off the exam."
+                                 if removable else None))
     flags = st.columns(2)
     late = flags[0].checkbox("Late submission",
                              value=is_late(sid, asg, crit, sc), key=f"ed_late_{k}")
@@ -8961,9 +9002,12 @@ def edit_grade_dialog(sid: str, asg: str, crit: str) -> None:
         help="Removes this assignment from the trend graph, the final grade "
              "calculation and the AI prompt for this student (instead of "
              "counting it as a 0).")
+    # A new grade on a paper starts with its overall comment, as a dropdown decision
+    # does. Left empty, saving would clear it from the term comment (Q3).
+    paper = getattr(student, "exam_results", {}).get(asg)
     feedback = st.text_area(
         "Comment (this task's descriptive feedback)",
-        value=(sc.comment if sc else ""), key=f"ed_fb_{k}",
+        value=(sc.comment if sc else paper.comment if paper else ""), key=f"ed_fb_{k}",
         help="Edit or clear this to change what feeds the comments log and "
              "the generated overall comment.")
     b = st.columns(2)
@@ -8981,29 +9025,37 @@ def edit_grade_dialog(sid: str, asg: str, crit: str) -> None:
         lk = late_key(sid, asg, crit)
         if lk in lf or late != is_late(sid, asg, crit, sc):
             lf[lk] = late
-        if sc is not None:
+        exam = None
+        if is_exam_row:
+            exam = next((a for a in gb().assignments if a.name == asg
+                         and getattr(a, "class_name", "")
+                         == st.session_state.get("active_class", "")), None)
+        mapped = _exam_mapped_letters(exam) if exam is not None else []
+        if sc is not None and new_val is None:
+            if exam is not None:
+                _decide_exam_grade(student, exam, crit, None, paper, [], mapped)
+                # An exam with no grade left keeps the criterion it was set up on.
+                exam.criteria = exam.criteria or [crit]
+        elif sc is not None:
             if sc.value != int(new_val):
                 sc.exam_basis = _exam_decision_basis(student, asg, crit)
             sc.value = int(new_val)
             sc.is_valid = True
             sc.comment = feedback
         elif not excused and new_val is not None and (
-                int(new_val) > 0 or feedback.strip() or awaiting):
+                int(new_val) > 0 or feedback.strip() or no_zero):
             # A real mark (or feedback) entered for previously-missing work:
             # materialise it as an ordinary score. A bare 0 needs no record —
             # the Missing = 0 pipeline already injects it — except on an exam
-            # paper awaiting a decision, where nothing would inject it.
+            # criterion awaiting a decision or not graded yet, where nothing
+            # would inject it.
             when = row["date"] if row else datetime.now()
             student.add_score(CriterionScore(
                 criterion=Criterion(crit), value=int(new_val), timestamp=when,
                 source="manual:missing-entry", assignment=asg, comment=feedback,
                 exam_basis=_exam_decision_basis(student, asg, crit)))
-            if row and row["is_exam"]:
-                exam = next((a for a in gb().assignments if a.name == asg
-                             and getattr(a, "class_name", "")
-                             == st.session_state.get("active_class", "")), None)
-                if exam is not None:
-                    _refresh_exam_counts(exam)
+            if exam is not None:
+                _refresh_exam_counts(exam, mapped)
         persist()
         st.rerun()
     if b[1].button("Cancel", key=f"ed_cancel_{k}", width="stretch"):

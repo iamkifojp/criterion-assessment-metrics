@@ -144,6 +144,242 @@ class _DeckBase(_AppBase):
                 if sc.assignment == EXAM]
 
 
+class DialogColumn:
+    def __init__(self, ui):
+        self.ui = ui
+
+    def checkbox(self, label, value=False, **kw):
+        return self.ui.excused if label == "Excused" else value
+
+    def button(self, label, **kw):
+        return label == "Save"
+
+
+class DialogStreamlit:
+    """Just enough of Streamlit to open the grade pop-up and press Save."""
+
+    class Rerun(Exception):
+        pass
+
+    def __init__(self, session_state, grade=None, comment=None, excused=False):
+        self.session_state = session_state
+        self.grade, self.comment, self.excused = grade, comment, excused
+        self.markdowns = []
+        self.select = {}
+        self.area = {}
+
+    def markdown(self, text):
+        self.markdowns.append(text)
+
+    def caption(self, text):
+        pass
+
+    def columns(self, spec, **kw):
+        return [DialogColumn(self) for _ in range(spec if isinstance(spec, int) else len(spec))]
+
+    def selectbox(self, label, options, **kw):
+        self.select = dict(kw, options=options)
+        return self.grade
+
+    def text_area(self, label, value="", **kw):
+        self.area = dict(kw, value=value)
+        return value if self.comment is None else self.comment
+
+    def rerun(self):
+        raise self.Rerun()
+
+
+class _DialogBase(_DeckBase):
+    def open_dialog(self, letter, student=None, **choices):
+        """Open the pop-up, press Save with ``grade`` and ``comment``, return it."""
+        student = student or self.aoki
+        fake = DialogStreamlit(self.ss, **choices)
+        with mock.patch.object(app, "st", fake):
+            try:
+                app.edit_grade_dialog.__wrapped__(student.student_id, EXAM, letter)
+            except fake.Rerun:
+                pass
+        return fake
+
+
+class AbsentStudentTests(_DialogBase):
+    """A student with no paper counts 0 only where a classmate has a grade (D10)."""
+
+    def setUp(self):
+        super().setUp()
+        self.absent = self.gb.get_or_create("100099")
+
+    def zeros(self):
+        return {c: len(app.missing_zero_points(self.absent, c)) for c in "ABCD"}
+
+    def row(self):
+        return next(r for r in app.assignment_table() if r["name"] == EXAM)
+
+    def test_no_grade_yet_means_no_zero(self):
+        self.assertEqual(self.zeros(), {"A": 0, "B": 0, "C": 0, "D": 0})
+
+    def test_one_grade_brings_a_zero_on_that_criterion_only(self):
+        self.decide("B", 5)
+        self.assertEqual(self.zeros(), {"A": 0, "B": 1, "C": 0, "D": 0})
+        self.assertEqual(app.zero_criteria(self.row()), ["B"])
+
+    def test_each_criterion_joins_as_it_gets_its_first_grade(self):
+        self.decide("B", 5)
+        self.decide("D", 3, self.gb.students[BABA])
+        self.assertEqual(self.zeros(), {"A": 0, "B": 1, "C": 0, "D": 1})
+
+    def test_clearing_the_only_grade_takes_the_zero_away(self):
+        self.decide("B", 5)
+        self.decide("B", None)
+        self.assertEqual(self.zeros(), {"A": 0, "B": 0, "C": 0, "D": 0})
+
+    def test_an_excused_or_awaiting_student_still_has_no_zero(self):
+        self.decide("B", 5)
+        self.assertEqual(app.missing_zero_points(self.gb.students[BABA], "B"), [])
+        self.ss["excused_flags"][app.excused_key(self.absent.student_id, EXAM)] = True
+        self.assertEqual(self.zeros(), {"A": 0, "B": 0, "C": 0, "D": 0})
+
+    def test_other_assignments_still_count_every_listed_criterion(self):
+        row = {"criteria": "A,C", "is_exam": False}
+        self.assertEqual(app.zero_criteria(row), ["A", "C"])
+
+    def test_the_pop_up_doesnt_call_an_ungraded_criterion_missing(self):
+        self.decide("B", 5)
+        fake = self.open_dialog("C", self.absent, grade=None)
+        self.assertIn("not graded yet", fake.markdowns[0])
+        self.assertIsNone(fake.select["index"])
+        self.assertIsNone(app.find_score(self.absent, EXAM, "C"))
+        fake = self.open_dialog("B", self.absent, grade=0)
+        self.assertIn("missing (counts as 0)", fake.markdowns[0])
+        self.assertIsNone(app.find_score(self.absent, EXAM, "B"))
+
+    def test_a_first_grade_can_be_entered_on_an_ungraded_criterion(self):
+        self.open_dialog("C", self.absent, grade=0)
+        self.assertEqual(app.find_score(self.absent, EXAM, "C").value, 0)
+        self.assertEqual(self.asg.criteria, ["A", "B", "C", "D"])
+
+
+class ReportRowTests(_DeckBase):
+    """The report's marks table says the same as Window 3."""
+
+    def rows(self, student):
+        from docx import Document
+        document = Document()
+        self.ss.update(unit_plan=None, final_override={}, llm_response={})
+        # Only the marks table is under test.
+        stubs = {"_trend_png": lambda s: None, "student_email_for": lambda s: "",
+                 "active_class_dict": lambda: {}, "subject_label": lambda: "",
+                 "aggregate_with_policy": lambda s, c: None, "report_cfg": lambda: {},
+                 "student_term_grades": lambda s: (0, 0, 0, None, None)}
+        with mock.patch.multiple(app, **stubs):
+            app._student_docx(document, student, "Weighted Median")
+        return [[cell.text for cell in row.cells] for table in document.tables
+                for row in table.rows if row.cells[0].text == EXAM]
+
+    def test_a_paper_with_no_grade_is_awaiting_decision_with_no_zero(self):
+        self.decide("B", 5)
+        rows = self.rows(self.gb.students[BABA])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0][2], rows[0][4]), ("—", "awaiting decision"))
+
+    def test_no_paper_shows_zero_only_where_a_classmate_has_a_grade(self):
+        self.decide("B", 5)
+        rows = self.rows(self.gb.get_or_create("100099"))
+        self.assertEqual([(r[1], r[2], r[4]) for r in rows], [("B", "0", "missing = 0")])
+
+    def test_excused_lists_every_criterion(self):
+        self.decide("B", 5)
+        absent = self.gb.get_or_create("100099")
+        self.ss["excused_flags"][app.excused_key(absent.student_id, EXAM)] = True
+        rows = self.rows(absent)
+        self.assertEqual([r[1] for r in rows], list("ABCD"))
+        self.assertTrue(all(r[4] == "excused" for r in rows))
+
+
+class RemoveExamGradeTests(_DialogBase):
+    def test_an_exam_grade_offers_no_grade(self):
+        self.decide("B", 5)
+        fake = self.open_dialog("B", grade=5)
+        self.assertEqual(fake.select["options"][0], None)
+        self.assertEqual(fake.select["options"][fake.select["index"]], 5)
+        self.assertEqual(app._exam_grade_label(None), "No grade")
+
+    def test_choosing_it_removes_only_that_grade(self):
+        self.decide("B", 5)
+        self.decide("D", 4)
+        self.open_dialog("B", grade=None)
+        self.assertIsNone(self.grade("B"))
+        self.assertEqual(self.grade("D").value, 4)
+        self.assertEqual(self.asg.score_count, 1)
+        self.assertEqual(self.asg.criteria, ["A", "B", "C", "D"])
+
+    def test_a_grade_on_a_criterion_no_longer_mapped_can_go(self):
+        self.decide("B", 5)
+        self.meta["criteria"]["r2"] = "—"
+        self.open_dialog("B", grade=None)
+        self.assertIsNone(self.grade("B"))
+        self.assertEqual(self.asg.criteria, ["A", "C", "D"])
+
+    def test_a_plain_marks_exam_keeps_its_criterion_when_the_last_grade_goes(self):
+        self.meta["rubrics"] = []
+        self.meta["criteria"] = {}
+        app._write_exam_grade(self.aoki, self.asg, "A", 6, datetime(2026, 11, 1), "", "banded")
+        app._refresh_exam_counts(self.asg, ["A"])
+        self.open_dialog("A", grade=None)
+        self.assertIsNone(self.grade("A"))
+        self.assertEqual(self.asg.criteria, ["A"])
+        self.assertEqual(self.asg.score_count, 0)
+
+    def test_it_returns_to_awaiting_when_it_was_the_last_one(self):
+        self.decide("B", 5)
+        self.open_dialog("B", grade=None)
+        row = next(r for r in app.assignment_table() if r["name"] == EXAM)
+        self.assertTrue(app.awaiting_exam_decision(self.aoki, row))
+
+    def test_a_normal_assignment_offers_no_such_choice(self):
+        self.assertEqual(app._exam_grade_label(3), "3")
+        self.gb.assignments.append(Assignment(name="Plain", class_name=CLASS, criteria=["A"]))
+        self.aoki.add_score(CriterionScore(Criterion.A, 4, datetime(2026, 11, 1), assignment="Plain"))
+        fake = DialogStreamlit(self.ss, grade=4)
+        with mock.patch.object(app, "st", fake):
+            with self.assertRaises(fake.Rerun):
+                app.edit_grade_dialog.__wrapped__(AOKI, "Plain", "A")
+        self.assertEqual(fake.select["options"], list(range(9)))
+        self.assertEqual(fake.select["index"], 4)
+
+
+class PopUpCommentTests(_DialogBase):
+    def setUp(self):
+        super().setUp()
+        self.result().comment = "Strong overall composition."
+        self.ss.update(unit_plan=None, teacher_remarks={}, final_override={},
+                       effort_by_term={}, report_cfg={})
+
+    def in_term_comment(self):
+        return app._exam_feedback_for(self.aoki)[0].overall
+
+    def test_a_new_grade_starts_with_the_papers_comment(self):
+        fake = self.open_dialog("B", grade=5)
+        self.assertEqual(fake.area["value"], "Strong overall composition.")
+        self.assertEqual(self.grade("B").comment, "Strong overall composition.")
+        self.assertEqual(self.in_term_comment(), ["Strong overall composition"])
+
+    def test_clearing_the_box_is_still_respected(self):
+        self.open_dialog("B", grade=5, comment="")
+        self.assertEqual(self.grade("B").comment, "")
+        self.assertEqual(app._exam_feedback_for(self.aoki), [])
+
+    def test_an_edit_is_what_goes_in(self):
+        self.open_dialog("B", grade=5, comment="My own words.")
+        self.assertEqual(self.in_term_comment(), ["My own words"])
+
+    def test_an_existing_grade_keeps_its_own_comment(self):
+        self.decide("B", 5)
+        self.grade("B").comment = "Edited before."
+        fake = self.open_dialog("B", grade=5)
+        self.assertEqual(fake.area["value"], "Edited before.")
+
+
 class GroupingTests(_DeckBase):
     def test_levels_group_under_their_criterion(self):
         groups, unmapped = self.groups()

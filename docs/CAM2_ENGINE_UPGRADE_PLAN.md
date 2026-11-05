@@ -752,8 +752,8 @@ on the current pin is otherwise unchanged. The I2 fix can ship by itself.
   - **An update keeps the comment, late flag and report flag.** A blank comment takes the
     new one. Phase 3's re-send handling (Q3) is what brings a corrected comment through.
   - **Changing the marks panel's criterion now adds a grade, not moves it,** and Apply says
-    so. There's no way to remove one until Phase 3's blank dropdown, and D18 means that
-    gap never reaches a release.
+    so. The grade pop-up's **No grade** choice (Phase 3) removes one, and D18 means the gap
+    before it never reaches a release.
   - **The `ExamResult.percent` property is gone.** Nothing called it, and it clashed with
     the new field.
   - **Window 1's dropdowns follow the grade.** Streamlit keeps a keyed selectbox's old value
@@ -897,7 +897,7 @@ the wording without settling everything.
   - **Exam comments did feed both strengths and growth** in every comment read.
   - **Still to check:** real comments on the teacher's usual model, and Japanese text, which
     the trial didn't cover.
-- **Tests on the pin:** CAM 424 (8 skipped, all waiting for a version 2 session), CAM2 216.
+- **Tests on the pin:** CAM 445 (8 skipped, all waiting for a version 2 session), CAM2 216.
 - **Outside the repo,** with CAM2's `phase1-slides-and-comment-limits` branch at `3696d1e`
   as `exam_grading/`: those 8 pass, and only the two I1 tests fail, as I7 expects.
 - **Browser, in a sandbox on Windows,** on that branch and then the pin: the 12-screen
@@ -919,8 +919,31 @@ the wording without settling everything.
     and assignments use. Only question comments can be left out, so very long drafts or
     several overall comments can take the total past 6,000.
   - **`ExamResult.suggested_band` is gone,** since nothing may suggest a grade from marks.
-- **For Phase 4:** update the two I1 tests, and recheck the Window 3 wording once only typed
-  final levels arrive.
+- **Three problems found in review, and fixed (2026-11-06, the teacher's go-ahead):**
+  - **A student with no paper counted 0 on every mapped criterion once any classmate had one
+    grade.** Now they count 0 only on a criterion where a classmate has a grade (D10). Window
+    3 shows the others as `not graded yet`, still clickable, and a report lists only the zeros.
+    The row on a manually created exam with no grades yet used to say `0 (missing)` too, though
+    the math never counted it, and now says the same.
+  - **Some exam grades couldn't be removed:** on a plain marks exam, and on a criterion no
+    longer mapped. The grade pop-up now offers **No grade** on any exam's grade. Saving it also
+    keeps the exam's mapped criteria listed, which the pop-up used to drop.
+  - **A grade decided in the pop-up lost the overall comment,** because the comment box started
+    empty, which counts as clearing it (Q3). A new grade on a paper now starts with its overall
+    comment, and clearing the box is still respected.
+- **Checked since the first run, in a sandbox on Windows:** the real app on fictional exams, by
+  mouse: the pop-up showing the paper's comment, saving it, a student with no paper showing 0
+  on the graded criterion only, and adding then removing a plain marks exam's grade. **Window
+  2's `awaiting decision` tag** also showed correctly, which Phase 2 hadn't run. **The report's
+  rows** ran in tests, not through a downloaded report.
+- **For Phase 4:**
+  - update the two I1 tests, and recheck the Window 3 wording once only typed final levels
+    arrive;
+  - **read CAM2's adjusted figures.** The CAM2 going into the tag lets a teacher type over a
+    report's total or percentage (`report_total`, `report_percent`, `adjusted`), and
+    `read_session` reads only the calculated `total` and `percent`, so a report could say 18/20
+    with CAM showing 15/20. Show the adjusted figure beside the calculated one, read-only, and
+    add it to the matrix. This comes from reading the code, and hasn't been run.
 
 ### Phase 4 — Pull CAM2, notices, bundle · M–L
 
@@ -948,6 +971,8 @@ the wording without settling everything.
 - **Say where they are.** Add a short line in English and Japanese in the README, the
   bundle's start-up instructions and CAM's About or Help area, with the same wording
   approach as CAM2's READ ME FIRST. Release notes mention the licence.
+- Read CAM2's adjusted report figures in `read_session`, and show them beside the calculated
+  ones (see Phase 3's progress note).
 - `python tools/run_all_tests.py` passes, including with PyMuPDF 2.0.
 - Sandbox end to end with `exam_grading/tools/make_sample_exam.py` and a real browser:
   marks; rubric with and without final levels; levels on one criterion across many
