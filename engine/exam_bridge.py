@@ -115,6 +115,8 @@ class ExamSession:
     rubrics: List[dict]                 # [{"id": "r1", "name": "Criterion A", "max": 8}]
     max_total: int                      # of the marks questions; 0 when there are none
     papers: List[SessionPaper] = field(default_factory=list)
+    # label -> {"rubrics": [rubric id], "max": marks maximum, 0 for a level}
+    question_info: Dict[str, dict] = field(default_factory=dict)
 
 
 def _exam_mode(shapes: List[dict], started_as: str) -> str:
@@ -213,6 +215,9 @@ def read_session(folder: str, assignment: Optional[str] = None) -> ExamSession:
                  for r in config.get("rubrics") or []],
         max_total=max_total,
         papers=papers,
+        question_info={labels[q["id"]]: {
+            "rubrics": list(summary_mod.question_rubric_ids(config, q)),
+            "max": int(q.get("max") or 0)} for q in questions},
     )
 
 
@@ -386,36 +391,118 @@ def to_band(level: int, rubric_max: int) -> int:
     return max(0, min(8, level))
 
 
-def final_level_default(current: Optional[int], exam_value: Optional[int], sent: int) -> int:
-    """What a final level's dropdown shows: CAM2's grade while the grade is
-    empty or still CAM2's own, otherwise the grade the teacher set."""
-    if current is None or current == exam_value:
-        return sent
-    return current
-
-
-def final_level_action(current: Optional[int], exam_value: Optional[int],
-                       chosen: int, sent: int) -> str:
-    """What Apply does with one student's mapped final level (Phase 2's re-send
-    rule, which runs here and never at Sync). All values are on the 0-8 scale.
+def final_level_action(current: Optional[int], exam_value: Optional[int], sent: int) -> str:
+    """What Apply does with one student's mapped final level (the re-send rule,
+    which runs here and never at Sync). All values are on the 0-8 scale.
 
     ``current`` and ``exam_value`` come from the existing grade (None when there
-    is none, or when it has no record of CAM2's value), ``chosen`` is the
-    dropdown and ``sent`` is CAM2's level.
+    is none, or when it has no record of CAM2's value), and ``sent`` is CAM2's
+    level.
 
-    * ``"write"``: nothing is there yet, or the teacher moved the dropdown, so
-      write ``chosen``. Only a visible, deliberate choice replaces their grade.
+    * ``"fill"``: nothing is there yet.
     * ``"update"``: the grade is still what CAM2 sent, and CAM2 now sends another.
     * ``"same"``: the grade already equals CAM2's.
     * ``"keep"``: the teacher set or edited the grade. It stays, and the caller
       lists it."""
-    if current is None or chosen != current:
-        return "write"
+    if current is None:
+        return "fill"
     if current == sent:
         return "same"
     if current == exam_value:
         return "update"
     return "keep"
+
+
+def rubric_mapping(rubrics: List[dict], saved: Optional[dict] = None) -> Dict[str, str]:
+    """Which CAM criterion each rubric counts toward: {rubric id: letter}.
+
+    The teacher's choice in ``saved`` wins ("—" means not counted). Otherwise a
+    rubric maps by its name, so "Criterion A" to "Criterion D" need nothing set
+    (P2). Several rubrics may share a letter (D11)."""
+    saved = saved or {}
+    mapping = {}
+    for rubric in rubrics or []:
+        rid = rubric.get("id")
+        letter = saved[rid] if rid in saved else default_criterion(rubric.get("name", ""))
+        if letter in ("A", "B", "C", "D"):
+            mapping[rid] = letter
+    return mapping
+
+
+def _level_text(label: str, value, top: int, counted: list) -> str:
+    """One question's evidence: ``Screen 03: 5``, or ``5/6`` when ``top`` is
+    given, for marks and for a rubric that doesn't go to 8, since nothing is
+    scaled here (P4). A question not counted because of a choice group is still
+    shown, and says so. One not graded yet has nothing to count."""
+    if value is None:
+        return f"{label}: —"
+    if value == EXAM_NOT_ANSWERED:
+        text = f"{label}: not answered"
+    elif top:
+        text = f"{label}: {value}/{top}"
+    else:
+        text = f"{label}: {value}"
+    return text + " (not counted)" if counted and label not in counted else text
+
+
+def _rubric_items(result: ExamResult, rid: str, top: int, questions: dict) -> List[str]:
+    """Everything on this paper about one rubric, in question order: each level,
+    and each mark ticked on it (D11)."""
+    labels = list(questions) or list(result.levels)
+    items = []
+    for label in labels:
+        info = questions.get(label) or {}
+        on_rubric = rid in (info.get("rubrics") or []) or rid in result.levels.get(label, {})
+        if not on_rubric:
+            continue
+        marks_max = int(info.get("max") or 0)
+        if label in result.not_answered:
+            items.append(_level_text(label, EXAM_NOT_ANSWERED, 0, result.counted))
+        elif marks_max:
+            items.append(_level_text(label, result.questions.get(label), marks_max,
+                                     result.counted))
+        else:
+            items.append(_level_text(label, result.levels.get(label, {}).get(rid),
+                                     0 if top == 8 else top, result.counted))
+    return items
+
+
+def criterion_groups(result: ExamResult, rubrics: List[dict], mapping: Dict[str, str],
+                     questions: Optional[dict] = None) -> Tuple[List[dict], List[dict]]:
+    """A paper's evidence grouped by criterion, for Window 3 (D10, D11, D13).
+
+    Returns ``(groups, unmapped)``. Each group is ``{"letter", "rubric_ids",
+    "rubrics": [{"id", "name", "items", "marks", "final", "max", "band"}]}``, in
+    A to D order. ``unmapped`` holds the same rubric rows for rubrics that count
+    toward no criterion and have something on this paper. This only arranges what
+    CAM2 sent: it never averages, suggests or converts, except that ``band`` puts
+    a typed final level on the 0-8 scale (P4)."""
+    questions = questions or {}
+
+    def row(rubric: dict) -> dict:
+        rid = rubric.get("id")
+        top = int(rubric.get("max") or 8)
+        final = result.final_levels.get(rid)
+        return {"id": rid, "name": rubric.get("name") or rid, "max": top,
+                "items": _rubric_items(result, rid, top, questions),
+                "marks": result.criterion_marks.get(rid),
+                "final": final,
+                "band": to_band(final, top) if final is not None else None}
+
+    by_letter: Dict[str, List[dict]] = {}
+    unmapped = []
+    for rubric in rubrics or []:
+        rid = rubric.get("id")
+        if rid in mapping:
+            by_letter.setdefault(mapping[rid], []).append(row(rubric))
+        else:
+            one = row(rubric)
+            if any(not item.endswith(": —") for item in one["items"]) or one["marks"]:
+                unmapped.append(one)
+    groups = [{"letter": letter, "rubrics": by_letter[letter],
+               "rubric_ids": [r["id"] for r in by_letter[letter]]}
+              for letter in sorted(by_letter)]
+    return groups, unmapped
 
 
 def exam_basis(result: ExamResult, rubric_ids=()) -> str:

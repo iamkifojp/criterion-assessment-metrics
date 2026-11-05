@@ -7,7 +7,8 @@ Q4's trial still sets the F6 wording in Phase 3. The smaller points
 (§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done.
 Phase 1's code is built on CAM2's `phase1-slides-and-comment-limits` branch, not yet merged
 or tagged (see its progress note). Phase 2 is built on CAM's `cam2-upgrade-phase2` branch
-(see its progress note). Nothing in Phases 2W to 6 is built yet.
+and Phase 3 on `cam2-upgrade-phase3` (see their progress notes). Phases 2W and 4 to 6 aren't
+built yet.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -868,6 +869,58 @@ tests show that:
 - a re-sent comment replaces only copies the teacher hasn't edited;
 - material over the limit leaves out whole question comments, keeps every overall comment,
   and reports the number left out.
+
+**Progress, 2026-11-06.** Built on the current pin, fictional data only. Every "done when"
+above is covered by tests. The Q4 trial ran on fictional students (below), and it improved
+the wording without settling everything.
+
+- **The Q4 trial.** Fresh agents on the Sonnet family wrote each comment from the real
+  compiled prompt, seeing nothing about the trial. The app's default is `claude-sonnet-4-6`,
+  so this isn't exactly that model, and each row is a small sample of synthetic comments.
+  "Copied" counts words inside a run of 5 or more that also appears in the exam source.
+
+  | Round | Wording | Comments | Length against target | Copied | Longest run |
+  |---|---|---|---|---|---|
+  | 1 | "in your own words rather than repeating their phrases" | 8 | 100–110% | 11–29% | 12 words |
+  | 2 | "no run of five or more words matches" | 8 | 92–107% | 0–7% | 5 words |
+  | 3 | Round 2's, and the word limit as a ceiling | 4 | 88–102% | 0–12% | 9 words |
+
+  - **Copying is much reduced, not gone.** Round 3 kept round 2's wording on copying and still
+    gave a 9-word run in three of four comments, so round 2's result was partly chance.
+  - **Copying didn't get worse as the source shrank.** The limit (P13) keeps the material in
+    reach, but this trial doesn't show it reduces copying.
+  - **Padding isn't solved.** A 47-word source gave 89 words against a 100-word limit, but 153
+    against a 150-word limit. The ceiling didn't noticeably shorten comments with plenty of
+    material (88–98%).
+  - **A conflict this exposed is fixed.** The closing "Base the narrative ONLY on…" line left
+    out the exam block.
+  - **Exam comments did feed both strengths and growth** in every comment read.
+  - **Still to check:** real comments on the teacher's usual model, and Japanese text, which
+    the trial didn't cover.
+- **Tests on the pin:** CAM 424 (8 skipped, all waiting for a version 2 session), CAM2 216.
+- **Outside the repo,** with CAM2's `phase1-slides-and-comment-limits` branch at `3696d1e`
+  as `exam_grading/`: those 8 pass, and only the two I1 tests fail, as I7 expects.
+- **Browser, in a sandbox on Windows,** on that branch and then the pin: the 12-screen
+  fixture with its A 1, B 5, C 2 and D 5 levels grouped, a decision, blank clearing it, Apply
+  with its summary, the changed-levels flag and Keep grade, an unfinished paper, a mixed and
+  a weighted exam, the plain marks panel, Add assignment, and the exam block in a compiled
+  prompt. Generating a comment through an AI wasn't run.
+- **Choices this phase settled:**
+  - **Window 1 has no per-student dropdowns for an exam with rubrics.** P2 keeps the mapping,
+    the progress count and one Apply, so the re-send rule no longer has a dropdown to read.
+  - **A decision made in Window 3 has no `exam_value`,** even if it equals CAM2's level, so a
+    re-send can never change it.
+  - **A typed final level is shown and isn't written until Apply,** because someone must
+    confirm the mapping (P2). On this pin the suggested levels also arrive as final levels,
+    and they show the same way until Phase 4.
+  - **Keep grade was added beside the flag.** Without it, the flag could be cleared only by
+    changing the grade and changing it back.
+  - **P13 in numbers:** exams can always use 4,000 characters, and up to 6,000 less what drafts
+    and assignments use. Only question comments can be left out, so very long drafts or
+    several overall comments can take the total past 6,000.
+  - **`ExamResult.suggested_band` is gone,** since nothing may suggest a grade from marks.
+- **For Phase 4:** update the two I1 tests, and recheck the Window 3 wording once only typed
+  final levels arrive.
 
 ### Phase 4 — Pull CAM2, notices, bundle · M–L
 

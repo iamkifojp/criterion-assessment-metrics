@@ -166,12 +166,16 @@ older CAM ignores them on load and drops them on save.
 | `exam_value` | int 0–8 | The grade CAM2's final level gave when this grade was written, after scaling. While `value` equals it, the grade is still CAM2's and a re-send may update it at Apply. Otherwise, or without it, the grade is the teacher's: it stays, and Apply lists it. |
 | `exam_basis` | str | Short hash of the levels and marks the decision saw, for Window 3's "levels changed since you decided" flag (P6). |
 
-**Grades on an exam.** At most one per student, exam and criterion. Sync replaces
-the `ExamResult` and never writes a grade; only Apply and the edit dialog do.
-Apply changes only criteria with a new decision. A student with a result and no
-grade on the exam is ⏳ awaiting a decision (`awaiting_exam_decision`): no invented
-0, on any criterion. A student with no result is Missing = 0, as with any
-assignment.
+**Grades on an exam.** At most one per student, exam and criterion. The paper's
+levels and marks are evidence, and only the teacher's 0–8 decision is a grade. It's
+made in Window 3, one per criterion, and a decision made there has no `exam_value`,
+so a re-send can't change it. Window 1's Apply carries over final levels typed in
+CAM2. A plain marks exam keeps Window 1's class-wide panel, whose dropdowns start
+blank. Sync replaces the `ExamResult` and never writes a grade, though a grade's
+comment still equal to the earlier result's takes the new one. Apply changes only
+criteria with a new final level. A student with a result and no grade on the exam is
+⏳ awaiting a decision (`awaiting_exam_decision`): no invented 0, on any criterion. A
+student with no result is Missing = 0, as with any assignment.
 
 ### A.5 File Count / Files — read-only completeness pass (the "Awaiting Grade" gate)
 
@@ -781,6 +785,7 @@ ownership indexes or class mirrors.
       "session_id": "f3f0…",
       "rubrics": [{"id": "r1", "name": "Criterion A", "max": 8}],
       "criteria": {"r1": "A", "r2": "—"},   // teacher's mapping, "—" = not counted
+      "questions": {"Q1": {"rubrics": ["r1"], "max": 0}},  // label -> its rubrics, marks max
       "papers": {"100001": "s001"}          // roster key -> CAM2 paper id
     }
   }
@@ -790,12 +795,13 @@ ownership indexes or class mirrors.
 - **`folder`** is recorded when the exam is first opened in CAM2 (or first
   synced) and never changes, so renaming the exam in CAM keeps its session.
   Two exam names that sanitise to one folder name get `"<name> (2)"`.
-- **`mode`, `session_id`, `rubrics`, `papers`** are rewritten by every Sync
-  that reads the session. `papers` drives the Window 1 name-crop preview.
-- **`criteria`** is the teacher's: written when a rubric exam's levels are
-  applied in Window 1, and used as the dropdowns' defaults afterwards. Before
-  that, each rubric defaults from its name ("Criterion B", "Crit. B", "基準B",
-  "B" → B).
+- **`mode`, `session_id`, `rubrics`, `questions`, `papers`** are rewritten by
+  every Sync that reads the session. `papers` drives the Window 1 name-crop
+  preview, and `questions` lets Window 3 group each question under its criteria.
+- **`criteria`** is the teacher's: written when a mapping is changed in Window 1,
+  and it wins from then on. Without an entry, a rubric maps by its name
+  ("Criterion B", "Crit. B", "基準B", "B" → B). Several rubrics may share a
+  criterion.
 - The Sync registry (`ingested_files`) holds one row per session folder with
   `"kind": "cam2"`, a `hash` of `cam2_session.json` + `grades.json`, a
   `stamp` (`[mtime_ns, size]` of each of the two files, for the cheap

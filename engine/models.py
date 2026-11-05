@@ -121,9 +121,9 @@ class ExamResult:
     Exams arrive from CAM2 (engine/exam_bridge.py) with per-question raw
     marks whose total is NOT on the MYP 0-8 band scale (e.g. 37/45), so they
     are kept in this separate container instead of :class:`CriterionScore`.
-    The teacher later assigns a 0-8 band to the exam (Window 1 dropdown), or
-    confirms CAM2's rubric levels, which is what enters the gradebook as a
-    normal ``CriterionScore``.
+    The levels and marks are evidence. Only the teacher's 0-8 decision on a
+    criterion (Window 3, or Window 1 for typed final levels and plain marks
+    exams) enters the gradebook, as a normal ``CriterionScore``.
     """
 
     assignment: str
@@ -170,12 +170,6 @@ class ExamResult:
     percent: Optional[float] = None
     weighted: bool = False
     criterion_marks: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-
-    def suggested_band(self) -> int:
-        """Proportional 0-8 band suggestion from the raw total."""
-        if not self.max_total:
-            return 0
-        return max(MIN_BAND, min(MAX_BAND, round(self.total / self.max_total * MAX_BAND)))
 
 
 @dataclass

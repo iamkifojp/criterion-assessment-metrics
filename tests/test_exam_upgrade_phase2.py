@@ -83,23 +83,12 @@ class _GradeBase(_AppBase):
     def result(self, key=AOKI):
         return self.gb.students[key].exam_results[EXAM]
 
-    def show_panel(self, mapping=MAPPING):
-        """Fill the dropdowns with what the panel shows the teacher."""
-        maxima = {r["id"]: r["max"] for r in self.ss["exam_sessions"][CLASS][EXAM]["rubrics"]}
-        for s, r in app._exam_results_for(EXAM):
-            for rid, letter in mapping.items():
-                if rid not in r.final_levels:
-                    continue
-                prior = app.find_score(s, EXAM, letter)
-                self.ss[f"rband_{EXAM}_{s.student_id}_{rid}"] = exam_bridge.final_level_default(
-                    prior.value if prior else None, prior.exam_value if prior else None,
-                    exam_bridge.to_band(r.final_levels[rid], maxima[rid]))
-
-    def apply(self, mapping=MAPPING, kept=None, show=True):
-        if show:
-            self.show_panel(mapping)
-        return app._apply_exam_rubric_levels(
-            self.asg, mapping, app._exam_results_for(EXAM), kept=kept)
+    def apply(self, mapping=MAPPING, kept=None):
+        results = app._exam_results_for(EXAM)
+        if kept is not None:
+            kept.extend((row["student"], row["letter"], row["current"], row["sent"])
+                        for row in app._final_level_plan(self.asg, mapping, results)["keep"])
+        return app._apply_exam_rubric_levels(self.asg, mapping, results)
 
     def grades(self, key=AOKI):
         student = self.gb.students[key]
@@ -191,26 +180,17 @@ class ResendRuleTests(_GradeBase):
     def test_action_table(self):
         action = exam_bridge.final_level_action
         cases = [
-            # current, exam_value, chosen, sent -> action
-            (None, None, 6, 6, "write"),    # fills an empty grade
-            (None, None, 4, 6, "write"),    # ...with the dropdown's value
-            (6, 6, 6, 7, "update"),         # still CAM2's, and CAM2 changed it
-            (6, 6, 6, 6, "same"),           # nothing new
-            (5, 6, 5, 7, "keep"),           # edited in CAM
-            (5, None, 5, 7, "keep"),        # no record of CAM2: the teacher's
-            (5, 6, 3, 7, "write"),          # the teacher moved the dropdown
-            (6, 6, 3, 7, "write"),
+            # current, exam_value, sent -> action
+            (None, None, 6, "fill"),        # an empty grade
+            (6, 6, 7, "update"),            # still CAM2's, and CAM2 changed it
+            (6, 6, 6, "same"),              # nothing new
+            (6, None, 6, "same"),           # the teacher's, and it matches
+            (5, 6, 7, "keep"),              # edited in CAM
+            (5, None, 7, "keep"),           # no record of CAM2: the teacher's
         ]
-        for current, exam_value, chosen, sent, expected in cases:
-            with self.subTest(current=current, exam_value=exam_value, chosen=chosen, sent=sent):
-                self.assertEqual(action(current, exam_value, chosen, sent), expected)
-
-    def test_dropdown_shows_cam2_only_while_the_grade_is_cam2s(self):
-        default = exam_bridge.final_level_default
-        self.assertEqual(default(None, None, 6), 6)
-        self.assertEqual(default(6, 6, 7), 7)
-        self.assertEqual(default(5, 6, 7), 5)
-        self.assertEqual(default(5, None, 7), 5)
+        for current, exam_value, sent, expected in cases:
+            with self.subTest(current=current, exam_value=exam_value, sent=sent):
+                self.assertEqual(action(current, exam_value, sent), expected)
 
     def test_fills_empty_and_records_the_grade_cam2_sent(self):
         self.apply()
@@ -230,14 +210,6 @@ class ResendRuleTests(_GradeBase):
         sc = app.find_score(self.aoki(), EXAM, "A")
         self.assertEqual((sc.value, sc.exam_value), (8, 8))
 
-    def test_an_unmoved_stale_dropdown_still_updates(self):
-        self.apply()
-        self.result().final_levels["r1"] = 8
-        kept = []
-        self.apply(kept=kept, show=False)
-        self.assertEqual(self.grades()["A"], [8])
-        self.assertEqual(kept, [])
-
     def test_a_grade_edited_in_cam_is_kept_and_listed(self):
         self.apply()
         app.find_score(self.aoki(), EXAM, "A").value = 3
@@ -255,19 +227,6 @@ class ResendRuleTests(_GradeBase):
         kept = []
         self.apply(kept=kept)
         self.assertEqual(self.grades()["A"], [6])
-        self.assertEqual(len(kept), 1)
-
-    def test_moving_the_dropdown_is_the_teachers_choice(self):
-        self.apply()
-        self.ss[f"rband_{EXAM}_{AOKI}_r1"] = 2
-        app._apply_exam_rubric_levels(self.asg, MAPPING, app._exam_results_for(EXAM))
-        sc = app.find_score(self.aoki(), EXAM, "A")
-        self.assertEqual((sc.value, sc.exam_value), (2, 6))
-        # So a later re-send doesn't touch it.
-        self.result().final_levels["r1"] = 8
-        kept = []
-        self.apply(kept=kept)
-        self.assertEqual(self.grades()["A"], [2])
         self.assertEqual(len(kept), 1)
 
     def test_nothing_new_changes_nothing(self):
@@ -626,8 +585,6 @@ class ApplyOnVersion2Tests(_AppBase):
             overall={"s001": {"final_levels": finals}})
 
     def apply(self):
-        for rid, level in self.gb.students[AOKI].exam_results[EXAM].final_levels.items():
-            self.ss[f"rband_{EXAM}_{AOKI}_{rid}"] = level
         return app._apply_exam_rubric_levels(
             self.gb.assignments[0], MAPPING, app._exam_results_for(EXAM))
 

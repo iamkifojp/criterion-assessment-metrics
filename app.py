@@ -113,6 +113,7 @@ from engine.aggregation import METHOD_60_40, METHOD_WEIGHTED_MEDIAN
 from engine.folder_dialog import documents_folder, pick_folder
 from engine import rubrics
 from engine import exam_bridge
+from engine import exam_feedback
 
 # --------------------------------------------------------------------------
 # Constants
@@ -4201,22 +4202,31 @@ def _ingest_cam2_session(class_name: str, exam: str, session, summary: dict) -> 
 
     Purge-replace, like a re-synced CSV: this exam's previous results are
     dropped and the session's are filed (by ``external_id``, then alias /
-    prefix, else the 🧩 pool). Grades already applied in Window 1 are kept.
+    prefix, else the 🧩 pool). Grades already decided are kept, and only a
+    comment still equal to the earlier result's follows a re-send (Q3).
     Returns the number of papers read."""
     roster_keys = {e.get("key") for e in st.session_state["rosters"].get(
         class_name, []) if e.get("key")}
     aliases = dict(st.session_state["work_aliases"].get(class_name, {}))
     matched, pool, auto_aliases = exam_bridge.route_session(
         session, roster_keys, aliases)
+    earlier_comment = {}
     for student in gb():
         results = getattr(student, "exam_results", {})
         prev = results.get(exam)
         if prev is not None and (student.student_id in roster_keys
                                  or prev.session_id == session.session_id):
+            earlier_comment[student.student_id] = prev.comment
             results.pop(exam)
     paper_of = {id(p.result): p.student_id for p in session.papers}
     for key, result in matched.items():
-        gb().get_or_create(key).exam_results[exam] = result
+        student = gb().get_or_create(key)
+        student.exam_results[exam] = result
+        if key in earlier_comment:
+            for bucket in student.scores.values():
+                for sc in bucket:
+                    if sc.assignment == exam and sc.comment == earlier_comment[key]:
+                        sc.comment = result.comment
 
     pool_map = st.session_state["unmatched_works"].setdefault(class_name, {})
     if pool:
@@ -4247,13 +4257,17 @@ def _ingest_cam2_session(class_name: str, exam: str, session, summary: dict) -> 
     asg.max_total = session.max_total
     asg.question_labels = list(session.question_labels)
     asg.sections = None
-    asg.note = (f"exam — CAM2 {session.mode or 'session'}; confirm grades in "
-                "Window 1")
+    asg.note = f"exam — CAM2 {session.mode or 'session'}; decide grades in Window 3"
     meta = st.session_state["exam_sessions"].setdefault(class_name, {}).setdefault(exam, {})
     meta.update(folder=os.path.basename(session.folder), mode=session.mode,
                 session_id=session.session_id, rubrics=list(session.rubrics),
+                questions=dict(session.question_info),
                 papers={key: paper_of.get(id(r), "") for key, r in matched.items()})
     meta.setdefault("criteria", {})
+    # Criteria arrive from CAM2, so each mapped one can be decided in Window 3.
+    mapped = exam_bridge.rubric_mapping(session.rubrics, meta["criteria"]).values()
+    if mapped:
+        _refresh_exam_counts(asg, mapped)
     return len(session.papers)
 
 
@@ -6145,8 +6159,12 @@ def build_class_comments_docx(students) -> bytes:
 def _current_term_evidence(student) -> list:
     """Build :class:`Evidence` items from the student's valid, included scores in
     the CURRENT term's active assignments — the raw material for slicing.
-    Excused assignments are left out of the prompt entirely."""
+    Excused assignments are left out of the prompt entirely. So are exams: their
+    comments always go in through the exam block, so they take no strength or
+    growth place and aren't sent twice (Q2). Their grades still count in the
+    criterion results and the trend."""
     names = current_term_assignment_names() - assessment_exclusions_for(student.student_id)
+    names -= {a.name for a in gb().assignments if getattr(a, "is_exam", False)}
     items = []
     for bucket in student.scores.values():
         for sc in bucket:
@@ -6160,6 +6178,58 @@ def _current_term_evidence(student) -> list:
                     comment=clean_comment(sc.comment),
                 ))
     return items
+
+
+def _exam_feedback_for(student) -> list:
+    """This term's exam comments for one student, for the term comment (F6).
+
+    Every exam On this term that isn't excused for the student, whether or not a
+    grade has been decided and even on an unfinished paper, because the teacher
+    sent those comments. The overall comment is whatever the grades say, each
+    different text once, so an edit or a clear in Window 3 is respected. With no
+    grades it's the paper's own (Q3). A comment on a question not counted because
+    of a choice group stays out (P12)."""
+    cls = st.session_state.get("active_class", "")
+    names = current_term_assignment_names() - assessment_exclusions_for(student.student_id)
+    out = []
+    for asg in gb().assignments:
+        if (not getattr(asg, "is_exam", False) or asg.name not in names
+                or getattr(asg, "class_name", "") != cls):
+            continue
+        r = getattr(student, "exam_results", {}).get(asg.name)
+        grades = [sc for bucket in student.scores.values() for sc in bucket
+                  if sc.assignment == asg.name and sc.is_valid]
+        texts = [sc.comment for sc in grades] if grades else ([r.comment] if r else [])
+        overall = [t for t in dict.fromkeys(clean_comment(t) for t in texts) if t]
+        questions = []
+        if r is not None:
+            labels = list(asg.question_labels) or list(r.question_comments)
+            for label in labels:
+                text = clean_comment(r.question_comments.get(label, ""))
+                graded = (label in r.questions or label in r.levels
+                          or label in r.not_answered)
+                if text and not (r.counted and graded and label not in r.counted):
+                    questions.append((label, text))
+        if overall or questions:
+            out.append(exam_feedback.ExamFeedback(asg.name, overall, questions))
+    return out
+
+
+def _prompt_material(student, cfg) -> dict:
+    """The source material a term comment draws on, after the limit in
+    ``engine.exam_feedback``. ``left_out`` counts question comments dropped."""
+    n_s = int(cfg.get("n_strengths", 2)) if cfg.get("inc_strengths") else 0
+    n_g = int(cfg.get("n_growth", 2)) if cfg.get("inc_growth") else 0
+    strengths, growths = select_evidence(_current_term_evidence(student), n_s, n_g)
+    draft_lines = [f"{a.name} (Criterion {', '.join(a.criteria) or 'unspecified'}): "
+                   f"{record.get('comment') or '; '.join(record.get('keywords', []))}"
+                   for a, record in draft_feedback_for(student)
+                   if record.get("comment") or record.get("keywords")]
+    others = (sum(len(e.as_text()) for e in strengths + growths)
+              + sum(len(line) for line in draft_lines))
+    exams, left_out = exam_feedback.limit_feedback(_exam_feedback_for(student), others)
+    return {"strengths": strengths, "growths": growths, "draft_lines": draft_lines,
+            "exam_lines": exam_feedback.feedback_lines(exams), "left_out": left_out}
 
 
 def _matched_task_lines(student) -> list:
@@ -6364,10 +6434,8 @@ def compile_prompt(student, cfg) -> str:
             missing_block = True
 
     # ---- 5/6. Best-vs-worst sliced evidence (Strengths / Growths) ----
-    evidence = _current_term_evidence(student)
-    n_s = int(cfg.get("n_strengths", 2)) if cfg.get("inc_strengths") else 0
-    n_g = int(cfg.get("n_growth", 2)) if cfg.get("inc_growth") else 0
-    strengths, growths = select_evidence(evidence, n_s, n_g)
+    material = _prompt_material(student, cfg)
+    strengths, growths = material["strengths"], material["growths"]
     if strengths:
         blocks.append(
             "[CURRENT TERM — STRENGTH EVIDENCE (highest-scoring pieces)]\n"
@@ -6379,15 +6447,23 @@ def compile_prompt(student, cfg) -> str:
             "Frame the growth areas from this material:\n  - "
             + "\n  - ".join(e.as_text() for e in growths))
 
-    draft_lines = [f"{a.name} (Criterion {', '.join(a.criteria) or 'unspecified'}): "
-                   f"{record.get('comment') or '; '.join(record.get('keywords', []))}"
-                   for a, record in draft_feedback_for(student)
-                   if record.get("comment") or record.get("keywords")]
-    if draft_lines:
+    if material["draft_lines"]:
         blocks.append("[CURRENT TERM — DRAFT FEEDBACK, NO MARKS]\n"
                       "Use these observations qualitatively. Do not infer a score, "
                       "zero, or completed summative achievement from a draft.\n  - "
-                      + "\n  - ".join(draft_lines))
+                      + "\n  - ".join(material["draft_lines"]))
+
+    # ---- 6b. Exam feedback (always included; one place for the second pull) ----
+    if material["exam_lines"]:
+        blocks.append("[CURRENT TERM — EXAM FEEDBACK]\n"
+                      "The teacher's own comments on this student's exam papers. Use "
+                      "them as a main source for both the strengths and the growth "
+                      "areas. Restate each point in your own words, so that no run of "
+                      "five or more words matches these comments. Don't pad: if there "
+                      "is little here, write a shorter comment than the word limit "
+                      "allows rather than adding general remarks. They carry no "
+                      "scores, so don't infer one.\n  - "
+                      + "\n  - ".join(material["exam_lines"]))
 
     # ---- 7. Trend trajectory (optional, math-engine derived) ----
     if cfg.get("inc_trend", True):
@@ -6433,8 +6509,11 @@ def compile_prompt(student, cfg) -> str:
         want.append("a short note per criterion")
     if want:
         req.append("Include: " + ", ".join(want) + ".")
-    req.append(f"Keep it to about {cfg['word_limit']} words, warm and "
-               "professional, using the student's pronouns.")
+    # With an exam block the limit is a ceiling, so thin material isn't padded out.
+    length = (f"Use up to about {cfg['word_limit']} words, and fewer when the "
+              "material above is thin" if material["exam_lines"]
+              else f"Keep it to about {cfg['word_limit']} words")
+    req.append(f"{length}, warm and professional, using the student's pronouns.")
     if cfg.get("tone_formal"):
         req.append("Tone: more formal and academic — measured, precise language "
                    "for an official report card.")
@@ -6449,7 +6528,8 @@ def compile_prompt(student, cfg) -> str:
             "'has room to improve'). The numeric data above is for your "
             "understanding only.")
     req.append("Base the narrative ONLY on the current term's curriculum, "
-               "criterion, strength, growth, draft feedback and trend sections above.")
+               "criterion, strength, growth, draft feedback, exam feedback and trend "
+               "sections above.")
     if late_block:
         req.append("If a notable share of tasks was late, acknowledge "
                    "submission habits briefly within the next steps.")
@@ -7144,8 +7224,12 @@ def add_assignment_dialog() -> None:
     with st.form("add_asg_form"):
         name = st.text_input("Name", placeholder="e.g. Perspective Drawing Task",
                              autocomplete="off")
-        kind = st.radio("Type", ["Assignment", "Draft — comments only", "Exam"], horizontal=True,
+        kind = st.radio("Type", ["Assignment", "Exam"], horizontal=True,
                         key="add_asg_kind")
+        # A form can't show this only for Assignment, so it stays visible (D16).
+        draft = st.checkbox("Draft — comments only", key="add_asg_draft",
+                            help="An assignment that keeps feedback without marks. "
+                                 "Has no effect on an exam.")
         when = st.date_input("Deadline / date", value=date.today(),
                              key="add_asg_date")
         crit = st.selectbox(
@@ -7169,19 +7253,21 @@ def add_assignment_dialog() -> None:
             st.error(f"'{name}' already exists.")
             return
         is_exam = kind == "Exam"
+        is_draft = bool(draft) and not is_exam
         gb().register_assignment(Assignment(
             name=name, criteria=[crit], ingested_at=datetime.combine(
                 when, datetime.min.time()),
             note=("manually created exam — set it up via 🛠 Exam setup"
                   if is_exam else "manually created assignment"),
             class_name=st.session_state["active_class"],
-            term=current_term(), is_exam=is_exam, is_draft=kind == "Draft — comments only"))
+            term=current_term(), is_exam=is_exam, is_draft=is_draft))
         st.session_state["date_override"][name] = when
         st.session_state["active"][name] = True
         st.session_state["archived"].discard(name)
         persist()
+        made = "draft" if is_draft else kind.lower()
         st.session_state["save_status"] = (
-            "ok", f"Created {kind.lower()} '{name}' ({current_term()}, "
+            "ok", f"Created {made} '{name}' ({current_term()}, "
                   f"Criterion {crit}).")
         st.rerun()
 
@@ -7479,7 +7565,7 @@ def _render_exam_banding() -> None:
             st.caption("No results for this exam yet. Grade it in CAM2 and "
                        "send it to CAM.")
             return
-        if any(r.mode == "rubric" for _, r in results):
+        if _exam_uses_criteria(asg, results):
             _render_cam2_rubric_banding(asg, results)
             return
         # A paper still being graded in CAM2 (or with a "teacher picks"
@@ -7494,6 +7580,10 @@ def _render_exam_banding() -> None:
                    f"· class raw average **{avg:.1f}** · {len(results)} student(s)"
                    f"{pending_note} · questions: "
                    f"{', '.join(asg.question_labels) or '—'}")
+        if any(r.weighted for _, r in results):
+            st.caption("ⓘ CAM2 weights this exam's marks. CAM shows its result "
+                       "beside the raw total and doesn't work a grade out of "
+                       "either.")
 
         crit_default = asg.criteria[0] if asg.criteria else "A"
         crit = st.selectbox(
@@ -7535,12 +7625,12 @@ def _render_exam_banding() -> None:
                 continue
             pct = (r.total / rmax * 100.0) if rmax else 0.0
             row[1].write(f"{r.total} / {rmax or '?'}")
-            row[2].write(f"{pct:.0f}%")
-            default = existing.get(s.student_id, r.suggested_band())
-            _seed_dropdown(f"band_{sel}_{s.student_id}",
-                           default if 0 <= default <= 8 else 0)
+            row[2].write(f"{r.percent:.1f}% weighted"
+                         if r.weighted and r.percent is not None else f"{pct:.0f}%")
+            # Blank until the teacher chooses: marks never suggest a grade (P3).
+            _seed_dropdown(f"band_{sel}_{s.student_id}", existing.get(s.student_id))
             row[3].selectbox(
-                " ", list(range(0, 9)),
+                " ", list(range(0, 9)), index=None, placeholder="—",
                 key=f"band_{sel}_{s.student_id}",
                 label_visibility="collapsed")
 
@@ -7566,14 +7656,15 @@ def _exam_band_time(asg) -> datetime:
     return asg.ingested_at or datetime.now()
 
 
-def _seed_dropdown(key: str, value: int) -> None:
-    """Show ``value`` in the keyed dropdown ``key``, whenever the value it
-    should show changes (a re-send, a Window 3 edit, another criterion).
+def _seed_dropdown(key: str, value) -> None:
+    """Show ``value`` (None for blank) in the keyed dropdown ``key``, whenever
+    the value it should show changes (a re-send, a Window 3 edit, another
+    criterion).
 
     A keyed selectbox ignores a changed ``index`` and keeps its old value, and
-    Apply would then write that stale value over the newer grade. The teacher's
+    that stale value could then be written over the newer grade. The teacher's
     own change stays until the value changes. Call it before the widget, and
-    don't also pass ``index``."""
+    give the widget ``index=None``."""
     shown = f"{key}__shown"
     if key not in st.session_state or st.session_state.get(shown) != value:
         st.session_state[key] = value
@@ -7610,15 +7701,15 @@ def _write_exam_grade(student, asg, letter: str, value: int, when, comment: str,
 
 def _exam_decision_basis(student, asg_name: str, letter: str) -> str:
     """``exam_basis`` for a decision on one criterion of an exam in the active
-    class, from the rubric mapping last saved in Window 1. "" when the student
-    has no result for it, as with any other assignment."""
+    class. "" when the student has no result for it, as with any other
+    assignment."""
     result = getattr(student, "exam_results", {}).get(asg_name)
     if result is None:
         return ""
     meta = st.session_state["exam_sessions"].get(
         st.session_state.get("active_class", ""), {}).get(asg_name) or {}
-    return exam_bridge.exam_basis(
-        result, [rid for rid, to in (meta.get("criteria") or {}).items() if to == letter])
+    mapping = exam_bridge.rubric_mapping(meta.get("rubrics"), meta.get("criteria"))
+    return exam_bridge.exam_basis(result, [rid for rid, to in mapping.items() if to == letter])
 
 
 def _refresh_exam_counts(asg, also_criteria=()) -> None:
@@ -7650,163 +7741,196 @@ def _apply_exam_bands(asg, crit_letter: str, results) -> int:
     return applied
 
 
-def _render_cam2_rubric_banding(asg, results) -> None:
-    """Window 1 panel for a CAM2 rubric-mode exam (D4).
+def _exam_meta(asg) -> dict:
+    """What Sync recorded about this exam's CAM2 session ({} if nothing yet)."""
+    return st.session_state["exam_sessions"].get(
+        getattr(asg, "class_name", ""), {}).get(asg.name) or {}
 
-    CAM2 has already worked out each student's final level per rubric (the
-    teacher's, or the suggested round-half-up average). Here each rubric is
-    mapped to a CAM criterion (defaulted from its name, remembered per exam)
-    and the levels are confirmed, one 0-8 dropdown per student and mapped
-    rubric. Applying writes one CriterionScore per mapped criterion."""
+
+def _exam_rubrics(asg, results=()) -> list:
+    """The exam's rubrics, plus any a paper mentions that Sync didn't list."""
+    rubrics = list(_exam_meta(asg).get("rubrics") or [])
+    known = {r.get("id") for r in rubrics}
+    seen = set()
+    for _, r in results:
+        seen |= set(r.final_levels) | set(r.criterion_marks)
+        for per in r.levels.values():
+            seen |= set(per)
+    return rubrics + [{"id": rid, "name": rid, "max": 8} for rid in sorted(seen - known)]
+
+
+def _exam_uses_criteria(asg, results) -> bool:
+    """False for a plain marks exam, which keeps the class-wide marks panel (P3)."""
+    return any(r.mode in ("rubric", "mixed") or r.criterion_marks for _, r in results)
+
+
+def _render_cam2_rubric_banding(asg, results) -> None:
+    """Window 1 panel for an exam with rubrics or marks on a criterion (P2).
+
+    The teacher decides each student's grade in Window 3. What stays here is
+    what applies to the whole class: which criterion each rubric counts toward
+    (defaulted from its name, remembered per exam, and several may share one), a
+    progress count, and one Apply for final levels typed in CAM2, with a summary
+    of what it would change. Someone has to confirm the mapping, so a typed level
+    never becomes a grade by itself."""
     meta = st.session_state["exam_sessions"].setdefault(
         getattr(asg, "class_name", ""), {}).setdefault(asg.name, {})
     saved = meta.setdefault("criteria", {})
-    rubrics = list(meta.get("rubrics") or [])
-    known = {r.get("id") for r in rubrics}
-    for rid in sorted({rid for _, r in results for rid in r.final_levels} - known):
-        rubrics.append({"id": rid, "name": rid, "max": 8})
+    rubrics = _exam_rubrics(asg, results)
     if not rubrics:
-        st.caption("This rubric exam has no rubrics yet.")
+        st.caption("This exam has no rubrics yet.")
         return
-    st.caption(f"Rubric exam from CAM2 · {len(results)} student(s) · each "
-               "rubric's final level becomes a grade on the criterion you map "
-               "it to.")
+    st.caption(f"Exam from CAM2 · {len(results)} student(s) · map each rubric to a "
+               "criterion, then decide each student's grade in Window 3.")
 
     options = ["—"] + list(CRIT_ORDER)
+    effective = exam_bridge.rubric_mapping(rubrics, saved)
     mapping: dict = {}
+    changed = False
     cols = st.columns(len(rubrics))
     for col, rub in zip(cols, rubrics):
         rid = rub["id"]
-        default = (saved[rid] if rid in saved
-                   else exam_bridge.default_criterion(rub.get("name", "")))
+        default = effective.get(rid, "—")
         pick = col.selectbox(
-            f"{rub.get('name') or rid} →", options,
-            index=options.index(default) if default in options else 0,
+            f"{rub.get('name') or rid} →", options, index=options.index(default),
             key=f"exam_rubcrit_{asg.name}_{rid}",
             help="The CAM criterion this CAM2 rubric counts toward "
                  "(— = not counted).")
+        if pick != default:
+            saved[rid] = pick
+            changed = True
         if pick != "—":
             mapping[rid] = pick
-    dupes = sorted(c for c, n in Counter(mapping.values()).items() if n > 1)
-    if dupes:
-        st.error(f"Two rubrics count toward Criterion {', '.join(dupes)} — "
-                 "map each criterion to one rubric.")
-    mapped = [r for r in rubrics if r["id"] in mapping]
-    scaled = [r for r in mapped if r.get("max") and r["max"] != 8]
+    if changed:
+        _refresh_exam_counts(asg, mapping.values())
+        persist()
+    if not mapping:
+        st.info("Map at least one rubric to a criterion to grade this exam.")
+        return
+    scaled = [r for r in rubrics if r["id"] in mapping and r.get("max") and r["max"] != 8]
     if scaled:
         st.caption("ⓘ " + "; ".join(f"{r.get('name') or r['id']} goes to "
                                      f"{r['max']}" for r in scaled)
-                   + " — its levels are scaled to 0–8.")
-    if not mapped:
-        st.info("Map at least one rubric to a criterion to grade this exam.")
+                   + ". Window 3 lists its levels as they are; only a final level "
+                     "typed in CAM2 is scaled to 0–8.")
+
+    letters = sorted(set(mapping.values()), key=CRIT_ORDER.index)
+    papers = [(s, r) for s, r in results if not is_excused(s.student_id, asg.name)]
+    st.caption("  ·  ".join(
+        f"Criterion {letter}: "
+        f"{sum(1 for s, _ in papers if find_score(s, asg.name, letter))} of "
+        f"{len(papers)} decided" for letter in letters))
+
+    plan = _final_level_plan(asg, mapping, results)
+    if plan["unfinished"]:
+        st.caption(f"⏳ {plan['unfinished']} paper(s) not finished in CAM2. Finish "
+                   "them there and send them to CAM again.")
+    if not any(plan[k] for k in ("fill", "update", "same", "keep", "both")):
+        st.caption("No final levels typed in CAM2, so there's nothing to apply.")
         return
-
-    existing = {(s.student_id, sc.criterion.value): sc
-                for s, sc in scores_for_assignment(asg.name) if sc.is_valid}
-    widths = [2.2] + [1.2] * len(mapped)
-    head = st.columns(widths, vertical_alignment="center")
-    head[0].caption("Student")
-    for col, rub in zip(head[1:], mapped):
-        col.caption(f"Crit {mapping[rub['id']]} · {rub.get('name') or rub['id']}")
-    n_unfinished = 0
-    for s, r in results:
-        row = st.columns(widths, vertical_alignment="center")
-        row[0].write(student_label(s))
-        if not r.complete:
-            n_unfinished += 1
-            row[1].caption("⏳ not finished in CAM2")
-            continue
-        for col, rub in zip(row[1:], mapped):
-            final = r.final_levels.get(rub["id"])
-            if final is None:
-                col.caption("—")
-                continue
-            prior = existing.get((s.student_id, mapping[rub["id"]]))
-            default = exam_bridge.final_level_default(
-                prior.value if prior else None, prior.exam_value if prior else None,
-                exam_bridge.to_band(final, rub.get("max") or 8))
-            _seed_dropdown(f"rband_{asg.name}_{s.student_id}_{rub['id']}",
-                           default if 0 <= default <= 8 else 0)
-            col.selectbox(
-                " ", list(range(0, 9)),
-                key=f"rband_{asg.name}_{s.student_id}_{rub['id']}",
-                label_visibility="collapsed",
-                help=f"CAM2 final level: {final}")
-
-    if st.button("Apply grades to gradebook", key=f"apply_bands_{asg.name}",
-                 type="primary", disabled=bool(dupes)):
-        for rub in rubrics:
-            saved[rub["id"]] = mapping.get(rub["id"], "—")
-        kept: list = []
-        n = _apply_exam_rubric_levels(asg, mapping, results, kept=kept)
-        letters = ", ".join(sorted(set(mapping.values()), key=CRIT_ORDER.index))
-        msg = f"Graded {n} student(s) for '{asg.name}' → Criterion {letters}."
-        if n_unfinished:
-            msg += f" {n_unfinished} paper(s) not finished in CAM2 skipped."
-        if kept:
-            msg += (f" Kept {len(kept)} grade(s) you set: " + "; ".join(
-                f"{student_label(s)} Criterion {letter} stays {grade} "
-                f"(CAM2 sent {sent})" for s, letter, grade, sent in kept) + ".")
-        st.session_state["save_status"] = ("ok", msg)
+    summary = []
+    if plan["fill"]:
+        summary.append(f"fill {len(plan['fill'])} empty grade(s)")
+    if plan["update"]:
+        summary.append(f"update {len(plan['update'])} grade(s) CAM2 sent earlier")
+    st.caption("Apply will " + " and ".join(summary) + "." if summary
+               else "Every final level from CAM2 is already applied or kept.")
+    if plan["keep"]:
+        st.caption(f"It keeps {len(plan['keep'])} grade(s) you set: " + "; ".join(
+            f"{student_label(row['student'])} Criterion {row['letter']} stays "
+            f"{row['current']} (CAM2 sent {row['sent']})" for row in plan["keep"]) + ".")
+    if plan["both"]:
+        st.caption(f"{len(plan['both'])} paper(s) have two final levels on one "
+                   "criterion. Neither is written: decide those in Window 3.")
+    if st.button("Apply final levels to gradebook", key=f"apply_bands_{asg.name}",
+                 type="primary", disabled=not summary):
+        n = _apply_exam_rubric_levels(asg, mapping, results)
+        st.session_state["save_status"] = (
+            "ok", f"Applied final levels for {n} student(s) in '{asg.name}' → "
+                  f"Criterion {', '.join(letters)}.")
         st.rerun()
 
 
-def _apply_exam_rubric_levels(asg, mapping: dict, results, kept=None) -> int:
-    """Write a rubric exam's confirmed final levels (``mapping`` = CAM2 rubric
-    id → CAM letter), by the re-send rule in ``exam_bridge.final_level_action``.
+def _final_level_plan(asg, mapping: dict, results) -> dict:
+    """What Apply would do with each final level, changing nothing.
 
-    Only a criterion with a final level on this paper can change, so a grade with
-    nothing new stays (issue I2), and levels and marks alone never write one.
-    Two rubrics on one criterion that both have a final level write nothing:
-    the teacher decides (D11). Unfinished papers are skipped. A grade kept as the
-    teacher's is added to ``kept`` as ``(student, letter, grade, CAM2's grade)``.
-    Returns how many students have a grade that follows this Apply."""
-    when = _exam_band_time(asg)
-    meta = st.session_state["exam_sessions"].get(
-        getattr(asg, "class_name", ""), {}).get(asg.name) or {}
-    maxima = {r.get("id"): r.get("max") or 8 for r in meta.get("rubrics") or []}
-    applied = 0
+    ``fill``, ``update``, ``same`` and ``keep`` are the actions in
+    ``exam_bridge.final_level_action``, each a list of rows. ``both`` lists a
+    paper's criterion with two rubrics that both have a final level, which writes
+    nothing because the teacher decides (D11). ``unfinished`` counts papers
+    skipped. A criterion with no final level on a paper has no row at all, so a
+    grade with nothing new stays (issue I2)."""
+    maxima = {r.get("id"): r.get("max") or 8 for r in _exam_meta(asg).get("rubrics") or []}
+    plan = {"fill": [], "update": [], "same": [], "keep": [], "both": [], "unfinished": 0}
     for s, r in results:
         if not r.complete:
+            plan["unfinished"] += 1
             continue
         by_letter: dict = {}
         for rid, letter in mapping.items():
             if rid in r.final_levels:
                 by_letter.setdefault(letter, []).append(rid)
-        counted = False
         for letter, rids in by_letter.items():
             if len(rids) > 1:
+                plan["both"].append({"student": s, "letter": letter})
                 continue
             rid = rids[0]
-            band = st.session_state.get(f"rband_{asg.name}_{s.student_id}_{rid}")
-            if band is None:
-                continue
             sent = exam_bridge.to_band(r.final_levels[rid], maxima.get(rid, 8))
             prior = find_score(s, asg.name, letter)
             current, exam_value = ((prior.value, prior.exam_value)
                                    if prior is not None else (None, None))
-            action = exam_bridge.final_level_action(current, exam_value, int(band), sent)
-            basis = exam_bridge.exam_basis(
-                r, [x for x, to in mapping.items() if to == letter])
-            if action == "keep":
-                if kept is not None:
-                    kept.append((s, letter, current, sent))
-                continue
-            counted = True
-            if action == "same":
-                # Still CAM2's own grade: this Apply has seen the current levels.
-                if current == exam_value:
-                    prior.exam_basis = basis
-                continue
-            value = sent if action == "update" else int(band)
-            _write_exam_grade(s, asg, letter, value, when, r.comment,
-                              f"CAM2 rubric {rid}: final level {r.final_levels[rid]}",
-                              exam_value=sent, basis=basis)
-        applied += counted
+            plan[exam_bridge.final_level_action(current, exam_value, sent)].append(
+                {"student": s, "result": r, "letter": letter, "rubric": rid,
+                 "prior": prior, "current": current, "sent": sent})
+    return plan
+
+
+def _apply_exam_rubric_levels(asg, mapping: dict, results) -> int:
+    """Write what :func:`_final_level_plan` found: one CriterionScore per filled
+    or updated criterion (``mapping`` = CAM2 rubric id → CAM letter). A grade the
+    teacher set stays, and levels and marks alone never write one. Returns how
+    many students have a grade that follows CAM2's final level after this."""
+    when = _exam_band_time(asg)
+    plan = _final_level_plan(asg, mapping, results)
+
+    def basis(row):
+        return exam_bridge.exam_basis(
+            row["result"], [x for x, to in mapping.items() if to == row["letter"]])
+
+    for row in plan["same"]:
+        # Still CAM2's own grade: this Apply has seen the current levels.
+        if row["current"] == row["prior"].exam_value:
+            row["prior"].exam_basis = basis(row)
+    for row in plan["fill"] + plan["update"]:
+        level = row["result"].final_levels[row["rubric"]]
+        _write_exam_grade(row["student"], asg, row["letter"], row["sent"], when,
+                          row["result"].comment,
+                          f"CAM2 rubric {row['rubric']}: final level {level}",
+                          exam_value=row["sent"], basis=basis(row))
     _refresh_exam_counts(asg, mapping.values())
     st.session_state["active"].setdefault(asg.name, True)
     persist()
-    return applied
+    return len({row["student"].student_id
+                for row in plan["fill"] + plan["update"] + plan["same"]})
+
+
+def _decide_exam_grade(student, asg, letter: str, value, result, rubric_ids, letters) -> None:
+    """The teacher's decision in Window 3: one grade for this student, exam and
+    criterion, or none when ``value`` is None. It has no ``exam_value``, so a
+    later re-send can't change it. ``letters`` are the exam's mapped criteria."""
+    if value is None:
+        crit = Criterion(letter)
+        student.scores[crit] = [sc for sc in student.scores.get(crit, [])
+                                if sc.assignment != asg.name]
+    else:
+        # Copy the overall comment as Apply does, so the edit dialog and comments
+        # log keep working. An existing grade keeps the comment it has.
+        _write_exam_grade(student, asg, letter, int(value), _exam_band_time(asg),
+                          result.comment, "decided in Window 3",
+                          basis=exam_bridge.exam_basis(result, rubric_ids))
+    _refresh_exam_counts(asg, letters)
+    st.session_state["active"].setdefault(asg.name, True)
+    persist()
 
 
 @st.dialog("Assignment analytics", width="large")
@@ -7913,9 +8037,9 @@ def show_analytics_dialog(name: str) -> None:
         st.caption(f"📝 Rubric exam (CAM2)  ·  {match['date']:%b %d, %Y}  ·  "
                    f"{match['submissions']} paper(s)")
         if match["criteria"] == "—":
-            st.caption("Confirm each student's levels in Window 1's 📝 Exam "
-                       "grading panel to bring this exam into the criterion "
-                       "math.")
+            st.caption("Map its rubrics in Window 1's 📝 Exam grading panel, then "
+                       "decide each student's grades in Window 3 to bring this "
+                       "exam into the criterion math.")
             return
     elif match.get("is_exam"):
         # Item-level exam analytics: raw totals + per-question averages.
@@ -7934,6 +8058,10 @@ def show_analytics_dialog(name: str) -> None:
 
         labels = next((a_.question_labels for a_ in gb().assignments
                        if a_.name == name and getattr(a_, "is_exam", False)), [])
+        # A mixed paper's rubric questions have levels, not marks.
+        marked = {lbl for _, r in results for lbl in [*r.questions, *r.not_answered]
+                  if not r.mode or lbl not in r.levels}
+        labels = [lbl for lbl in labels if lbl in marked or not results]
         if labels and results:
             q_avg = [round(mean([r.questions.get(lbl, 0) for _, r in results]), 2)
                      for lbl in labels]
@@ -8899,21 +9027,149 @@ def _student_exam_records(student):
     return out
 
 
+def _exam_marks_text(asg, r) -> str:
+    """A paper's marks. With weighting on, CAM2's result beside the raw total,
+    never converted (D12)."""
+    raw = f"{r.total}/{r.max_total or asg.max_total or '?'}"
+    if r.weighted and r.percent is not None:
+        return f"weighted {r.percent:.1f}% · raw {raw}"
+    return raw
+
+
+def _criterion_marks_text(marks: dict, weighted: bool) -> str:
+    """One criterion's marks as CAM2 reports them (D13)."""
+    raw = f"{marks.get('total')}/{marks.get('max')}"
+    percent = marks.get("percent")
+    if percent is None:
+        return raw
+    return f"weighted {percent:.1f}% · raw {raw}" if weighted else f"{raw} · {percent:.1f}%"
+
+
+def _render_criterion_group(asg, student, r, group, letters) -> None:
+    """One criterion on a paper: its levels and marks, read only, then one 0-8
+    decision. No average and no suggestion sit beside the dropdown (D10, P7)."""
+    letter = group["letter"]
+    st.caption(f"**Criterion {letter}** · {Criterion(letter).label}")
+    many = len(group["rubrics"]) > 1
+    for row in group["rubrics"]:
+        prefix = f"{row['name']} · " if many else ""
+        if row["items"]:
+            st.caption(prefix + " · ".join(row["items"]))
+        if row["marks"]:
+            st.caption(prefix + "Marks on this criterion: "
+                       + _criterion_marks_text(row["marks"], r.weighted))
+
+    def final_text(row):
+        if row["max"] != 8:
+            return f"{row['final']}/{row['max']} → {row['band']}"
+        return str(row["final"])
+
+    finals = [row for row in group["rubrics"] if row["final"] is not None]
+    sc = find_score(student, asg.name, letter)
+    current = int(sc.value) if sc is not None and sc.is_valid else None
+    if not r.complete:
+        status = "⏳ Not finished in CAM2. Finish it there and send it to CAM again."
+    elif current is not None and current == sc.exam_value:
+        status = "From CAM2's final level. Change it here if you want."
+    elif current is not None:
+        status = "Your decision."
+        if finals:
+            status += " CAM2 sent " + ", ".join(final_text(row) for row in finals) + "."
+    elif len(finals) > 1:
+        status = ("Two final levels in CAM2 ("
+                  + ", ".join(f"{row['name']} {final_text(row)}" for row in finals)
+                  + "). Decide here.")
+    elif finals:
+        status = (f"CAM2 final level: {final_text(finals[0])}. Not in the gradebook "
+                  "yet: Apply it in Window 1, or choose here.")
+    else:
+        status = "⏳ Awaiting your decision."
+    cc = st.columns([3, 1.2], vertical_alignment="center")
+    cc[0].caption(status)
+    key = f"decide_{asg.name}_{student.student_id}_{letter}"
+    _seed_dropdown(key, current)
+    choice = cc[1].selectbox(
+        f"Criterion {letter} grade", list(range(9)), index=None, placeholder="—",
+        key=key, label_visibility="collapsed", disabled=not r.complete,
+        help="This assignment's grade on this criterion. Blank means no grade.")
+    if r.complete and choice != current:
+        _decide_exam_grade(student, asg, letter, choice, r, group["rubric_ids"], letters)
+        st.rerun()
+    # P6: the decision stays and the flag says so. The teacher can settle it.
+    basis = exam_bridge.exam_basis(r, group["rubric_ids"])
+    if sc is not None and sc.exam_basis and sc.exam_basis != basis:
+        flag = st.columns([3, 1.2], vertical_alignment="center")
+        flag[0].caption("⚠ Levels changed since you decided.")
+        if flag[1].button("Keep grade", key=f"{key}_keep", width="stretch",
+                          help="The grade still stands, so stop flagging it."):
+            sc.exam_basis = basis
+            persist()
+            st.rerun()
+
+
+def _render_exam_decisions(asg, student, r) -> bool:
+    """The criterion groups for one paper. False when there are none, as on a
+    plain marks exam."""
+    if not _exam_uses_criteria(asg, [(student, r)]):
+        return False
+    meta = _exam_meta(asg)
+    rubrics = _exam_rubrics(asg, [(student, r)])
+    mapping = exam_bridge.rubric_mapping(rubrics, meta.get("criteria"))
+    groups, unmapped = exam_bridge.criterion_groups(r, rubrics, mapping, meta.get("questions"))
+    letters = sorted(set(mapping.values()), key=CRIT_ORDER.index)
+    for group in groups:
+        _render_criterion_group(asg, student, r, group, letters)
+    if unmapped:
+        st.caption("**Not counted toward a criterion.** Map these in Window 1's "
+                   "📝 Exam grading panel to decide them.")
+        for row in unmapped:
+            if row["items"]:
+                st.caption(f"{row['name']} · " + " · ".join(row["items"]))
+            if row["marks"]:
+                st.caption(f"{row['name']} · Marks: "
+                           + _criterion_marks_text(row["marks"], r.weighted))
+    return bool(groups or unmapped)
+
+
+def _render_exam_marks_flag(asg, student, r) -> None:
+    """P6 on a plain marks exam: its grades came from the whole paper's marks."""
+    basis = exam_bridge.exam_basis(r)
+    stale = [sc for bucket in student.scores.values() for sc in bucket
+             if sc.assignment == asg.name and sc.exam_basis and sc.exam_basis != basis]
+    if not stale:
+        return
+    flag = st.columns([3, 1.2], vertical_alignment="center")
+    flag[0].caption("⚠ Marks changed since you decided on Criterion "
+                    + ", ".join(sorted(sc.criterion.value for sc in stale)) + ".")
+    if flag[1].button("Keep grade", key=f"keepmarks_{asg.name}_{student.student_id}",
+                      width="stretch", help="The grade still stands, so stop flagging it."):
+        for sc in stale:
+            sc.exam_basis = basis
+        persist()
+        st.rerun()
+
+
 def _render_exam_results(student) -> None:
     """Window 3 exam block: for every exam the focused student has a result
-    for, ``📝 <exam>`` then the CAM2 per-question rows (or, for a record from
-    an older CGW exam, just its total)."""
+    for, ``📝 <exam>``, then one group per mapped criterion with its decision,
+    then CAM2's rows question by question (or, for a record from an older CGW
+    exam, just its total)."""
     records = _student_exam_records(student)
     if not records:
         return
     for asg, r in records:
         st.markdown(f"**📝 {asg.name}**")
-        if r.mode:
-            _render_cam2_result(asg, r)
+        if not r.mode:
+            tc = st.columns([3, 1.2], vertical_alignment="center")
+            tc[0].caption(f"{asg.name} — total")
+            tc[1].caption(f"**{r.total}/{r.max_total or asg.max_total or '?'}**")
             continue
-        tc = st.columns([3, 1.2], vertical_alignment="center")
-        tc[0].caption(f"{asg.name} — total")
-        tc[1].caption(f"**{r.total}/{r.max_total or asg.max_total or '?'}**")
+        if _render_exam_decisions(asg, student, r):
+            with st.expander("Every question and comment"):
+                _render_cam2_result(asg, r)
+        else:
+            _render_cam2_result(asg, r)
+            _render_exam_marks_flag(asg, student, r)
 
 
 def _render_cam2_result(asg, r) -> None:
@@ -8939,24 +9195,27 @@ def _render_cam2_result(asg, r) -> None:
                 for rid, v in r.levels[label].items())
         else:
             value = "not graded"
-        note = "  ·  not counted" if counted and label not in counted else ""
+        note = ("  ·  not counted"
+                if counted and label not in counted and value != "not graded" else "")
         cc = st.columns([3, 1.6], vertical_alignment="center")
         cc[0].caption(f"{label}{note}")
         cc[1].caption(value)
         comment = r.question_comments.get(label)
         if comment:
             st.caption(f"💬 {comment}")
-    tc = st.columns([3, 1.6], vertical_alignment="center")
-    if r.mode == "rubric":
-        tc[0].caption(f"{asg.name} — final levels")
-        total = ", ".join(f"{names.get(rid, rid)} {lvl}"
-                          for rid, lvl in r.final_levels.items()) or "—"
-    else:
-        tc[0].caption(f"{asg.name} — total")
-        total = f"{r.total}/{r.max_total or asg.max_total or '?'}"
-    if not r.complete:
-        total += " · ⏳ not finished"
-    tc[1].caption(f"**{total}**")
+    # A mixed paper has both a total and final levels.
+    rows = []
+    if r.mode != "rubric":
+        rows.append(("total", _exam_marks_text(asg, r)))
+    if r.mode == "rubric" or r.final_levels:
+        rows.append(("final levels", ", ".join(
+            f"{names.get(rid, rid)} {lvl}" for rid, lvl in r.final_levels.items()) or "—"))
+    if rows and not r.complete:
+        rows[-1] = (rows[-1][0], rows[-1][1] + " · ⏳ not finished")
+    for name, value in rows:
+        tc = st.columns([3, 1.6], vertical_alignment="center")
+        tc[0].caption(f"{asg.name} — {name}")
+        tc[1].caption(f"**{value}**")
 
 
 def _trend_figure(student):
@@ -9522,6 +9781,11 @@ def _render_ai_deck(student) -> None:
     info[1].caption(f"{lc['mode']} · {lc['provider']} · name: {lc.get('name_mode','first')} · "
                     f"pronouns {pronouns_for(student)} · scope: {scope_txt}"
                     f"{trend_txt}{tone_txt}{numbers_txt}")
+    left_out = _prompt_material(student, lc)["left_out"]
+    if left_out:
+        st.caption(f"ⓘ {left_out} exam question comment(s) left out to keep the "
+                   "source material in reach of the comment's length. Every overall "
+                   "comment stays in.")
 
     # Two generators: one student, or the whole class (API only). Both follow the
     # parameters set in the deck above.
@@ -9570,6 +9834,11 @@ def _render_ai_deck(student) -> None:
             if n_gap:
                 note = (f" {n_gap} student(s) had no prior-term comment — "
                         "theirs used the available terms only.")
+        n_left_out = sum(_prompt_material(s, lc)["left_out"]
+                         for s in students_for_active_class())
+        if n_left_out:
+            note += (f" {n_left_out} exam question comment(s) left out across the "
+                     "class to stay within the source limit.")
         skip_txt = f" Skipped {n_skipped} (already had one)." if n_skipped else ""
         if n_fail == 0:
             st.session_state["llm_status"] = (

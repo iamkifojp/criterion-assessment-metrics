@@ -369,10 +369,7 @@ class SyncTests(_AppBase):
         aoki = self.gb.students["100001"].exam_results[EXAM]
         self.assertEqual(aoki.final_levels, {"r1": 6, "r2": 3})
         results = app._exam_results_for(EXAM)
-        # What the panel's dropdowns hold: CAM2's levels, r2 scaled 0-4 → 0-8.
-        self.ss[f"rband_{EXAM}_100001_r1"] = 6
-        self.ss[f"rband_{EXAM}_100001_r2"] = exam_bridge.to_band(3, 4)
-        self.ss[f"rband_{EXAM}_100002_r1"] = 6
+        # CAM2's levels go in as they are, with r2 scaled 0-4 → 0-8.
         applied = app._apply_exam_rubric_levels(asg, {"r1": "A", "r2": "C"}, results)
         # Baba's Q2 has no level yet: not finished in CAM2, so held back.
         self.assertFalse(self.gb.students["100002"].exam_results[EXAM].complete)
