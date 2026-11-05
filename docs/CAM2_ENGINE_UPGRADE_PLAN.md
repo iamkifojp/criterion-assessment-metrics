@@ -1,9 +1,11 @@
 # Upgrading CAM's vendored CAM2 to the latest dev version: assessment and plan
 
-**Status:** v3, 2026-11-05. Decisions D10–D16 (§5) are locked by the teacher. v3
-changes D10, D11 and D13: a paper's repeated levels stay on the exam, and the teacher
-decides one grade per criterion for the assignment in Window 3. It also adds D16: an
-exam is whatever goes through CAM2, and a draft is a normal assignment without grades.
+**Status:** v5, 2026-11-05. Decisions D10–D17 (§5) are locked by the teacher. v5 adds
+the Google Apps Script route that turns Classroom submissions into PDFs (Appendix A). v3
+changed D10, D11 and D13: a paper's repeated levels stay on the exam, and the teacher
+decides one grade per criterion for the assignment in Window 3. v4 corrects D16: a
+draft keeps the label "Draft — comments only" and is set up from a normal assignment.
+It also adds D17: CAM2 learns slide-shaped pages first, and fetching from Drive waits.
 The smaller points
 (§5.1) go ahead on the stated default unless the teacher changes them. Nothing is
 built yet.
@@ -117,7 +119,7 @@ These answer the teacher's questions of 2026-11-04.
 | I11 | This Mac's `main` is 24 commits behind | Precondition |
 | I12 | Several grades on one criterion would break the screens | Avoided by D10 (new) |
 | I13 | A student waiting for a grade can count as Missing = 0 | High (new) |
-| I14 | CAM2 can't take slide-shaped pages yet | Precondition for slide decks (new) |
+| I14 | CAM2 doesn't recognise slide-shaped pages | Precondition for slide decks; fixed in Phase 1 (new) |
 
 ### I1. Rubric exams arrive with no levels
 
@@ -242,7 +244,8 @@ D15 and Phase 4 fix this for new releases. §5.1 P5 covers the published ones.
 - The convergence plan's D3 and D4, which D10 and D11 amend.
 - `SLIDE_DECK_EXAM_PLAN.md` was written against the pinned CAM2. Its step 6 and D6
   need rereading against D10 to D13, and its Phase 3 grade-owner lock moves from the
-  Window 1 panel to the Window 3 decision. Its D10 and D13 use the old draft label (P8).
+  Window 1 panel to the Window 3 decision. Its D13 offers Draft as a third type, which
+  D16 changes, and its order changes with D17.
 
 ### I11. This Mac's `main` is 24 commits behind
 
@@ -286,32 +289,55 @@ teacher's decision would count as 0 on every criterion listed on the exam. Once 
 criterion is decided, the student stops counting as missing, so any undecided criterion
 just stays out of the calculation.
 
-### I14. CAM2 can't take slide-shaped pages yet
+### I14. CAM2 doesn't recognise slide-shaped pages
 
-CAM2 `main` has no 16:9 or 4:3 page sizes and no `papers_folder` hand-off. Both are
-Phase 1 of the slide-deck plan, not part of the 21 commits. This upgrade gets a deck's
-results into CAM correctly, but the Y8 and Y9 portfolios also need that plan's CAM2
-and Drive phases, or PDFs prepared by hand.
+CAM2 `main` knows only A4, B5 and A3, and it reads PDFs and images, not `.pptx` files.
+Tested with fictional PDFs at 13.333 × 7.5 in, 10 × 5.625 in and 10 × 7.5 in:
+
+- **None of them is detected.** `detect_paper` returns nothing, so the teacher has to
+  pick a paper size that isn't true.
+- **Cropping does work.** With A4 landscape chosen, a whole-page box gives the whole
+  slide at the right shape (2667 × 1500 for PowerPoint's 16:9). So a deck can be sliced
+  today as a stop-gap, though this was tested in the engine and not on CAM2's screens.
+- **The grid is the wrong shape.** On a 16:9 page, A4's cells come out 1.24 times wider
+  than they are tall, so boxes don't line up with the slide's own layout.
+
+Phase 1 fixes this (D17).
 
 ---
 
 ## 5. Decisions
 
 Numbering continues from the convergence plan. D10–D15 were locked by the teacher on
-2026-11-04. On 2026-11-05 the teacher changed D10, D11 and D13 and added D16.
+2026-11-04. On 2026-11-05 the teacher changed D10, D11 and D13 and added D16 and D17.
 
-- **D16 · An exam is whatever goes through CAM2.** This is the difference between the
-  types in Window 1:
+- **D16 · An exam is whatever goes through CAM2.** This is the difference between
+  exams and assignments in Window 1:
 
-  | Type | What it is | Graded in | Grades |
+  | What it is | Set up as | Graded in | Grades |
   |---|---|---|---|
-  | Assignment | Normal assignment | Grading workspace | Yes |
-  | Assignment without grades | Normal assignment, such as an art lesson draft | Grading workspace | No, comments only |
-  | Exam | Any exam, including a visual art final report imported from Google Drive | CAM2 | Yes, per D10 |
+  | Normal assignment | Assignment | Grading workspace | Yes |
+  | Draft, such as an art lesson draft | Assignment, with **Draft — comments only** ticked | Grading workspace | No, comments only |
+  | Any exam, including a visual art final report | Exam | CAM2 | Yes, per D10 |
 
-  A visual art final report is an exam, even though it's a slide deck and not a written
-  paper. Today every exam already opens in CAM2 (`app.py:7701`, `7755`). A folder watched
-  on Drive can't yet be made an exam, which the slide-deck plan's D13 and Phase 2 add.
+  - **A draft is a normal assignment with a check mark, not a type of its own.** The
+    teacher creates a new assignment, or uses a row from auto-sync, and ticks **Draft —
+    comments only**. That wording stays. The stored `is_draft` flag doesn't change.
+  - **A visual art final report is an exam**, even though it's a slide deck and not a
+    written paper. Today every exam already opens in CAM2 (`app.py:7701`, `7755`).
+
+  ⋯ Manage already has this check mark for auto-sync rows (`app.py:7313`). Add assignment
+  doesn't: it offers Draft as a third option beside Assignment and Exam (`app.py:7119`).
+  Phase 3 changes that to Assignment or Exam, plus the check mark. Add assignment is a
+  form, so the check mark can't appear only for Assignment. It stays visible and has no
+  effect on an exam.
+- **D17 · CAM2 learns slide-shaped pages first, and fetching from Drive waits.** CAM2
+  doesn't read from Google Drive, and that's fine for now: school network restrictions
+  block sharing to a personal account, so fetching directly isn't possible anyway. CAM2
+  stays Google-free, as the slide-deck plan's D1 says. 16:9 and 4:3 pages go into the
+  CAM2 version that CAM pins (Phase 1). The slide-deck plan's Drive work, its Phase 0 and
+  Phase 2, is deferred. For now, decks reach CAM2 as PDFs through the teacher's Apps
+  Script in the school account (Appendix A).
 - **D10 · The teacher decides each criterion's grade for the assignment, in Window 3.**
   (amends D4) The teacher using CAM2 chooses the criterion rubrics option, and records
   marks or levels on the paper.
@@ -394,10 +420,12 @@ teacher changes it.
 - **P7 · No average beside the dropdown.** *Default: Window 3 shows the levels and no
   calculated figure*, which keeps D10's "never averages or suggests". An average could
   be added later as a read-only aid if the teacher wants it.
-- **P8 · The draft label.** *Default: "Draft — comments only" becomes "Assignment —
-  no grades" in Add assignment and ⋯ Manage (`app.py:7119`, `7313`), to match D16.* Only
-  the wording changes. Existing drafts keep working, because the stored `is_draft` flag
-  stays the same.
+- **P8 · The draft label. Settled in v4:** it stays "Draft — comments only" (D16).
+- **P9 · Getting decks into CAM2 as PDFs. Settled in v5:** the teacher's Apps Script
+  (Appendix A) saves one PDF per student inside the school's Google account. Classroom
+  downloads Google Slides as `.pptx`, which CAM2 can't read, so no converter is needed on
+  the laptop, and the slide-deck plan's D2 stands. No CAM or CAM2 code depends on the
+  script, and any PDF named with the student's name works the same way.
 
 ---
 
@@ -422,18 +450,39 @@ anything new arrives, the same order the convergence plan used.
 
 *Done when:* we know how many real sessions are exposed to I1, I2 and I4.
 
-### Phase 1 — CAM2: safe hand-over, tagged · S–M (CAM2 repo)
+### Phase 1 — CAM2: safe hand-over and slide pages, tagged · M (CAM2 repo)
 
 - Fix the first "next build" item in CAM2's `PLAN.md`: `running_instance()` compares
   versions through `/api/ping`, and a different running version is stopped and
   replaced after saving, or refuses the hand-over with a clear message.
-- Include the other fixes waiting at that point. If the teacher wants slide decks in
-  the same CAM2 version, add the slide-deck plan's Phase 1 here (I14).
-- Tests for both directions: older launcher with newer server, and newer with older.
+- **Slide pages (D17, I14)**, from item 1 of the slide-deck plan's Phase 1:
+  - add `Slide 16:9` and `Slide 4:3` to `PAPER_SIZES_MM` and `GRIDS`, at about 5 mm
+    cells with the cells square (about 51 × 29 and 51 × 38);
+  - detect slides by **aspect ratio**, because PowerPoint and Google decks differ in
+    size but not shape, after checking the paper sizes so that A4 and the others are
+    never mistaken for slides;
+  - add them to the paper choices in `step1.js` and `boxes.js`, and to `i18n/en.json`
+    and `ja.json`;
+  - leave old sessions untouched.
+- **Measure crop size** with a fictional photo-heavy deck. A whole slide is a 2667 × 1500
+  PNG. If a class's folder is too big, bring in the slide-deck plan's JPEG crops
+  (Phase 1, item 2) too. Its other Phase 1 items stay in that plan.
+- Include the other fixes waiting at that point.
+- Tests:
+  - hand-over in both directions: older launcher with newer server, and newer with older;
+  - detection of 13.333 × 7.5 in, 10 × 5.625 in and 10 × 7.5 in, with A4, B5 and A3
+    unchanged;
+  - grid and range round trips for both slide sizes;
+  - an old session opening with its layout unchanged;
+  - a browser check of a 12-screen fictional deck, from choosing the file to grading.
+- **The teacher tries Appendix A on a small real assignment**, in the school account, and
+  checks the PDFs' layout, the time a class takes and how large decks behave. Those PDFs
+  stay in the teacher's data folder, never in this repository.
 - Cut the new CAM2 tag (D14) and build its downloads: Mac here, **Windows on a Windows
   computer**. Share it with colleagues, since they're the ones exposed.
 
-*Done when:* the I5 reproduction no longer upgrades or misroutes a session.
+*Done when:* the I5 reproduction no longer upgrades or misroutes a session, and a 16:9
+PDF is recognised and can be sliced into whole-slide questions and graded.
 
 ### Phase 2 — CAM: correct Apply, bridge and storage, on the current pin · M
 
@@ -491,8 +540,9 @@ on the current pin is otherwise unchanged. The I2 fix can ship by itself.
   class-wide marks panel, with blank dropdowns.
 - Route from the Phase 2 mode (`app.py:3588`, `7454`, `8771`). Show ⏳ awaiting decision
   (I13).
-- Rename the draft type (P8), including Window 3's `· Draft ·` caption and the message
-  at `app.py:8644`.
+- **Add assignment** (D16). Type becomes Assignment or Exam, with a **Draft — comments
+  only** check mark, replacing the third option at `app.py:7119`. ⋯ Manage keeps its
+  check mark. Existing drafts are unaffected.
 - Round-half-up for any new percentage display, not Python's `round()`.
 - Sandbox browser check: temp prefs, temp `db_custom_path`, fictional class. Include
   the 12-screen fixture from the slide-deck plan. Its A 1, B 5, C 2 and D 5 levels must
@@ -529,7 +579,8 @@ blank dropdown can't invent a grade, and a re-send can't change a teacher's deci
 - `python tools/run_all_tests.py` passes, including with PyMuPDF 2.0.
 - Sandbox end to end with `exam_grading/tools/make_sample_exam.py` and a real browser:
   marks; rubric with and without final levels; levels on one criterion across many
-  questions; marks ticked on a criterion; mixed from both starting choices; weighted;
+  questions; marks ticked on a criterion; a 16:9 slide deck; mixed from both starting
+  choices; weighted;
   choice groups; and a v1 session upgraded mid-grading. Each must Sync, be decided in
   Window 3 or carried by Apply, and show in Windows 2 and 3, leaving session folders
   byte-identical after Sync.
@@ -543,11 +594,15 @@ blank dropdown can't invent a grade, and a re-send can't change a teacher's deci
 - Rewrite the exam parts of `USER_MANUAL.md` and `QUICK_GUIDE.md` (and its PDF),
   `ARCHITECTURE.md` §4 and `DATA_DICTIONARY.md`, and the `app.py:7560` docstring.
 - Mark D3 and D4 as amended in the convergence plan. Update `SLIDE_DECK_EXAM_PLAN.md`
-  for D10 to D13.
+  for D10 to D13 and D16, and for D17: slide sizes are done, its Drive phases are
+  deferred, so its "Phase 0 comes first" no longer applies, and Appendix A stands in for
+  its Fetch from Drive step.
 - Add `CHANGELOG.md` and release notes that say plainly:
   - update **every computer before opening an exam**, because opened exams can't go
     back;
-  - exams go through CAM2, and "Draft — comments only" is now "Assignment — no grades";
+  - exams go through CAM2, and a draft is set up as an assignment with the **Draft —
+    comments only** check mark;
+  - slide decks can be graded in CAM2 as PDFs, and fetching from Drive isn't included;
   - a paper's levels show in Window 3, and the teacher decides one grade per criterion
     for the assignment, unless a final level was typed in CAM2;
   - marks are never turned into grades by the app, and bands are no longer pre-filled;
@@ -597,7 +652,10 @@ For I12:
 - The crash was confirmed with Streamlit's test runner on the same key pattern, not by
   opening the full app.
 
-I13 and the other rows in the I12 table come from reading the code. Licence findings
+I14 was tested with fictional PDFs against CAM2's slicer, not on its screens. Appendix
+A's script was tested against fake Google services and CAM2's name matching with
+fictional names, not on Google itself. I13 and
+the other rows in the I12 table come from reading the code. Licence findings
 come from each release's tagged `requirements.txt` and file list and from the bundle
 tool's source. The published zips themselves weren't opened.
 
@@ -613,3 +671,513 @@ tool's source. The published zips themselves weren't opened.
 - The Japanese screens.
 - CAM2's I5 fix, and everything in Phases 2 to 4, none of which exists yet.
 - Whether the licence approach is legally sufficient. D15 follows what CAM2 already does.
+
+---
+
+## Appendix A. From Google Classroom to PDFs with Apps Script
+
+The teacher's Google Apps Script runs inside the school's Google Workspace account. It
+saves each student's submitted deck as a PDF, so nothing is shared to a personal account.
+It isn't part of CAM or CAM2. Other teachers can copy it, and any PDF with the student's
+name in its file name works the same way.
+
+**This copy holds placeholders only.** Never commit a filled-in copy: real course and
+assignment IDs belong in the script editor, and the PDFs belong in the teacher's data
+folder, outside this repository.
+
+### Setting it up
+
+1. Create a project at script.google.com under the school account, and paste the script.
+2. Under **Services**, add the Google Classroom API. Add the Drive API (v3) too if
+   students may hand in PowerPoint files. Without it, those files show as failed and
+   everything else still works.
+3. On the first run, Google asks for permission to use Classroom, Drive and Slides, and
+   to make external requests for the large-deck fallback. A school's settings could block
+   this.
+
+### The routine
+
+1. Run `listMyCoursesAndAssignments`, and copy the IDs from the log into `BATCH_LIST` in
+   `prepareSubmissionsForDownload`.
+2. Run `prepareSubmissionsForDownload`. If the log says `NOT FINISHED`, run it again. It
+   carries on in the same folder and skips finished files. If you abandon a batch, run
+   `startFreshBatch`.
+3. Read the end of the log for each class. It lists students with no file, failed decks,
+   students with more than one PDF, and decks with an unusual number of slides.
+4. Download the class folder from Drive and unzip it. PDFs stay PDFs in Drive's zip.
+5. In CAM, set up an **Exam** and open it in CAM2. Choose the folder as one file per
+   student. CAM2 matches each file to the class list by the name in it, for example
+   `[Class A] Student Name - Final Report.pdf`, in either name order. CAM2 ignores
+   `_report.txt` and the `Other files` subfolder.
+
+For drafts, set `SAVE_AS_PDF` to `false` to get renamed copies of the original files.
+
+### Limits
+
+- **Added or deleted slides.** CAM2 finds each task by page number, so later slides won't
+  line up with their boxes on that paper. The log flags these decks, and CAM2's page-check
+  screen can fix them. Automatic correction was part of the deferred Drive work.
+- **Files not turned in.** The script copies whatever is attached, whether or not the
+  student has turned it in.
+- **A class that can't be read.** The log shows `[!] Error processing courseId`, but the
+  run still ends with `ALL DONE`. Check the log for `[!]` lines before relying on a batch.
+- **Not yet confirmed on Google itself:** how large a deck converts, including the 10 MB
+  limit and the export fallback named in the script's comments, how long a class takes,
+  and how faithful Google's PDFs are.
+
+### The script
+
+```javascript
+/**
+ * STEP 1: Lists ALL of your active courses (and prints a summary list of all classes at the top).
+ */
+function listMyCoursesAndAssignments() {
+  // === FILTER CONFIGURATION ===
+  // Leave empty [] to show ALL your active courses!
+  // If you want to hide specific courses (like 'Club'), add them to EXCLUDE_KEYWORDS: e.g. ['Club']
+  const COURSE_NAME_FILTERS = [];
+  const EXCLUDE_KEYWORDS = [];
+  // ============================
+
+  // Fetch all active courses (with pagination so none are ever missed)
+  let courses = [];
+  let pageToken = null;
+  do {
+    const response = Classroom.Courses.list({
+      teacherId: 'me',
+      courseStates: ['ACTIVE'],
+      pageToken: pageToken,
+    });
+    if (response.courses) {
+      courses = courses.concat(response.courses);
+    }
+    pageToken = response.nextPageToken;
+  } while (pageToken);
+
+  // Filter courses if any filters are configured
+  const filteredCourses = courses.filter(course => {
+    const fullTitle = `${course.name} ${course.section || ''}`.toLowerCase();
+    const matchesInclude = COURSE_NAME_FILTERS.every(kw => fullTitle.includes(kw.toLowerCase()));
+    const matchesExclude = EXCLUDE_KEYWORDS.some(kw => fullTitle.includes(kw.toLowerCase()));
+    return matchesInclude && !matchesExclude;
+  });
+
+  // 1. Print a quick Master Summary of all courses first so nothing gets lost!
+  let summary = `\n📋 FOUND ${filteredCourses.length} ACTIVE CLASSES:\n`;
+  filteredCourses.forEach((c, idx) => {
+    summary += `   ${idx + 1}. "${c.name}" (Section: ${c.section || 'N/A'})  -->  COURSE_ID: '${c.id}'\n`;
+  });
+  Logger.log(summary);
+
+  // 2. Print each course's assignments in its own block (with pagination)
+  for (const course of filteredCourses) {
+    let report = `\n============================================================\n`;
+    report += `🏫 CLASS: ${course.name} (Section: ${course.section || 'N/A'})\n`;
+    report += `🔑 COURSE_ID: '${course.id}'\n`;
+    report += `============================================================\n`;
+    try {
+      let courseWork = [];
+      let cwPageToken = null;
+      do {
+        const cwResponse = Classroom.Courses.CourseWork.list(course.id, {
+          pageToken: cwPageToken,
+        });
+        if (cwResponse.courseWork) {
+          courseWork = courseWork.concat(cwResponse.courseWork);
+        }
+        cwPageToken = cwResponse.nextPageToken;
+      } while (cwPageToken);
+
+      if (courseWork.length === 0) {
+        report += `   (No assignments found)\n`;
+      } else {
+        for (const work of courseWork) {
+          report += `   • "${work.title}"\n     COURSEWORK_ID: '${work.id}'\n`;
+        }
+      }
+    } catch (e) {
+      report += `   [!] Could not list assignments: ${e.message}\n`;
+    }
+    Logger.log(report);
+  }
+}
+
+/**
+ * STEP 2: Batch-prepare multiple classes/assignments at once!
+ * Creates ONE master folder in your "My Drive" with one PDF per submitted deck.
+ * Students and co-teachers will NOT see any changes or receive any notifications.
+ *
+ * Google stops a script after about 6 minutes. If the log says "NOT FINISHED",
+ * just press Run again: it carries on in the same folder and skips finished files.
+ */
+function prepareSubmissionsForDownload() {
+  // === CONFIGURATION ===
+  // 1. Name for the master folder that will be created in your "My Drive"
+  const BATCH_FOLDER_NAME = 'Download Ready - CAM Grading Batch';
+
+  // 2. true = put each class into its own subfolder inside the master folder
+  //    false = put all files from all classes flat inside the master folder
+  const CREATE_CLASS_SUBFOLDERS = true;
+
+  // 3. true = save decks as PDFs, for grading in CAM2 (exams)
+  //    false = make renamed copies of the original files, as before (drafts)
+  const SAVE_AS_PDF = true;
+
+  // 4. Stop starting new files after this long, so the run ends cleanly
+  const MAX_RUN_MINUTES = 5;
+
+  // 5. Add as many { courseId, courseworkId } pairs as you want to download together!
+  //    (Optional: you can also add a custom 'label' if you want a shorter class prefix like 'Class A')
+  const BATCH_LIST = [
+    // Paste the IDs that Step 1 lists for the classes you want to download today. Rows left as PASTE_ or '' are skipped.
+    { courseId: 'PASTE_COURSE_ID', courseworkId: 'PASTE_COURSEWORK_ID', label: 'Class A' },
+    { courseId: 'PASTE_COURSE_ID', courseworkId: 'PASTE_COURSEWORK_ID', label: 'Class B' },
+  ];
+  // =====================
+
+  const activeItems = BATCH_LIST.filter(item =>
+    item.courseId &&
+    item.courseworkId &&
+    item.courseId.trim() !== '' &&
+    item.courseworkId.trim() !== '' &&
+    !item.courseId.startsWith('PASTE_') &&
+    !item.courseworkId.startsWith('PASTE_')
+  );
+
+  if (activeItems.length === 0) {
+    Logger.log('⚠️ No active { courseId, courseworkId } pairs configured in BATCH_LIST.');
+    return;
+  }
+
+  const stopAt = Date.now() + MAX_RUN_MINUTES * 60 * 1000;
+  const batchSig = activeItems
+    .map(i => `${i.courseId.trim()}:${i.courseworkId.trim()}:${SAVE_AS_PDF}`)
+    .join('|');
+  const masterFolder = openBatchFolder_(BATCH_FOLDER_NAME, batchSig);
+
+  let totalDoneCount = 0;
+  let ranOutOfTime = false;
+
+  for (const item of activeItems) {
+    if (ranOutOfTime) break;
+
+    try {
+      const course = Classroom.Courses.get(item.courseId);
+      const work = Classroom.Courses.CourseWork.get(item.courseId, item.courseworkId);
+
+      // Use custom short label if provided, otherwise Course Name
+      const classLabel = item.label || course.name;
+
+      Logger.log(`\n--- Processing: [${classLabel}] "${work.title}" ---`);
+
+      // Decide target folder (either a class subfolder or the master folder)
+      const targetFolder = CREATE_CLASS_SUBFOLDERS
+        ? folderNamed_(masterFolder, safeFolderName_(`[${classLabel}] ${work.title}`))
+        : masterFolder;
+
+      // Clean up any leftover temp Google Slides file if a previous run was hard-killed by Google
+      cleanTempFiles_(targetFolder);
+
+      // Build map of Student User ID -> Official Classroom Full Name
+      const studentMap = {};
+      let pageToken = null;
+      do {
+        const roster = Classroom.Courses.Students.list(item.courseId, { pageToken: pageToken });
+        if (roster.students) {
+          for (const s of roster.students) {
+            studentMap[s.userId] = s.profile.name.fullName;
+          }
+        }
+        pageToken = roster.nextPageToken;
+      } while (pageToken);
+
+      // Fetch all student submissions for this assignment (with pagination)
+      let submissions = [];
+      let subPageToken = null;
+      do {
+        const subResponse = Classroom.Courses.CourseWork.StudentSubmissions.list(
+          item.courseId,
+          item.courseworkId,
+          { pageToken: subPageToken }
+        );
+        if (subResponse.studentSubmissions) {
+          submissions = submissions.concat(subResponse.studentSubmissions);
+        }
+        subPageToken = subResponse.nextPageToken;
+      } while (subPageToken);
+
+      const reportName = CREATE_CLASS_SUBFOLDERS
+        ? REPORT_NAME_
+        : `_report_${safeFolderName_(classLabel)}_${item.courseworkId}.txt`;
+      const report = openReport_(targetFolder, reportName);
+      const noFile = [];
+
+      for (const sub of submissions) {
+        const studentName = studentMap[sub.userId] || sub.userId;
+        const attachments = (sub.assignmentSubmission && sub.assignmentSubmission.attachments) || [];
+        const driveFiles = attachments.filter(att => att.driveFile && att.driveFile.id);
+
+        if (driveFiles.length === 0) {
+          noFile.push(studentName);
+          continue;
+        }
+
+        for (const att of driveFiles) {
+          const fileId = att.driveFile.id;
+          if (report.isDone(fileId)) continue;
+
+          if (Date.now() >= stopAt) {
+            ranOutOfTime = true;
+            break;
+          }
+
+          try {
+            const originalFile = DriveApp.getFileById(fileId);
+            const newName = `[${classLabel}] ${studentName} - ${originalFile.getName()}`;
+            const result = SAVE_AS_PDF
+              ? savePdf_(originalFile, newName, targetFolder)
+              : copyOriginal_(originalFile, newName, targetFolder);
+
+            report.add(fileId, result.status, result.slides, studentName, result.savedName);
+            Logger.log(`   ${result.status}: "${result.savedName}"`);
+            totalDoneCount++;
+          } catch (err) {
+            report.add(fileId, 'FAILED', '', studentName, err.message);
+            Logger.log(`   [!] Could not prepare file for ${studentName}: ${err.message}`);
+          }
+        }
+        if (ranOutOfTime) break;
+      }
+
+      if (!ranOutOfTime) logClassSummary_(classLabel, report, noFile);
+    } catch (courseErr) {
+      Logger.log(`[!] Error processing courseId ${item.courseId}: ${courseErr.message}`);
+    }
+  }
+
+  Logger.log(`\n============================================================`);
+  if (ranOutOfTime) {
+    Logger.log(`⏳ NOT FINISHED: ${totalDoneCount} files done in this run. Press Run again to carry on.`);
+  } else {
+    const props = PropertiesService.getUserProperties();
+    props.deleteProperty(BATCH_FOLDER_KEY_);
+    props.deleteProperty(BATCH_SIG_KEY_);
+    Logger.log(`✅ ALL DONE! Files prepared in this run: ${totalDoneCount}`);
+  }
+  Logger.log(`📁 Master Folder Name: "${masterFolder.getName()}"`);
+  Logger.log(`🔗 Click to open & download: ${masterFolder.getUrl()}`);
+  Logger.log(`============================================================`);
+}
+
+/**
+ * Run this only if you abandon an unfinished batch, so the next run starts a new folder.
+ */
+function startFreshBatch() {
+  const props = PropertiesService.getUserProperties();
+  props.deleteProperty(BATCH_FOLDER_KEY_);
+  props.deleteProperty(BATCH_SIG_KEY_);
+  Logger.log('The next run will start a new master folder.');
+}
+
+const BATCH_FOLDER_KEY_ = 'CAM_BATCH_FOLDER_ID';
+const BATCH_SIG_KEY_ = 'CAM_BATCH_SIGNATURE';
+const REPORT_NAME_ = '_report.txt';
+const OTHER_FILES_FOLDER_ = 'Other files';
+const TEMP_PREFIX_ = '__cam_temp__ ';
+const POWERPOINT_TYPES_ = [
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.ms-powerpoint',
+];
+
+// Carry on in an unfinished batch's folder (if BATCH_LIST hasn't changed), or start a new dated one.
+function openBatchFolder_(batchName, batchSig) {
+  const props = PropertiesService.getUserProperties();
+  const savedId = props.getProperty(BATCH_FOLDER_KEY_);
+  const savedSig = props.getProperty(BATCH_SIG_KEY_);
+  if (savedId && savedSig === batchSig) {
+    try {
+      const saved = DriveApp.getFolderById(savedId);
+      if (!saved.isTrashed()) {
+        Logger.log(`Carrying on in "${saved.getName()}"`);
+        return saved;
+      }
+    } catch (err) {
+      // The saved folder is gone, so start a new one below.
+    }
+  }
+  const dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+  const folder = DriveApp.getRootFolder().createFolder(`${batchName} (${dateStr})`);
+  props.setProperty(BATCH_FOLDER_KEY_, folder.getId());
+  props.setProperty(BATCH_SIG_KEY_, batchSig);
+  return folder;
+}
+
+function safeFolderName_(name) {
+  return String(name || '').replace(/[\\/]+/g, '-').trim();
+}
+
+function folderNamed_(parent, name) {
+  const found = parent.getFoldersByName(name);
+  return found.hasNext() ? found.next() : parent.createFolder(name);
+}
+
+// Avoid duplicate filenames in the same folder when a student submits multiple files with the same base name.
+function uniqueName_(folder, desiredName) {
+  if (!folder.getFilesByName(desiredName).hasNext()) return desiredName;
+  const dot = desiredName.lastIndexOf('.');
+  const stem = dot !== -1 ? desiredName.slice(0, dot) : desiredName;
+  const ext = dot !== -1 ? desiredName.slice(dot) : '';
+  let n = 2;
+  while (folder.getFilesByName(`${stem} (${n})${ext}`).hasNext()) {
+    n++;
+  }
+  return `${stem} (${n})${ext}`;
+}
+
+// Trash any leftover temporary Google Slides decks if a previous run was hard-stopped by Google.
+function cleanTempFiles_(folder) {
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    const f = files.next();
+    if (f.getName().indexOf(TEMP_PREFIX_) === 0) {
+      try {
+        f.setTrashed(true);
+      } catch (err) {
+        // Ignore cleanup errors
+      }
+    }
+  }
+}
+
+// Google Slides and PowerPoint become PDFs, and PDFs are copied. Anything else goes in
+// "Other files", because CAM2 would treat a photo beside the PDFs as a student's paper.
+function savePdf_(file, name, folder) {
+  const type = file.getMimeType();
+  const basePdfName = name.replace(/\.(pptx?|pdf)$/i, '') + '.pdf';
+
+  if (type === MimeType.PDF) {
+    const pdfName = uniqueName_(folder, basePdfName);
+    file.makeCopy(pdfName, folder);
+    return { status: 'PDF copied', slides: '', savedName: pdfName };
+  }
+  if (type === MimeType.GOOGLE_SLIDES) {
+    const pdfName = uniqueName_(folder, basePdfName);
+    return slidesToPdf_(file, pdfName, folder);
+  }
+  if (POWERPOINT_TYPES_.indexOf(type) !== -1) {
+    if (typeof Drive === 'undefined' || !Drive.Files) {
+      throw new Error('Enable "Drive API" (v3) under Services (+) in the Apps Script sidebar to convert PowerPoint files.');
+    }
+    const pdfName = uniqueName_(folder, basePdfName);
+    // PowerPoint has to become Google Slides first. Needs the Drive API service (v3).
+    const temp = Drive.Files.copy(
+      { name: `${TEMP_PREFIX_}${pdfName}`, mimeType: MimeType.GOOGLE_SLIDES, parents: [folder.getId()] },
+      file.getId(),
+      { supportsAllDrives: true }
+    );
+    const tempFile = DriveApp.getFileById(temp.id);
+    try {
+      return slidesToPdf_(tempFile, pdfName, folder);
+    } finally {
+      tempFile.setTrashed(true);
+    }
+  }
+  const otherFolder = folderNamed_(folder, OTHER_FILES_FOLDER_);
+  const otherName = uniqueName_(otherFolder, name);
+  file.makeCopy(otherName, otherFolder);
+  return { status: 'Other file', slides: '', savedName: otherName };
+}
+
+function slidesToPdf_(file, pdfName, folder) {
+  let slides = '';
+  try {
+    slides = SlidesApp.openById(file.getId()).getSlides().length;
+  } catch (err) {
+    // The count is only a check, so a failure here mustn't stop the PDF.
+  }
+
+  let pdfBlob;
+  try {
+    pdfBlob = file.getAs(MimeType.PDF).setName(pdfName);
+  } catch (exportErr) {
+    // Fallback for photo-heavy decks that exceed Drive's 10 MB getAs() export cap
+    const url = `https://docs.google.com/presentation/d/${file.getId()}/export/pdf`;
+    const res = UrlFetchApp.fetch(url, {
+      headers: { Authorization: `Bearer ${ScriptApp.getOAuthToken()}` },
+      muteHttpExceptions: true,
+    });
+    if (res.getResponseCode() !== 200) {
+      throw exportErr;
+    }
+    pdfBlob = res.getBlob().setName(pdfName);
+  }
+
+  folder.createFile(pdfBlob);
+  return { status: 'PDF saved', slides: slides, savedName: pdfName };
+}
+
+function copyOriginal_(file, name, folder) {
+  const savedName = uniqueName_(folder, name);
+  file.makeCopy(savedName, folder);
+  return { status: 'Copied', slides: '', savedName: savedName };
+}
+
+// A small text file in the class folder records what's done, across runs.
+function openReport_(folder, reportFileName) {
+  const targetReportName = reportFileName || REPORT_NAME_;
+  const found = folder.getFilesByName(targetReportName);
+  const file = found.hasNext() ? found.next() : folder.createFile(targetReportName, '\n');
+  const lines = file.getBlob().getDataAsString().split('\n').filter(line => line.trim());
+  const latest = {};
+  const clean = v => String(v ?? '').replace(/[\r\n\t]+/g, ' ').trim();
+  const read = line => {
+    const [fileId, status, slides, student, name] = line.split('\t');
+    if (!fileId || !status) return;
+    latest[fileId] = { status, slides: slides || '', student: student || '', name: name || '' };
+  };
+  lines.forEach(read);
+
+  return {
+    latest,
+    isDone: fileId => !!latest[fileId] && latest[fileId].status !== 'FAILED',
+    add: (fileId, status, slides, student, name) => {
+      const line = [fileId, status, slides, student, name].map(clean).join('\t');
+      lines.push(line);
+      read(line);
+      file.setContent(lines.join('\n') + '\n');
+    },
+  };
+}
+
+// Point out anything the teacher should look at before grading.
+function logClassSummary_(classLabel, report, noFile) {
+  const rows = Object.keys(report.latest).map(id => report.latest[id]);
+  const papers = rows.filter(r => r.status && r.status.indexOf('PDF') === 0);
+  Logger.log(`   -> [${classLabel}]: ${rows.filter(r => r.status !== 'FAILED').length} files prepared.`);
+
+  if (noFile.length) Logger.log(`   No file from: ${noFile.join(', ')}`);
+
+  rows.filter(r => r.status === 'FAILED').forEach(r =>
+    Logger.log(`   [!] FAILED, save this one by hand: ${r.student} (${r.name})`));
+  rows.filter(r => r.status === 'Other file').forEach(r =>
+    Logger.log(`   Not a deck, in "${OTHER_FILES_FOLDER_}": ${r.name}`));
+
+  // More than one PDF for a student: CAM2 leaves these for you to match.
+  const perStudent = {};
+  papers.forEach(r => { perStudent[r.student] = (perStudent[r.student] || 0) + 1; });
+  Object.keys(perStudent).filter(s => perStudent[s] > 1).forEach(s =>
+    Logger.log(`   ${s} has ${perStudent[s]} PDFs. Keep the right one before adding them to CAM2.`));
+
+  // A different slide count moves later slides off their boxes in CAM2.
+  const counts = {};
+  papers.filter(r => r.slides).forEach(r => { counts[r.slides] = (counts[r.slides] || 0) + 1; });
+  const usual = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+  if (usual) {
+    Logger.log(`   Usual deck length: ${usual} slides.`);
+    papers.filter(r => r.slides && r.slides !== usual).forEach(r =>
+      Logger.log(`   ${r.student} has ${r.slides} slides. Check this paper's pages in CAM2.`));
+  }
+  papers.filter(r => !r.slides).forEach(r =>
+    Logger.log(`   Slide count unknown, check this paper's pages in CAM2: ${r.student}`));
+}
+```
