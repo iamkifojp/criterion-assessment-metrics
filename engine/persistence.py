@@ -190,6 +190,10 @@ def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _validate_string_list(value: Any, path: str,
                           issues: List[DatabaseValidationIssue]) -> None:
     if not isinstance(value, list):
@@ -241,6 +245,15 @@ def _validate_score(value: Any, path: str,
     for field in _BOOL_SCORE_FIELDS & value.keys():
         if not isinstance(value[field], bool):
             _add_issue(issues, f"{path}.{field}", "expected-boolean")
+    # Exam grade fields (both optional; see CriterionScore).
+    if "exam_value" in value:
+        exam_value = value["exam_value"]
+        if not _is_int(exam_value):
+            _add_issue(issues, f"{path}.exam_value", "expected-integer")
+        elif not 0 <= exam_value <= 8:
+            _add_issue(issues, f"{path}.exam_value", "band-out-of-range")
+    if "exam_basis" in value and not isinstance(value["exam_basis"], str):
+        _add_issue(issues, f"{path}.exam_basis", "expected-string")
 
 
 def _validate_exam_result(value: Any, path: str,
@@ -296,11 +309,16 @@ def _validate_exam_result(value: Any, path: str,
     if not isinstance(levels, dict):
         _add_issue(issues, f"{path}.levels", "expected-object")
     else:
-        for per in levels.values():
+        for label, per in levels.items():
+            if not isinstance(label, str):
+                _add_issue(issues, f"{path}.levels", "expected-string-key")
             if not isinstance(per, dict):
                 _add_issue(issues, f"{path}.levels.*", "expected-object")
                 continue
-            for level in per.values():
+            for rubric_id, level in per.items():
+                # A None key is a mark filed as a level (issue I3).
+                if not isinstance(rubric_id, str):
+                    _add_issue(issues, f"{path}.levels.*", "expected-string-key")
                 if not (_is_int(level) or level == EXAM_NOT_ANSWERED):
                     _add_issue(issues, f"{path}.levels.*.*", "expected-integer")
     finals = value.get("final_levels", {})
@@ -309,7 +327,9 @@ def _validate_exam_result(value: Any, path: str,
     else:
         # Not 0-8: a CAM2 rubric may run to 100. The 0-8 check happens when a
         # level becomes a CriterionScore.
-        for level in finals.values():
+        for rubric_id, level in finals.items():
+            if not isinstance(rubric_id, str):
+                _add_issue(issues, f"{path}.final_levels", "expected-string-key")
             if not _is_int(level):
                 _add_issue(issues, f"{path}.final_levels.*", "expected-integer")
     comments = value.get("question_comments", {})
@@ -317,6 +337,20 @@ def _validate_exam_result(value: Any, path: str,
         _add_issue(issues, f"{path}.question_comments", "expected-object")
     elif not all(isinstance(c, str) for c in comments.values()):
         _add_issue(issues, f"{path}.question_comments.*", "expected-string")
+    if "percent" in value and not (
+            value["percent"] is None or _is_number(value["percent"])):
+        _add_issue(issues, f"{path}.percent", "expected-number-or-null")
+    if "weighted" in value and not isinstance(value["weighted"], bool):
+        _add_issue(issues, f"{path}.weighted", "expected-boolean")
+    criterion_marks = value.get("criterion_marks", {})
+    if not isinstance(criterion_marks, dict):
+        _add_issue(issues, f"{path}.criterion_marks", "expected-object")
+    else:
+        for rubric_id, marks in criterion_marks.items():
+            if not isinstance(rubric_id, str):
+                _add_issue(issues, f"{path}.criterion_marks", "expected-string-key")
+            if not isinstance(marks, dict):
+                _add_issue(issues, f"{path}.criterion_marks.*", "expected-object")
 
 
 def _validate_sections(value: Any, path: str,
@@ -814,7 +848,7 @@ def validate_database_payload(payload: Any) -> Tuple[DatabaseValidationIssue, ..
 # --------------------------------------------------------------------------
 
 def _score_to_dict(sc: CriterionScore) -> Dict[str, Any]:
-    return {
+    out = {
         "criterion": sc.criterion.value,
         "value": sc.value,
         "timestamp": sc.timestamp.isoformat(),
@@ -827,9 +861,16 @@ def _score_to_dict(sc: CriterionScore) -> Dict[str, Any]:
         "note": sc.note,
         "late": sc.late,
     }
+    # Exam fields only when set, so every other score saves exactly as before.
+    if sc.exam_value is not None:
+        out["exam_value"] = int(sc.exam_value)
+    if sc.exam_basis:
+        out["exam_basis"] = sc.exam_basis
+    return out
 
 
 def _score_from_dict(d: Dict[str, Any]) -> CriterionScore:
+    exam_value = d.get("exam_value")
     return CriterionScore(
         criterion=Criterion(d["criterion"]),
         value=int(d["value"]),
@@ -842,6 +883,8 @@ def _score_from_dict(d: Dict[str, Any]) -> CriterionScore:
         include_in_report=bool(d.get("include_in_report", True)),
         note=d.get("note", ""),
         late=bool(d.get("late", False)),
+        exam_value=int(exam_value) if exam_value is not None else None,
+        exam_basis=str(d.get("exam_basis") or ""),
     )
 
 
@@ -916,6 +959,12 @@ def _exam_result_to_dict(r: ExamResult) -> Dict[str, Any]:
         out["final_levels"] = {str(k): int(v) for k, v in r.final_levels.items()}
     if r.question_comments:
         out["question_comments"] = dict(r.question_comments)
+    if r.percent is not None:
+        out["percent"] = float(r.percent)
+    if r.weighted:
+        out["weighted"] = True
+    if r.criterion_marks:
+        out["criterion_marks"] = {str(k): dict(v) for k, v in r.criterion_marks.items()}
     return out
 
 
@@ -955,6 +1004,8 @@ def _exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
         if isinstance(level, int):
             final_levels[str(rid)] = level
     raw_comments = d.get("question_comments")
+    raw_percent = d.get("percent")
+    raw_marks = d.get("criterion_marks")
     return ExamResult(
         assignment=d["assignment"],
         total=int(d.get("total", 0)),
@@ -972,6 +1023,11 @@ def _exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
         final_levels=final_levels,
         question_comments={str(k): str(v) for k, v in raw_comments.items()}
         if isinstance(raw_comments, dict) else {},
+        percent=float(raw_percent) if _is_number(raw_percent) else None,
+        weighted=d.get("weighted") is True,
+        criterion_marks={str(k): dict(v) for k, v in raw_marks.items()
+                         if isinstance(v, dict)}
+        if isinstance(raw_marks, dict) else {},
     )
 
 
