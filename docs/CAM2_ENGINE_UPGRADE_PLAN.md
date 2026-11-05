@@ -717,13 +717,14 @@ For drafts, set `SAVE_AS_PDF` to `false` to get renamed copies of the original f
 - **Added or deleted slides.** CAM2 finds each task by page number, so later slides won't
   line up with their boxes on that paper. The log flags these decks, and CAM2's page-check
   screen can fix them. Automatic correction was part of the deferred Drive work.
-- **Files not turned in.** The script copies whatever is attached, whether or not the
-  student has turned it in.
-- **A class that can't be read.** The log shows `[!] Error processing courseId`, but the
-  run still ends with `ALL DONE`. Check the log for `[!]` lines before relying on a batch.
-- **Not yet confirmed on Google itself:** how large a deck converts, including the 10 MB
-  limit and the export fallback named in the script's comments, how long a class takes,
-  and how faithful Google's PDFs are.
+- **Files not turned in, on purpose.** The script copies whatever is attached, whether or
+  not the student has turned it in. This shows what each student had done by the deadline.
+- **A class that can't be read.** The log shows `[!] Error processing courseId` and ends
+  with `NOT FINISHED`. Fix the problem and run it again: it carries on in the same folder.
+- **Not yet confirmed on Google itself:** how large a deck converts, including whether the
+  10 MB limit named in the script's comments applies to `getAs`, whether the export
+  fallback keeps working, since it isn't an official API, how long a class takes, and how
+  faithful Google's PDFs are.
 
 ### The script
 
@@ -857,6 +858,7 @@ function prepareSubmissionsForDownload() {
 
   let totalDoneCount = 0;
   let ranOutOfTime = false;
+  let classErrorCount = 0;
 
   for (const item of activeItems) {
     if (ranOutOfTime) break;
@@ -951,6 +953,7 @@ function prepareSubmissionsForDownload() {
 
       if (!ranOutOfTime) logClassSummary_(classLabel, report, noFile);
     } catch (courseErr) {
+      classErrorCount++;
       Logger.log(`[!] Error processing courseId ${item.courseId}: ${courseErr.message}`);
     }
   }
@@ -958,6 +961,8 @@ function prepareSubmissionsForDownload() {
   Logger.log(`\n============================================================`);
   if (ranOutOfTime) {
     Logger.log(`⏳ NOT FINISHED: ${totalDoneCount} files done in this run. Press Run again to carry on.`);
+  } else if (classErrorCount > 0) {
+    Logger.log(`⚠️ NOT FINISHED: ${classErrorCount} class(es) could not be read. See the [!] lines above, fix the problem and press Run again.`);
   } else {
     const props = PropertiesService.getUserProperties();
     props.deleteProperty(BATCH_FOLDER_KEY_);
