@@ -116,7 +116,7 @@ These answer the teacher's questions of 2026-11-04.
 | I8 | Criterion marks are ignored | High (was Medium; D13 needs them) |
 | I9 | Licence notices missing from CAM's bundle | High, **live today** (was Medium) |
 | I10 | Documents describe the old behaviour | Low |
-| I11 | This Mac's `main` is 24 commits behind | Precondition |
+| I11 | This Mac's `main` is 24 commits behind | Resolved by 2026-11-05 |
 | I12 | Several grades on one criterion would break the screens | Avoided by D10 (new) |
 | I13 | A student waiting for a grade can count as Missing = 0 | High (new) |
 | I14 | CAM2 doesn't recognise slide-shaped pages | Precondition for slide decks; fixed in Phase 1 (new) |
@@ -248,6 +248,8 @@ D15 and Phase 4 fix this for new releases. §5.1 P5 covers the published ones.
   D16 changes, and its order changes with D17.
 
 ### I11. This Mac's `main` is 24 commits behind
+
+Resolved: on 2026-11-05 this checkout was level with `origin/main`. The original finding:
 
 Local `main` (`6f4f39d`, 2026-10-29) has no `exam_grading/` or `exam_bridge.py`.
 All 24 missing commits are the convergence work, which also changes CAM's database
@@ -449,6 +451,28 @@ anything new arrives, the same order the convergence plan used.
 - With the teacher's go-ahead (P5), add the notices to the `v2026.11.01` release page.
 
 *Done when:* we know how many real sessions are exposed to I1, I2 and I4.
+
+**Result, 2026-11-05:**
+
+- **Exposure: none.** `tools/exam_exposure_report.py` found 0 sessions in the real data
+  folder, so 0 are exposed to I1, I2 or I4. A separate search agrees: no
+  `cam2_session.json` anywhere under the folder, no exam assignments, exam results or
+  exam-sourced grades in the database, and the files read were unchanged afterwards.
+- **What that covers.** It's one point in time, and assumes the teacher's other two
+  computers use the same synced folder. A real exam opened in CAM before the upgrade
+  ships would need the count run again before Phase 6.
+- **Computers.** The teacher runs CAM on three computers, all on the current version,
+  and each also has CAM2. Colleagues run CAM2 only, so I5 reaches only those three.
+- **This checkout (I11).** Already level with `origin/main`, so no update was needed.
+- **Release page (P5).** Done for `v2026.11.01`, with the teacher's go-ahead: a Licences
+  section, and the zip unchanged. The two July releases have no notice. The teacher is
+  considering deleting them while keeping their tags, so I9 still applies to those.
+- **What the published `v2026.11.01` zip holds.** PyMuPDF 2.0 with MuPDF 1.28.5, Pillow
+  12.3.0 and anthropic 2.3.0, 98 packages in all. So real users already run PyMuPDF 2.0,
+  while §7's tests ran on 1.28.2. Phase 4's check on 2.0 matters for that reason. Its
+  `pymupdf4llm` and `pymupdf_layout` packages are empty placeholders with no licence
+  field; that code now sits inside PyMuPDF, under its licence. Phase 4's third-party list
+  needs to cover them, and PyMuPDF's bundled `onnxruntime`.
 
 ### Phase 1 — CAM2: safe hand-over and slide pages, tagged · M (CAM2 repo)
 
