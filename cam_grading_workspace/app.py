@@ -755,6 +755,11 @@ def write_cache():
                     "grades": st.get("grades", {}),
                     "keywords": st.get("keywords", []),
                     "comment": st.get("comment", ""),
+                    # The line last generated from the ticks, which the comment
+                    # starts with. Absent on older saves; see applyGeneratedLine.
+                    "comment_line": st.get("comment_line"),
+                    # CAM's copy of the comment last seen; see _merge_cam_comment.
+                    "cam_comment": st.get("cam_comment"),
                     "graded": st.get("graded", False),
                     "late_marked": st.get("late_marked"),
                     # True = the teacher set this Late value by hand (tick or
@@ -936,6 +941,32 @@ def load_cam_published_name(folder_id):
     return (str(data.get("assignment") or "").strip() or None)
 
 
+def _merge_cam_comment(student, published):
+    """Take CAM's copy of a comment at a handoff, losing no text.
+
+    ``cam_comment`` remembers the copy last seen, because CAM publishes its copy at
+    every handoff, even when the teacher has typed more here and not exported yet:
+    a copy that hasn't changed is older than what's here. A copy that has changed
+    replaces a comment left as it was, and otherwise the two go together. Returns
+    "same", "kept", "adopted" or "combined"."""
+    current = student.get("comment") or ""
+    seen = student.get("cam_comment")
+    if published:
+        student["cam_comment"] = published
+    if published == current:
+        return "same"
+    if not current:
+        student["comment"] = published
+        return "adopted"
+    if not published or published == seen or published in current:
+        return "kept"
+    if current == seen or current in published:
+        student["comment"] = published
+        return "adopted"
+    student["comment"] = f"{current} {published}"
+    return "combined"
+
+
 def consume_cam_published(folder_id):
     """Delete the CAM-published file after its values are merged + persisted."""
     try:
@@ -1014,6 +1045,8 @@ def load_cache_entry(folder_id):
             "grades": _normalize_grades(st),
             "keywords": st.get("keywords", []),
             "comment": st.get("comment", ""),
+            "comment_line": st.get("comment_line"),
+            "cam_comment": st.get("cam_comment"),
             "graded": st.get("graded", False),
             "late_marked": st.get("late_marked"),
             "late_manual": st.get("late_manual", False),
@@ -1096,6 +1129,8 @@ def load_saved_grades(folder_id):
                     "grades": _normalize_grades(st),
                     "keywords": st.get("keywords", []),
                     "comment": st.get("comment", ""),
+                    "comment_line": st.get("comment_line"),
+                    "cam_comment": st.get("cam_comment"),
                     "graded": st.get("graded", False),
                     "late_marked": st.get("late_marked"),
                     "late_manual": st.get("late_manual", False),
@@ -1399,6 +1434,8 @@ def group_by_student(files, saved, roster=None, aliases=None):
             "grades": dict(prev.get("grades", {})),
             "keywords": prev.get("keywords", []),
             "comment": prev.get("comment", ""),
+            "comment_line": prev.get("comment_line"),
+            "cam_comment": prev.get("cam_comment"),
             "graded": prev.get("graded", False),
             # None = no explicit late decision yet (frontend defaults it from the
             # deadline); True/False = teacher's persisted Late checkbox override.
@@ -1546,11 +1583,43 @@ def has_assessment(student, is_draft):
     return bool(student.get("grades"))
 
 
-def _sync_group_grades(anchor_key):
-    """Make every partner in a group share one grade/keywords/comment.
+def _generated_line(student):
+    """The comment line a student's ticks give. Same text as autoComment in the
+    page, which needs this copy only to combine comments when partners link."""
+    growth = {k.get("label") for k in STATE.get("checklist") or []
+              if k.get("type") == "growth"}
+    keywords = student.get("keywords") or []
+    strengths = [k for k in keywords if k not in growth]
+    develop = [k for k in keywords if k in growth]
+    parts = []
+    if strengths:
+        parts.append("Strengths: " + ", ".join(strengths) + ".")
+    if develop:
+        parts.append("Areas to develop: " + ", ".join(develop) + ".")
+    if student.get("late_marked"):
+        parts.append("Late submission.")
+    return " ".join(parts)
 
-    Source = the anchor if it's already graded, otherwise the first graded
-    member, otherwise the anchor. Keeps newly-linked partners consistent.
+
+def _typed_comment(student):
+    """A student's comment without its generated line, as applyGeneratedLine
+    in the page reads it. A comment not starting with the line stays whole."""
+    text = student.get("comment") or ""
+    line = student.get("comment_line")
+    if not isinstance(line, str):
+        line = _generated_line(student)
+    return text[len(line):].lstrip() if line and text.startswith(line) else text
+
+
+def _sync_group_grades(anchor_key):
+    """Make every partner in a group share one set of marks, losing no comment.
+
+    Grades come from the first graded member in the group's order, so an existing
+    group's grade stands when a new partner joins. There's no record of when a grade
+    was given, so of two students linked with grades, the one clicked first wins.
+    A criterion only another member has a grade on is kept. Ticks and typed comments
+    combine, each different text once, under one generated line for the group.
+    Late stays a single flag, taken from that first graded member.
     """
     g = _find_group(anchor_key)
     if not g:
@@ -1558,21 +1627,28 @@ def _sync_group_grades(anchor_key):
     members = [m for m in g["members"] if m in STATE["students"]]
     if not members:
         return
-    src_key = anchor_key
-    if not STATE["students"][anchor_key].get("graded"):
-        graded = next((m for m in members
-                       if STATE["students"][m].get("graded")), None)
-        if graded:
-            src_key = graded
+    src_key = next((m for m in members if STATE["students"][m].get("graded")), anchor_key)
     src = STATE["students"][src_key]
-    for m in members:
-        tst = STATE["students"][m]
-        tst["grades"] = dict(src.get("grades", {}))
-        tst["keywords"] = list(src.get("keywords", []))
-        tst["comment"] = src.get("comment", "")
-        tst["late_marked"] = src.get("late_marked")
-        tst["late_manual"] = src.get("late_manual", False)
-        tst["graded"] = has_assessment(tst, STATE.get("is_draft"))
+    ordered = [STATE["students"][m] for m in [src_key] + [m for m in members if m != src_key]]
+    grades, keywords, typed = {}, [], []
+    for st in ordered:
+        for criterion, value in (st.get("grades") or {}).items():
+            grades.setdefault(criterion, value)
+        keywords.extend(k for k in st.get("keywords") or [] if k not in keywords)
+        text = _typed_comment(st)
+        if text and text not in typed:
+            typed.append(text)
+    line = _generated_line({"keywords": keywords, "late_marked": src.get("late_marked")})
+    comment = " ".join(part for part in [line] + typed if part)
+    late_marked, late_manual = src.get("late_marked"), src.get("late_manual", False)
+    for st in ordered:
+        st["grades"] = dict(grades)
+        st["keywords"] = list(keywords)
+        st["comment"] = comment
+        st["comment_line"] = line
+        st["late_marked"] = late_marked
+        st["late_manual"] = late_manual
+        st["graded"] = has_assessment(st, STATE.get("is_draft"))
 
 
 # -----------------------------------------------------------------------------
@@ -2223,9 +2299,17 @@ def api_load():
         draft_extra = dict(options["published_feedback"] or {})
         for student in students.values():
             record = draft_extra.pop(student["name"], None)
-            if record is not None:
-                student["comment"] = record.get("comment", "")
-                student["keywords"] = list(record.get("keywords") or [])
+            if record is None:
+                continue
+            outcome = _merge_cam_comment(student, record.get("comment", ""))
+            published = list(record.get("keywords") or [])
+            if outcome == "adopted":
+                student["keywords"] = published
+                # Restored text may not start with the old line, so compare it
+                # with what these ticks give, as for an older saved comment.
+                student["comment_line"] = None
+            elif outcome == "combined":
+                student["keywords"] += [k for k in published if k not in student["keywords"]]
 
     # Reconcile CAM's published grades (written at every dashboard handoff —
     # CAM is the source of truth, so its values are the latest the teacher
@@ -2257,10 +2341,9 @@ def api_load():
             if changed:
                 st["graded"] = True
                 st["cam_modified"] = sorted(set(st["cam_modified"]) | set(changed))
-            # A CAM-edited comment is also the newest value; blank means CAM
-            # holds none — never an instruction to clear ours.
-            if pub["comment"] and pub["comment"] != st.get("comment", ""):
-                st["comment"] = pub["comment"]
+            # Blank means CAM holds none — never an instruction to clear ours.
+            if pub["comment"]:
+                _merge_cam_comment(st, pub["comment"])
         # The published file is CAM's full current snapshot for this folder,
         # so the folderless leftovers replace any previously cached extras.
         cam_extra = {sid: rec for sid, rec in cam.items() if sid not in matched}
@@ -2282,10 +2365,12 @@ def api_load():
     # Recovery: if no checklist was ever saved but students carry keyword marks,
     # reconstruct the rubric from those marks so a lost cache entry doesn't drop
     # the teacher's custom criteria back to the generic defaults.
+    checklist_recovered = False
     if not checklist:
         derived = derive_checklist_from_saved(saved)
         if derived:
             checklist = derived
+            checklist_recovered = True
     criteria = cache_criteria
     if options.get("is_draft") and "draft_criteria" in options:
         criteria = options["draft_criteria"]
@@ -2348,6 +2433,9 @@ def api_load():
         "groups": groups,
         # Saved rubric criteria, or [] -> frontend uses its default template.
         "checklist": checklist,
+        # True = no list was saved, so this one was rebuilt from students' ticks and
+        # holds only ticked keywords. The page decides what to keep; see restoreKeywords.
+        "checklist_recovered": checklist_recovered,
         # Selected MYP criteria + official deadline (restored from cache).
         "criteria": criteria,
         "deadline": deadline,
@@ -2458,6 +2546,9 @@ def api_save():
                 tst["keywords"] = list(data["keywords"])
             if "comment" in data:
                 tst["comment"] = data["comment"]
+            if "comment_line" in data:
+                line = data["comment_line"]
+                tst["comment_line"] = line if isinstance(line, str) else None
             if "late_marked" in data:
                 tst["late_marked"] = data["late_marked"]
             if "late_manual" in data:
@@ -3525,7 +3616,33 @@ function openSelectedAssignment() {
 }
 
 /* ---------- Step 2: load the chosen assignment subfolder ---------- */
+/* The keyword list for a task just loaded. A saved list stays as it is. With none
+   saved, the template is used. A list the server rebuilt from students' ticks holds
+   only what was ticked: if all of that is in the template, the template was in use,
+   so it comes back whole. Otherwise it's a custom list and all that can be recovered. */
+function restoreKeywords(data) {
+  const list = (Array.isArray(data.checklist) ? data.checklist : []).map(k => ({
+    label: String(k.label || "").trim(),
+    type:  k.type === "growth" ? "growth" : "positive",
+  })).filter(k => k.label);
+  const inTemplate = k => DEFAULT_KEYWORDS.some(d => d.label === k.label);
+  if (list.length && !(data.checklist_recovered && list.every(inTemplate))) return list;
+  return DEFAULT_KEYWORDS.map(k => ({...k}));
+}
+
+/* Default the Late flag from the deadline the first time (no saved decision). A
+   saved true/false always wins. Returns the students this makes late, which the
+   caller saves: the export reads the server's flag, and a blank means not late. */
+function deriveLateFlags() {
+  return STUDENTS.filter(st => {
+    if (st.late_marked !== null && st.late_marked !== undefined) return false;
+    st.late_marked = isLate(st);
+    return st.late_marked;
+  });
+}
+
 async function loadFolder() {
+  clearTimeout(_checklistTimer);   // a pending keyword save belongs to the task being left
   const v = $("#assignmentSelect").value;
   if (!v) { alert("Choose an assignment from the dropdown first."); return; }
   setStatus("Loading…");
@@ -3561,28 +3678,18 @@ async function loadFolder() {
     renderCriteriaBoxes();
     // Rebuild the rubric headers from the saved cache for THIS folder. A
     // non-empty list replaces the defaults; an empty/absent list keeps them.
-    if (Array.isArray(data.checklist) && data.checklist.length) {
-      KEYWORDS = data.checklist.map(k => ({
-        label: String(k.label || "").trim(),
-        type:  k.type === "growth" ? "growth" : "positive",
-      })).filter(k => k.label);
-    } else {
-      KEYWORDS = DEFAULT_KEYWORDS.map(k => ({...k}));   // restore template
-    }
+    KEYWORDS = restoreKeywords(data);
     for (const k in byKey) delete byKey[k];
-    STUDENTS.forEach(st => {
-      byKey[st.key] = st;
-      // Default the Late flag from the deadline the first time (no saved
-      // decision). A persisted true/false override always wins.
-      if (st.late_marked === null || st.late_marked === undefined) {
-        st.late_marked = isLate(st);
-      }
-    });
+    STUDENTS.forEach(st => { byKey[st.key] = st; });
+    const derivedLate = deriveLateFlags();
     selectedKey = null; expandedKey = null; linkMode = null;
     renderTags();
     renderTable();
     renderRoster();
     updateCamModNote();   // advisory above the checklist when anything is MODIFIED
+    // Save a list that wasn't saved yet, so the next load finds it whole.
+    if (!(data.checklist || []).length || data.checklist_recovered) saveChecklistNow();
+    derivedLate.forEach(st => save(st));
   } catch (e) { setStatus(""); alert("Error: " + e); }
 }
 function setStatus(t){ $("#status").textContent = t; }
@@ -3934,6 +4041,13 @@ function onLinkClick(key) {
 async function linkPartners(a, b) {
   setStatus("Linking…");
   try {
+    // The server combines the comments it holds, so send it anything still unsaved.
+    const saved = await Promise.all([a, b].map(key => byKey[key] && save(byKey[key])));
+    if (saved.includes(false)) {
+      setStatus("");
+      alert("Couldn't save first, so these students weren't linked. Please try again.");
+      return;
+    }
     const res = await fetch("/api/group/link", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({a_key:a, b_key:b})
@@ -4407,9 +4521,10 @@ function makeRow(st) {
     cb.checked = !!st.late_marked;
     cb.title = "Late submission — untick to waive (permission given)";
     cb.addEventListener("change", () => {
+      const before = generatedLine(st);
       st.late_marked = cb.checked;
       st.late_manual = true;   // hand-set: sticky against deadline re-derivation
-      st.comment = autoComment(st);
+      applyGeneratedLine(st, before);
       const ta = tr.querySelector("textarea.comment"); if (ta) ta.value = st.comment;
       save(st);
       renderRoster();              // late badge on the card follows the checkbox
@@ -4425,9 +4540,10 @@ function makeRow(st) {
     const cb = document.createElement("input"); cb.type="checkbox"; cb.value=k.label;
     cb.checked = st.keywords.includes(k.label);
     cb.addEventListener("change", () => {
+      const before = generatedLine(st);
       if (cb.checked) { if(!st.keywords.includes(k.label)) st.keywords.push(k.label); }
       else st.keywords = st.keywords.filter(x => x!==k.label);
-      st.comment = autoComment(st);
+      applyGeneratedLine(st, before);
       const ta = tr.querySelector("textarea.comment"); if (ta) ta.value = st.comment;
       save(st);
     });
@@ -4460,6 +4576,39 @@ function autoComment(st) {
   return parts.join(" ");
 }
 
+/* The line a student's comment starts with before a tick or Late change: the
+   one last written, or for a comment saved before that was remembered, the one
+   its ticks give. Call this BEFORE changing the ticks or the Late flag. */
+function generatedLine(st) {
+  return typeof st.comment_line === "string" ? st.comment_line : autoComment(st);
+}
+
+/* Replace only the generated line, keeping whatever the teacher wrote. A comment
+   that doesn't start with the old line, such as one edited in CAM, stays whole
+   with the new line in front: repeating some text is better than losing any. */
+function applyGeneratedLine(st, before) {
+  const line = autoComment(st);
+  const text = st.comment || "";
+  const rest = (before && text.startsWith(before))
+    ? text.slice(before.length).replace(/^\s+/, "") : text;
+  st.comment = [line, rest].filter(Boolean).join(" ");
+  st.comment_line = line;
+}
+
+/* Re-derive Late from the deadline. Only a student whose flag changes is
+   rewritten; a hand-set flag (late_manual) is sticky. Returns those to save. */
+function applyDeadlineToLate() {
+  return STUDENTS.filter(st => {
+    if (st.late_manual) return false;
+    const late = isLate(st);
+    if (!!st.late_marked === late) return false;
+    const before = generatedLine(st);
+    st.late_marked = late;
+    applyGeneratedLine(st, before);
+    return true;
+  });
+}
+
 /* ---------- Save -> update state, mirror partners, roster re-sort ---------- */
 function refreshRow(st) {
   // Sync a partner's existing row inputs to mirrored values WITHOUT rebuilding
@@ -4480,21 +4629,31 @@ function refreshRow(st) {
 
 async function save(st) {
   st.graded = IS_DRAFT ? !!(st.comment || st.keywords.length) : !!gradeSum(st) || (st.grades && Object.keys(st.grades).length > 0);
-  let affected = [st];
+  let affected = [st], saved = false;
+  const before = new Map(STUDENTS.map(s => [s.key, [s.comment, s.comment_line]]));
   try {
     const res = await fetch("/api/save", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({key:st.key, grades:st.grades, keywords:st.keywords,
-                            comment:st.comment, late_marked:st.late_marked,
+                            comment:st.comment, comment_line:st.comment_line,
+                            late_marked:st.late_marked,
                             late_manual:!!st.late_manual,
                             cam_modified:st.cam_modified || []})
     });
     const data = await res.json();
+    saved = !data.error;
     const list = (data.students && data.students.length) ? data.students
                : (data.student ? [data.student] : []);
     list.forEach(s2 => {
       const local = byKey[s2.key]; if (!local) return;
+      // The teacher may have typed or ticked again while this save was on its
+      // way, on this student or a partner. The reply is older than that, so it
+      // must not replace the comment.
+      const was = before.get(s2.key);
+      const moved = was && (local.comment !== was[0] || local.comment_line !== was[1]);
+      const comment = local.comment, line = local.comment_line;
       Object.assign(local, s2);
+      if (moved) { local.comment = comment; local.comment_line = line; }
       if (local.key !== st.key) refreshRow(local);   // update mirrored partner rows
     });
     if (list.length) affected = list.map(s2 => byKey[s2.key]).filter(Boolean);
@@ -4506,6 +4665,7 @@ async function save(st) {
     if (tr) { tr.classList.remove("row-saved"); void tr.offsetWidth; tr.classList.add("row-saved"); }
   });
   renderRoster();   // roster re-sorts; matrix stays put
+  return saved;
 }
 
 /* ---------- MODIFIED markers (grades changed in CAM since last export) ---- */
@@ -4595,6 +4755,11 @@ function remapKeywordLabel(oldLabel, newLabel) {
     }
     if (st.comment && st.comment.indexOf(oldLabel) !== -1) {
       st.comment = st.comment.split(oldLabel).join(newLabel);  // literal replace
+      touched = true;
+    }
+    // The remembered line follows, so the comment still starts with it.
+    if (st.comment_line && st.comment_line.indexOf(oldLabel) !== -1) {
+      st.comment_line = st.comment_line.split(oldLabel).join(newLabel);
       touched = true;
     }
     if (touched) save(st);            // persist the migrated marks for this student
@@ -4705,14 +4870,11 @@ $("#deadlineInput").addEventListener("change", () => {
   pushSettings();
   // The deadline is the ground truth, so re-derive every student's Late flag
   // from it (this resets prior auto-derived flags; manual ticks/waivers
-  // (late_manual) are sticky and left untouched) and refresh the auto-comments.
-  STUDENTS.forEach(st => {
-    if (!st.late_manual) st.late_marked = isLate(st);
-    st.comment = autoComment(st);
-  });
+  // (late_manual) are sticky and left untouched). Everyone else is left alone.
+  const changed = applyDeadlineToLate();
   renderTable();
   renderRoster();
-  STUDENTS.forEach(st => save(st));   // persist the recomputed late flag + comment
+  changed.forEach(st => save(st));   // persist the recomputed late flag + comment
 });
 $("#exportBtn").addEventListener("click", exportCsv);
 $("#colSlider").addEventListener("input", e => setCols(e.target.value));

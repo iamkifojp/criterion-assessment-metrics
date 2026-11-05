@@ -3,12 +3,11 @@
 **Status:** v6, 2026-11-05. **Fixed:** the teacher accepted every answer in §5.2 that day.
 v6 merges [CAM2_FEEDBACK_FOR_CAM.md](CAM2_FEEDBACK_FOR_CAM.md) into Phases 1 to 6 and
 brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by the teacher.
-Q4's trial still sets the F6 wording in Phase 3. The smaller points
+Q4's trial set the F6 wording in Phase 3. The smaller points
 (§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done.
 Phase 1's code is built on CAM2's `phase1-slides-and-comment-limits` branch, not yet merged
-or tagged (see its progress note). Phase 2 is built on CAM's `cam2-upgrade-phase2` branch
-and Phase 3 on `cam2-upgrade-phase3` (see their progress notes). Phases 2W and 4 to 6 aren't
-built yet.
+or tagged (see its progress note). Phases 2, 2W and 3 are on CAM's `main` (see their progress
+notes). Phases 4 to 6 aren't built yet, and Phase 4 needs the Phase 1 tag.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -790,6 +789,78 @@ to the workspace in this upgrade, as F5's first stage says.
 *Done when:* in that browser check, no trigger loses typed text, and a deadline change
 leaves students whose Late flag didn't change untouched.
 
+**Progress, 2026-11-06.** Built from `main`, on fictional data only. Both "done when" points
+were met in the browser check below.
+
+- **The deadline case on the old code, now run:** in a sandbox with a typed comment on a
+  student whose Late flag didn't change, a deadline change emptied the comment and saved all
+  four students. I15's reading of the code was right.
+- **Tests:** CAM 299 and CAM2 216, on this desktop with Node, so none skipped. There's now a
+  JavaScript test that runs the real page functions through Node, and it skips where there's no
+  Node.
+- **Browser, in a sandbox on Windows:** typing then ticking with real clicks and keys, then
+  driving the page's own controls by script for the rest: tick and untick, the Late tick,
+  a deadline change in both directions (only the students whose flag changed were saved, and a
+  waived one stayed put), an older comment with and without its line, comments rewritten and
+  extended through CAM's published file, linked partners, a renamed tick, and a reload.
+- **Choices this phase settled:**
+  - **The line and the text are joined by a space, not a new line as in CAM2.** CAM's
+    `clean_comment` doesn't remove a new line, which would show in the comments log, and a
+    space leaves the export and CAM's screens as they are today.
+  - **A comment a draft takes from its published feedback forgets its remembered line,** so
+    it's compared with the line its ticks give. A comment edited in CAM keeps it, so an edit
+    that leaves the line in place still has it replaced.
+  - **A save's reply no longer overwrites newer text.** It's older than anything typed or
+    ticked while it was on its way, and it could otherwise bring old text back.
+  - **`comment_line` needs no bump to `CACHE_VERSION`,** since it's optional.
+- **Two more problems this phase found, fixed here at the teacher's decision (2026-11-06):**
+  - **Linking partners replaced one student's comment, grades and ticks with no warning.**
+    Now the grade comes from the first graded member and reaches the group, as before, and
+    **every comment combines**, so a group's comment can be longer than one student's. Ticks
+    combine too, under one generated line. Linking saves both students first, because the
+    server combines what it holds.
+    - **There's no record of when a grade was given.** So with two students already graded,
+      the one clicked first wins. A new partner joining a group never changes its grade.
+    - **A criterion only one member has a grade on is kept,** rather than deleted.
+    - **Only a whole comment counts as the same.** So a third partner whose words already sit
+      inside the combined text repeats them, which P10 prefers to losing any.
+    - **Unlinking leaves each student with the combined result,** and Late stays one flag for
+      the group, from the first graded member.
+    - **This needs the generated line on the server** (`_generated_line`), a second copy of the
+      page's `autoComment`. A test runs both on the same input.
+  - **A keyword list never edited came back after a reload with only the ticked keywords,**
+    because the default list wasn't saved, and the server rebuilds a missing list from ticks.
+    Now the page saves the list as soon as a task opens. A rebuilt list whose ticks are all in
+    the default list brings back the whole default list. Otherwise it's a custom list, and
+    what was ticked is all that can be recovered.
+    - **A task already reloaded before this fix stays short.** Its short list was saved, and it
+      can't be told from one the teacher shortened on purpose, so its keywords need adding back
+      by hand.
+- **A second review found four more, all fixed:**
+  - **A Late flag could export as not late.** The page works out a student's flag at load, and
+    the old deadline handler happened to save everyone's. Saving only flips (P11) meant a
+    flag worked out as late might never reach the server, and a blank Late cell reads as not
+    late in CAM. The page now saves a flag it works out as late when the task opens.
+  - **Opening a task from CAM replaced text typed here and not yet exported,** for graded tasks
+    and drafts, with no warning. CAM publishes its copy at every handoff. Now `cam_comment`
+    remembers the copy last seen: an unchanged copy is older than what's here, and a changed
+    one replaces a comment left as it was. If both changed, or no copy has been seen, the two
+    go together, which can repeat some text once (P10).
+  - **A save's reply could overwrite what was being typed in a partner's box.** The reply now
+    leaves any student whose comment moved while it was on its way.
+  - **Linking carried on after a failed save,** which could lose the text. It now stops and says
+    so. A pending keyword save is also cancelled when another task loads.
+- **Tests after that review:** CAM 316 and CAM2 216.
+- **Checked for those two:** CAM 309 and CAM2 216. In the same sandbox: the keyword list on
+  first open, after ticks and reloads, rebuilt from ticks, custom, and shortened on purpose;
+  linking with typed and unsaved comments, a graded partner and a grade given after linking;
+  a tick and a deadline change after linking; a reload, unlinking and the export. The link
+  buttons were pressed by script. The first run of this check lost typed text that hadn't
+  been saved, which is why linking now saves first.
+- **Not checked:** an older workspace on another computer, which from reading its code drops
+  the field on save. Draft restoring ran in a server test only, not in the browser, and linked
+  drafts ran in server tests only. Linking wasn't tried with the mouse.
+
 ### Phase 3 — CAM: decide per criterion in Window 3 · M–L
 
 - **Window 3 exam block** (D10, D11, D13, P4, P6, P7). Under `📝 <exam>`, one group per
@@ -897,7 +968,10 @@ the wording without settling everything.
   - **Exam comments did feed both strengths and growth** in every comment read.
   - **Still to check:** real comments on the teacher's usual model, and Japanese text, which
     the trial didn't cover.
-- **Tests on the pin:** CAM 449 (8 skipped, all waiting for a version 2 session), CAM2 216.
+- **Tests on the pin, with Phases 2, 2W and 3 together:** CAM 473 (8 skipped, all waiting for a
+  version 2 session), CAM2 216.
+- **Older CAM, rerun with all three:** the engine at `1c41655` reads a mixed exam with the new
+  fields and resaves it, losing only the new keys.
 - **Outside the repo,** with CAM2's `phase1-slides-and-comment-limits` branch at `3696d1e`
   as `exam_grading/`: those 8 pass, and only the two I1 tests fail, as I7 expects.
 - **Browser, in a sandbox on Windows,** on that branch and then the pin: the 12-screen
@@ -1070,6 +1144,10 @@ matrix as Phase 4. Nothing is released yet.
   - what `file_from_newer_version` means on a computer not yet updated;
   - in the workspace, ticks and deadline changes no longer overwrite typed comments, so
     the tick-first workaround can stop;
+  - linking partners now combines their comments and ticks, and the first graded member's
+    grade reaches the group;
+  - a keyword list no longer shrinks on reload, and a list that already shrank needs its
+    keywords adding back by hand;
   - every exam's overall and question comments now go into the term comment prompt, and
     so to the AI service the teacher has chosen, and exams no longer take the strength
     and growth places;

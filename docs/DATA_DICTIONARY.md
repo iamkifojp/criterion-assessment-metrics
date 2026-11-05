@@ -347,8 +347,11 @@ never persisted, rebuilt on each load.
   ```jsonc
   { "id": "<groupId>", "members": ["<studentKey>", …], "color": "<hex/name>" }
   ```
-  Linked partners **share one grade** (`_sync_group_grades`). Colours are
-  allocated from `GROUP_COLORS`, avoiding collisions.
+  Linked partners **share one grade** (`_sync_group_grades`), from the first graded
+  member in the group's order, and a criterion only another member has a grade on is
+  kept. Their ticks and typed comments **combine**, so a group's comment can be longer
+  than one student's. Unlinking leaves each student with the combined result. Colours
+  are allocated from `GROUP_COLORS`, avoiding collisions.
 
 ### B.3 Student record — ⚠ two coexisting shapes
 
@@ -363,6 +366,13 @@ handled on read:
   "grades":       { "A": "7" },   // per-criterion, values are STRINGS
   "keywords":     ["Accurate Proportion"],
   "comment":      "Strengths: Accurate Proportion.",
+  "comment_line": "Strengths: Accurate Proportion.",
+                                  // the line last generated from the ticks, which
+                                  // the comment starts with. null/absent = not
+                                  // remembered, so the ticks' line is compared.
+  "cam_comment":  "Strengths: Accurate Proportion.",
+                                  // CAM's copy of the comment last seen at a
+                                  // handoff. null/absent = none seen yet.
   "graded":       true,
   "late_marked":  null,           // true | false | null (null = never assessed)
   "late_manual":  false,          // true = teacher hand-set late_marked (tick or
@@ -384,6 +394,19 @@ migration (`upgrade_entry`, §B.8) **defaults `late_manual` to `false` only when
 the key is absent** and otherwise carries a hand-set value through verbatim — it
 must never strip or force it (that would silently un-stick every teacher-set
 Late tick, the 2026-07-09 late-flag incident).
+
+`comment_line` is **CGW-internal** too, and optional, so it needs no schema bump.
+A tick, a Late change or a deadline change replaces only this line at the start of
+`comment`, and keeps what follows. A comment that doesn't start with it stays whole,
+with the new line in front. It isn't written to the export CSV, whose comment column
+stays the whole comment. An older workspace drops it on save, which only means the
+ticks' line is compared next time.
+
+`cam_comment` is **CGW-internal** and optional too. CAM publishes its copy of a
+comment at every handoff, even when more has been typed here and not exported, so
+`_merge_cam_comment` compares it with the copy last seen. An unchanged copy is older
+than what's here and is ignored. A changed copy replaces a comment left as it was. If
+both changed, or no copy has been seen yet, the two go together, so no text is lost.
 
 **Legacy shape** (older entries, still present):
 
@@ -412,10 +435,10 @@ The five live entries in the sample `grading_cache.json` span two entry shapes:
 | `+ class_folder_id, criteria, deadline` | Current entry. |
 
 Consumers should treat `class_folder_id`, `criteria`, `deadline`,
-`cam_extra`, `cam_name` and the per-student `cam_modified` / `late_manual` as
-**optional** (missing `late_manual` → `false`, i.e. auto-derived) —
+`cam_extra`, `cam_name` and the per-student `cam_modified` / `late_manual` /
+`comment_line` as **optional** (missing `late_manual` → `false`, i.e. auto-derived) —
 `load_cache_entry` defaults them (`criteria → []`, `deadline → ""`,
-`cam_extra → {}`, `cam_name → None`, `cam_modified → []`) so an older entry
+`cam_extra → {}`, `cam_name → None`, `cam_modified → []`, `comment_line → None`) so an older entry
 loads without error.
 
 ### B.5 Related files (not the cache, but adjacent)
