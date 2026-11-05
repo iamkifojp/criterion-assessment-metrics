@@ -773,7 +773,7 @@ were met in the browser check below.
   - **The line and the text are joined by a space, not a new line as in CAM2.** CAM's
     `clean_comment` doesn't remove a new line, which would show in the comments log, and a
     space leaves the export and CAM's screens as they are today.
-  - **A comment restored from a draft's published feedback forgets its remembered line,** so
+  - **A comment a draft takes from its published feedback forgets its remembered line,** so
     it's compared with the line its ticks give. A comment edited in CAM keeps it, so an edit
     that leaves the line in place still has it replaced.
   - **A save's reply no longer overwrites newer text.** It's older than anything typed or
@@ -802,6 +802,21 @@ were met in the browser check below.
     - **A task already reloaded before this fix stays short.** Its short list was saved, and it
       can't be told from one the teacher shortened on purpose, so its keywords need adding back
       by hand.
+- **A second review found four more, all fixed:**
+  - **A Late flag could export as not late.** The page works out a student's flag at load, and
+    the old deadline handler happened to save everyone's. Saving only flips (P11) meant a
+    flag worked out as late might never reach the server, and a blank Late cell reads as not
+    late in CAM. The page now saves a flag it works out as late when the task opens.
+  - **Opening a task from CAM replaced text typed here and not yet exported,** for graded tasks
+    and drafts, with no warning. CAM publishes its copy at every handoff. Now `cam_comment`
+    remembers the copy last seen: an unchanged copy is older than what's here, and a changed
+    one replaces a comment left as it was. If both changed, or no copy has been seen, the two
+    go together, which can repeat some text once (P10).
+  - **A save's reply could overwrite what was being typed in a partner's box.** The reply now
+    leaves any student whose comment moved while it was on its way.
+  - **Linking carried on after a failed save,** which could lose the text. It now stops and says
+    so. A pending keyword save is also cancelled when another task loads.
+- **Tests after that review:** CAM 316 and CAM2 216.
 - **Checked for those two:** CAM 309 and CAM2 216. In the same sandbox: the keyword list on
   first open, after ticks and reloads, rebuilt from ticks, custom, and shortened on purpose;
   linking with typed and unsaved comments, a graded partner and a grade given after linking;

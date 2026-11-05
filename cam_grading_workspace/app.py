@@ -758,6 +758,8 @@ def write_cache():
                     # The line last generated from the ticks, which the comment
                     # starts with. Absent on older saves; see applyGeneratedLine.
                     "comment_line": st.get("comment_line"),
+                    # CAM's copy of the comment last seen; see _merge_cam_comment.
+                    "cam_comment": st.get("cam_comment"),
                     "graded": st.get("graded", False),
                     "late_marked": st.get("late_marked"),
                     # True = the teacher set this Late value by hand (tick or
@@ -939,6 +941,32 @@ def load_cam_published_name(folder_id):
     return (str(data.get("assignment") or "").strip() or None)
 
 
+def _merge_cam_comment(student, published):
+    """Take CAM's copy of a comment at a handoff, losing no text.
+
+    ``cam_comment`` remembers the copy last seen, because CAM publishes its copy at
+    every handoff, even when the teacher has typed more here and not exported yet:
+    a copy that hasn't changed is older than what's here. A copy that has changed
+    replaces a comment left as it was, and otherwise the two go together. Returns
+    "same", "kept", "adopted" or "combined"."""
+    current = student.get("comment") or ""
+    seen = student.get("cam_comment")
+    if published:
+        student["cam_comment"] = published
+    if published == current:
+        return "same"
+    if not current:
+        student["comment"] = published
+        return "adopted"
+    if not published or published == seen or published in current:
+        return "kept"
+    if current == seen or current in published:
+        student["comment"] = published
+        return "adopted"
+    student["comment"] = f"{current} {published}"
+    return "combined"
+
+
 def consume_cam_published(folder_id):
     """Delete the CAM-published file after its values are merged + persisted."""
     try:
@@ -1018,6 +1046,7 @@ def load_cache_entry(folder_id):
             "keywords": st.get("keywords", []),
             "comment": st.get("comment", ""),
             "comment_line": st.get("comment_line"),
+            "cam_comment": st.get("cam_comment"),
             "graded": st.get("graded", False),
             "late_marked": st.get("late_marked"),
             "late_manual": st.get("late_manual", False),
@@ -1101,6 +1130,7 @@ def load_saved_grades(folder_id):
                     "keywords": st.get("keywords", []),
                     "comment": st.get("comment", ""),
                     "comment_line": st.get("comment_line"),
+                    "cam_comment": st.get("cam_comment"),
                     "graded": st.get("graded", False),
                     "late_marked": st.get("late_marked"),
                     "late_manual": st.get("late_manual", False),
@@ -1405,6 +1435,7 @@ def group_by_student(files, saved, roster=None, aliases=None):
             "keywords": prev.get("keywords", []),
             "comment": prev.get("comment", ""),
             "comment_line": prev.get("comment_line"),
+            "cam_comment": prev.get("cam_comment"),
             "graded": prev.get("graded", False),
             # None = no explicit late decision yet (frontend defaults it from the
             # deadline); True/False = teacher's persisted Late checkbox override.
@@ -2268,12 +2299,17 @@ def api_load():
         draft_extra = dict(options["published_feedback"] or {})
         for student in students.values():
             record = draft_extra.pop(student["name"], None)
-            if record is not None:
-                student["comment"] = record.get("comment", "")
-                student["keywords"] = list(record.get("keywords") or [])
+            if record is None:
+                continue
+            outcome = _merge_cam_comment(student, record.get("comment", ""))
+            published = list(record.get("keywords") or [])
+            if outcome == "adopted":
+                student["keywords"] = published
                 # Restored text may not start with the old line, so compare it
                 # with what these ticks give, as for an older saved comment.
                 student["comment_line"] = None
+            elif outcome == "combined":
+                student["keywords"] += [k for k in published if k not in student["keywords"]]
 
     # Reconcile CAM's published grades (written at every dashboard handoff —
     # CAM is the source of truth, so its values are the latest the teacher
@@ -2305,10 +2341,9 @@ def api_load():
             if changed:
                 st["graded"] = True
                 st["cam_modified"] = sorted(set(st["cam_modified"]) | set(changed))
-            # A CAM-edited comment is also the newest value; blank means CAM
-            # holds none — never an instruction to clear ours.
-            if pub["comment"] and pub["comment"] != st.get("comment", ""):
-                st["comment"] = pub["comment"]
+            # Blank means CAM holds none — never an instruction to clear ours.
+            if pub["comment"]:
+                _merge_cam_comment(st, pub["comment"])
         # The published file is CAM's full current snapshot for this folder,
         # so the folderless leftovers replace any previously cached extras.
         cam_extra = {sid: rec for sid, rec in cam.items() if sid not in matched}
@@ -3595,7 +3630,19 @@ function restoreKeywords(data) {
   return DEFAULT_KEYWORDS.map(k => ({...k}));
 }
 
+/* Default the Late flag from the deadline the first time (no saved decision). A
+   saved true/false always wins. Returns the students this makes late, which the
+   caller saves: the export reads the server's flag, and a blank means not late. */
+function deriveLateFlags() {
+  return STUDENTS.filter(st => {
+    if (st.late_marked !== null && st.late_marked !== undefined) return false;
+    st.late_marked = isLate(st);
+    return st.late_marked;
+  });
+}
+
 async function loadFolder() {
+  clearTimeout(_checklistTimer);   // a pending keyword save belongs to the task being left
   const v = $("#assignmentSelect").value;
   if (!v) { alert("Choose an assignment from the dropdown first."); return; }
   setStatus("Loading…");
@@ -3633,14 +3680,8 @@ async function loadFolder() {
     // non-empty list replaces the defaults; an empty/absent list keeps them.
     KEYWORDS = restoreKeywords(data);
     for (const k in byKey) delete byKey[k];
-    STUDENTS.forEach(st => {
-      byKey[st.key] = st;
-      // Default the Late flag from the deadline the first time (no saved
-      // decision). A persisted true/false override always wins.
-      if (st.late_marked === null || st.late_marked === undefined) {
-        st.late_marked = isLate(st);
-      }
-    });
+    STUDENTS.forEach(st => { byKey[st.key] = st; });
+    const derivedLate = deriveLateFlags();
     selectedKey = null; expandedKey = null; linkMode = null;
     renderTags();
     renderTable();
@@ -3648,6 +3689,7 @@ async function loadFolder() {
     updateCamModNote();   // advisory above the checklist when anything is MODIFIED
     // Save a list that wasn't saved yet, so the next load finds it whole.
     if (!(data.checklist || []).length || data.checklist_recovered) saveChecklistNow();
+    derivedLate.forEach(st => save(st));
   } catch (e) { setStatus(""); alert("Error: " + e); }
 }
 function setStatus(t){ $("#status").textContent = t; }
@@ -4000,7 +4042,12 @@ async function linkPartners(a, b) {
   setStatus("Linking…");
   try {
     // The server combines the comments it holds, so send it anything still unsaved.
-    await Promise.all([a, b].map(key => byKey[key] && save(byKey[key])));
+    const saved = await Promise.all([a, b].map(key => byKey[key] && save(byKey[key])));
+    if (saved.includes(false)) {
+      setStatus("");
+      alert("Couldn't save first, so these students weren't linked. Please try again.");
+      return;
+    }
     const res = await fetch("/api/group/link", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({a_key:a, b_key:b})
@@ -4582,8 +4629,8 @@ function refreshRow(st) {
 
 async function save(st) {
   st.graded = IS_DRAFT ? !!(st.comment || st.keywords.length) : !!gradeSum(st) || (st.grades && Object.keys(st.grades).length > 0);
-  let affected = [st];
-  const sentComment = st.comment, sentLine = st.comment_line;
+  let affected = [st], saved = false;
+  const before = new Map(STUDENTS.map(s => [s.key, [s.comment, s.comment_line]]));
   try {
     const res = await fetch("/api/save", {
       method:"POST", headers:{"Content-Type":"application/json"},
@@ -4594,13 +4641,16 @@ async function save(st) {
                             cam_modified:st.cam_modified || []})
     });
     const data = await res.json();
+    saved = !data.error;
     const list = (data.students && data.students.length) ? data.students
                : (data.student ? [data.student] : []);
     list.forEach(s2 => {
       const local = byKey[s2.key]; if (!local) return;
       // The teacher may have typed or ticked again while this save was on its
-      // way. The reply is older than that, so it must not replace the comment.
-      const moved = local === st && (st.comment !== sentComment || st.comment_line !== sentLine);
+      // way, on this student or a partner. The reply is older than that, so it
+      // must not replace the comment.
+      const was = before.get(s2.key);
+      const moved = was && (local.comment !== was[0] || local.comment_line !== was[1]);
       const comment = local.comment, line = local.comment_line;
       Object.assign(local, s2);
       if (moved) { local.comment = comment; local.comment_line = line; }
@@ -4615,6 +4665,7 @@ async function save(st) {
     if (tr) { tr.classList.remove("row-saved"); void tr.offsetWidth; tr.classList.add("row-saved"); }
   });
   renderRoster();   // roster re-sorts; matrix stays put
+  return saved;
 }
 
 /* ---------- MODIFIED markers (grades changed in CAM since last export) ---- */

@@ -347,6 +347,9 @@ handled on read:
                                   // the line last generated from the ticks, which
                                   // the comment starts with. null/absent = not
                                   // remembered, so the ticks' line is compared.
+  "cam_comment":  "Strengths: Accurate Proportion.",
+                                  // CAM's copy of the comment last seen at a
+                                  // handoff. null/absent = none seen yet.
   "graded":       true,
   "late_marked":  null,           // true | false | null (null = never assessed)
   "late_manual":  false,          // true = teacher hand-set late_marked (tick or
@@ -375,6 +378,12 @@ A tick, a Late change or a deadline change replaces only this line at the start 
 with the new line in front. It isn't written to the export CSV, whose comment column
 stays the whole comment. An older workspace drops it on save, which only means the
 ticks' line is compared next time.
+
+`cam_comment` is **CGW-internal** and optional too. CAM publishes its copy of a
+comment at every handoff, even when more has been typed here and not exported, so
+`_merge_cam_comment` compares it with the copy last seen. An unchanged copy is older
+than what's here and is ignored. A changed copy replaces a comment left as it was. If
+both changed, or no copy has been seen yet, the two go together, so no text is lost.
 
 **Legacy shape** (older entries, still present):
 

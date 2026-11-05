@@ -101,6 +101,7 @@ assert.equal(gradeChipText(st), '0');
         functions = []
         for start in ("function isLate(", "function autoComment(", "function generatedLine(",
                       "function applyGeneratedLine(", "function applyDeadlineToLate(",
+                      "function deriveLateFlags(",
                       "function remapKeywordLabel(", "async function save("):
             begin = source.index(start)
             functions.append(source[begin:source.index("\n}\n", begin) + 2])
@@ -192,10 +193,25 @@ assert.equal(saves.length, 1);
 tick(st, 'Tone');
 assert.equal(st.comment, 'Strengths: Tone. Typed.');
 
+// A flag worked out from the deadline is returned for saving only if it's late.
+DEADLINE = '2026-10-05T12:00';
+const unset = student({key: 'u', late_marked: null, files: [{created_time: '2026-10-10T09:00:00'}]});
+const onTime = student({key: 'o', files: [{created_time: '2026-10-01T09:00:00'}]});
+const decided = student({key: 'd', late_marked: false, files: [{created_time: '2026-10-10T09:00:00'}]});
+STUDENTS = [unset, onTime, decided];
+assert.deepEqual(deriveLateFlags().map(s => s.key), ['u']);
+assert.equal(unset.late_marked, true);
+assert.equal(onTime.late_marked, false);
+assert.equal(decided.late_marked, false);
+assert.equal(unset.comment, '');
+
 // A save's reply can't undo typing that happened while it was on its way.
 (async () => {
   const typing = student({comment: 'Before.', comment_line: ''});
+  const partner = student({key: 'p', comment: 'Before.', comment_line: ''});
   byKey.k = typing;
+  byKey.p = partner;
+  STUDENTS = [typing, partner];
   let reply;
   global.fetch = (url, options) => {
     assert.equal(JSON.parse(options.body).comment_line, '');
@@ -209,8 +225,29 @@ assert.equal(st.comment, 'Strengths: Tone. Typed.');
   assert.equal(typing.graded, true);
   const settled = realSave(typing);
   reply({json: async () => ({students: [{key: 'k', comment: 'From the server.', comment_line: ''}]})});
-  await settled;
+  assert.equal(await settled, true);
   assert.equal(typing.comment, 'From the server.');
+
+  // Nor what's being typed in a partner's box, while a partner left alone follows.
+  const mirrored = {students: [{key: 'k', comment: 'Mirrored.', comment_line: ''},
+                               {key: 'p', comment: 'Mirrored.', comment_line: ''}]};
+  let pendingSave = realSave(typing);
+  partner.comment = 'Typing in the partner.';
+  reply({json: async () => mirrored});
+  await pendingSave;
+  assert.equal(partner.comment, 'Typing in the partner.');
+  assert.equal(typing.comment, 'Mirrored.');
+  pendingSave = realSave(typing);
+  reply({json: async () => mirrored});
+  await pendingSave;
+  assert.equal(partner.comment, 'Mirrored.');
+
+  // A failed save says so, for linking to stop.
+  pendingSave = realSave(typing);
+  reply({json: async () => ({error: 'Unknown student key'})});
+  assert.equal(await pendingSave, false);
+  global.fetch = async () => { throw new Error('offline'); };
+  assert.equal(await realSave(typing), false);
 })().catch(error => { console.error(error); process.exit(1); });
 """
         result = subprocess.run([node, "-e", script], capture_output=True, text=True)
@@ -230,7 +267,8 @@ let GROUPS = [];
 const byKey = {a: {key: 'a', comment: 'Unsaved.'}, b: {key: 'b', comment: ''}};
 const order = [];
 const setStatus = () => {}, renderTable = () => {}, renderRoster = () => {}, alert = fail => { throw new Error(fail); };
-const save = async st => { await null; order.push('save ' + st.key + ': ' + st.comment); };
+let saveWorks = true;
+const save = async st => { await null; order.push('save ' + st.key + ': ' + st.comment); return saveWorks; };
 global.fetch = async url => {
   order.push(url);
   return {ok: true, json: async () => ({groups: [{id: 1}], students: [{key: 'b', comment: 'Unsaved.'}]})};
@@ -239,6 +277,15 @@ linkPartners('a', 'b').then(() => {
   assert.deepEqual(order, ['save a: Unsaved.', 'save b: ', '/api/group/link']);
   assert.equal(byKey.b.comment, 'Unsaved.');
   assert.equal(GROUPS.length, 1);
+  // A failed save stops the link, so the reply can't replace unsaved text.
+  order.length = 0;
+  saveWorks = false;
+  return linkPartners('a', 'b').then(
+    () => { throw new Error('should have alerted'); },
+    error => {
+      assert.ok(!order.includes('/api/group/link'));
+      assert.match(error.message, /weren't linked/);
+    });
 }).catch(error => { console.error(error); process.exit(1); });
 """
         result = subprocess.run([node, "-e", script], capture_output=True, text=True)
@@ -582,12 +629,87 @@ class WorkspaceTests(unittest.TestCase):
     def test_comment_edited_in_cam_keeps_the_remembered_line(self):
         key = self.student["key"]
         self.save_comment(key, "Strengths: Context. Typed.", "Strengths: Context.")
-        published = {self.student["name"]: {"grades": {}, "comment": "Edited in CAM."}}
-        with patch.object(self.ws, "load_cam_published", return_value=published):
-            self.load()
+        # CAM's copy last seen, then the same comment edited in CAM.
+        self.handoff("Strengths: Context. Typed.")
+        self.handoff("Edited in CAM.")
         self.assertEqual(self.student["comment"], "Edited in CAM.")
         # The page sees it no longer starts with the line, so the text stays whole.
         self.assertEqual(self.student["comment_line"], "Strengths: Context.")
+
+    def handoff(self, comment):
+        """Open the task from CAM, with CAM holding this comment."""
+        published = {self.student["name"]: {"grades": {}, "comment": comment}}
+        with patch.object(self.ws, "load_cam_published", return_value=published):
+            self.load()
+
+    def test_a_handoff_keeps_text_typed_since_cam_last_saw_the_comment(self):
+        key = self.student["key"]
+        self.save_comment(key, "From CAM.", "")
+        self.handoff("From CAM.")
+        self.save_comment(key, "From CAM. Typed here, not exported.", "")
+        # CAM publishes its older copy at every handoff.
+        self.handoff("From CAM.")
+        self.assertEqual(self.student["comment"], "From CAM. Typed here, not exported.")
+        self.load()
+        self.handoff("From CAM.")
+        self.assertEqual(self.student["comment"], "From CAM. Typed here, not exported.")
+
+    def test_a_handoff_combines_when_both_sides_changed(self):
+        key = self.student["key"]
+        self.save_comment(key, "From CAM.", "")
+        self.handoff("From CAM.")
+        self.save_comment(key, "Rewritten here.", "")
+        self.handoff("Rewritten in CAM.")
+        self.assertEqual(self.student["comment"], "Rewritten here. Rewritten in CAM.")
+        # That copy has now been seen, so the next handoff doesn't repeat it.
+        self.handoff("Rewritten in CAM.")
+        self.assertEqual(self.student["comment"], "Rewritten here. Rewritten in CAM.")
+
+    def test_a_handoff_with_no_copy_seen_yet_loses_nothing(self):
+        key = self.student["key"]
+        self.save_comment(key, "Typed here.", "")
+        self.handoff("Older in CAM.")
+        self.assertEqual(self.student["comment"], "Typed here. Older in CAM.")
+
+    def test_a_handoff_without_repeating_text_already_here(self):
+        key = self.student["key"]
+        self.save_comment(key, "From CAM. And more.", "")
+        self.handoff("From CAM.")
+        self.assertEqual(self.student["comment"], "From CAM. And more.")
+        self.handoff("From CAM. And more. Added in CAM.")
+        self.assertEqual(self.student["comment"], "From CAM. And more. Added in CAM.")
+
+    def test_a_blank_comment_from_cam_clears_nothing(self):
+        key = self.student["key"]
+        self.save_comment(key, "Typed here.", "")
+        self.handoff("")
+        self.assertEqual(self.student["comment"], "Typed here.")
+
+    def test_an_export_after_a_handoff_doesnt_trip_the_next_one(self):
+        key = self.student["key"]
+        self.save_comment(key, "From CAM.", "")
+        self.handoff("From CAM.")
+        self.save_comment(key, "From CAM. Added.", "")
+        # Exported and synced, so CAM now publishes the longer comment.
+        self.handoff("From CAM. Added.")
+        self.assertEqual(self.student["comment"], "From CAM. Added.")
+        self.assertEqual(self.student["cam_comment"], "From CAM. Added.")
+
+    def test_linked_partners_keep_their_combined_comment_through_a_handoff(self):
+        s = self.link_fixture("Ben Okafor")
+        self.mark(s["ada"], comment="Typed for Ada.")
+        self.mark(s["ben"], comment="Typed for Ben.")
+        names = {st["name"]: st["comment"] for st in s.values()}
+        with patch.object(self.ws, "load_cam_published", return_value={
+                name: {"grades": {}, "comment": comment} for name, comment in names.items()}):
+            self.load()
+        self.link(*sorted(self.ws.STATE["students"].values(), key=lambda st: st["key"]))
+        combined = "Typed for Ada. Typed for Ben."
+        with patch.object(self.ws, "load_cam_published", return_value={
+                name: {"grades": {}, "comment": comment} for name, comment in names.items()}):
+            self.load()
+        for st in self.ws.STATE["students"].values():
+            self.assertEqual(st["comment"], combined)
 
     def test_restored_draft_feedback_forgets_the_remembered_line(self):
         key = self.student["key"]
@@ -598,9 +720,28 @@ class WorkspaceTests(unittest.TestCase):
         with patch.object(self.ws, "load_assignment_options",
                           side_effect=lambda folder: {**real(folder), **restored}):
             self.load()
-        self.assertEqual(self.student["comment"], "Strengths: Colour. Restored.")
-        self.assertEqual(self.student["keywords"], ["Colour"])
+        # No copy seen yet, so both comments stay, and both sets of ticks.
+        self.assertEqual(self.student["comment"],
+                         "Strengths: Context. Typed. Strengths: Colour. Restored.")
+        self.assertEqual(self.student["keywords"], ["Context", "Colour"])
+        self.assertEqual(self.student["comment_line"], "Strengths: Context.")
+        # A copy CAM has changed replaces a comment left as it was, and its ticks with it.
+        self.assertEqual(self.student["cam_comment"], "Strengths: Colour. Restored.")
+        self.save_comment(key, "Strengths: Colour. Restored.", "Strengths: Colour.")
+        restored["published_feedback"][self.student["name"]] = {
+            "comment": "Rewritten in CAM.", "keywords": ["Sources"]}
+        with patch.object(self.ws, "load_assignment_options",
+                          side_effect=lambda folder: {**real(folder), **restored}):
+            self.load()
+        self.assertEqual(self.student["comment"], "Rewritten in CAM.")
+        self.assertEqual(self.student["keywords"], ["Sources"])
         self.assertIsNone(self.student["comment_line"])
+        # An unchanged copy leaves what's here alone, typed text and ticks.
+        self.save_comment(key, "Rewritten in CAM. Typed since.", "")
+        with patch.object(self.ws, "load_assignment_options",
+                          side_effect=lambda folder: {**real(folder), **restored}):
+            self.load()
+        self.assertEqual(self.student["comment"], "Rewritten in CAM. Typed since.")
 
     def test_export_holds_the_whole_comment_and_no_new_column(self):
         self.save_comment(self.student["key"], "Strengths: Context. Typed.", "Strengths: Context.")
