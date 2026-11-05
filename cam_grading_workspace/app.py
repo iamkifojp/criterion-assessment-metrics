@@ -1552,11 +1552,43 @@ def has_assessment(student, is_draft):
     return bool(student.get("grades"))
 
 
-def _sync_group_grades(anchor_key):
-    """Make every partner in a group share one grade/keywords/comment.
+def _generated_line(student):
+    """The comment line a student's ticks give. Same text as autoComment in the
+    page, which needs this copy only to combine comments when partners link."""
+    growth = {k.get("label") for k in STATE.get("checklist") or []
+              if k.get("type") == "growth"}
+    keywords = student.get("keywords") or []
+    strengths = [k for k in keywords if k not in growth]
+    develop = [k for k in keywords if k in growth]
+    parts = []
+    if strengths:
+        parts.append("Strengths: " + ", ".join(strengths) + ".")
+    if develop:
+        parts.append("Areas to develop: " + ", ".join(develop) + ".")
+    if student.get("late_marked"):
+        parts.append("Late submission.")
+    return " ".join(parts)
 
-    Source = the anchor if it's already graded, otherwise the first graded
-    member, otherwise the anchor. Keeps newly-linked partners consistent.
+
+def _typed_comment(student):
+    """A student's comment without its generated line, as applyGeneratedLine
+    in the page reads it. A comment not starting with the line stays whole."""
+    text = student.get("comment") or ""
+    line = student.get("comment_line")
+    if not isinstance(line, str):
+        line = _generated_line(student)
+    return text[len(line):].lstrip() if line and text.startswith(line) else text
+
+
+def _sync_group_grades(anchor_key):
+    """Make every partner in a group share one set of marks, losing no comment.
+
+    Grades come from the first graded member in the group's order, so an existing
+    group's grade stands when a new partner joins. There's no record of when a grade
+    was given, so of two students linked with grades, the one clicked first wins.
+    A criterion only another member has a grade on is kept. Ticks and typed comments
+    combine, each different text once, under one generated line for the group.
+    Late stays a single flag, taken from that first graded member.
     """
     g = _find_group(anchor_key)
     if not g:
@@ -1564,22 +1596,28 @@ def _sync_group_grades(anchor_key):
     members = [m for m in g["members"] if m in STATE["students"]]
     if not members:
         return
-    src_key = anchor_key
-    if not STATE["students"][anchor_key].get("graded"):
-        graded = next((m for m in members
-                       if STATE["students"][m].get("graded")), None)
-        if graded:
-            src_key = graded
+    src_key = next((m for m in members if STATE["students"][m].get("graded")), anchor_key)
     src = STATE["students"][src_key]
-    for m in members:
-        tst = STATE["students"][m]
-        tst["grades"] = dict(src.get("grades", {}))
-        tst["keywords"] = list(src.get("keywords", []))
-        tst["comment"] = src.get("comment", "")
-        tst["comment_line"] = src.get("comment_line")
-        tst["late_marked"] = src.get("late_marked")
-        tst["late_manual"] = src.get("late_manual", False)
-        tst["graded"] = has_assessment(tst, STATE.get("is_draft"))
+    ordered = [STATE["students"][m] for m in [src_key] + [m for m in members if m != src_key]]
+    grades, keywords, typed = {}, [], []
+    for st in ordered:
+        for criterion, value in (st.get("grades") or {}).items():
+            grades.setdefault(criterion, value)
+        keywords.extend(k for k in st.get("keywords") or [] if k not in keywords)
+        text = _typed_comment(st)
+        if text and text not in typed:
+            typed.append(text)
+    line = _generated_line({"keywords": keywords, "late_marked": src.get("late_marked")})
+    comment = " ".join(part for part in [line] + typed if part)
+    late_marked, late_manual = src.get("late_marked"), src.get("late_manual", False)
+    for st in ordered:
+        st["grades"] = dict(grades)
+        st["keywords"] = list(keywords)
+        st["comment"] = comment
+        st["comment_line"] = line
+        st["late_marked"] = late_marked
+        st["late_manual"] = late_manual
+        st["graded"] = has_assessment(st, STATE.get("is_draft"))
 
 
 # -----------------------------------------------------------------------------
@@ -2292,10 +2330,12 @@ def api_load():
     # Recovery: if no checklist was ever saved but students carry keyword marks,
     # reconstruct the rubric from those marks so a lost cache entry doesn't drop
     # the teacher's custom criteria back to the generic defaults.
+    checklist_recovered = False
     if not checklist:
         derived = derive_checklist_from_saved(saved)
         if derived:
             checklist = derived
+            checklist_recovered = True
     criteria = cache_criteria
     if options.get("is_draft") and "draft_criteria" in options:
         criteria = options["draft_criteria"]
@@ -2358,6 +2398,9 @@ def api_load():
         "groups": groups,
         # Saved rubric criteria, or [] -> frontend uses its default template.
         "checklist": checklist,
+        # True = no list was saved, so this one was rebuilt from students' ticks and
+        # holds only ticked keywords. The page decides what to keep; see restoreKeywords.
+        "checklist_recovered": checklist_recovered,
         # Selected MYP criteria + official deadline (restored from cache).
         "criteria": criteria,
         "deadline": deadline,
@@ -3538,6 +3581,20 @@ function openSelectedAssignment() {
 }
 
 /* ---------- Step 2: load the chosen assignment subfolder ---------- */
+/* The keyword list for a task just loaded. A saved list stays as it is. With none
+   saved, the template is used. A list the server rebuilt from students' ticks holds
+   only what was ticked: if all of that is in the template, the template was in use,
+   so it comes back whole. Otherwise it's a custom list and all that can be recovered. */
+function restoreKeywords(data) {
+  const list = (Array.isArray(data.checklist) ? data.checklist : []).map(k => ({
+    label: String(k.label || "").trim(),
+    type:  k.type === "growth" ? "growth" : "positive",
+  })).filter(k => k.label);
+  const inTemplate = k => DEFAULT_KEYWORDS.some(d => d.label === k.label);
+  if (list.length && !(data.checklist_recovered && list.every(inTemplate))) return list;
+  return DEFAULT_KEYWORDS.map(k => ({...k}));
+}
+
 async function loadFolder() {
   const v = $("#assignmentSelect").value;
   if (!v) { alert("Choose an assignment from the dropdown first."); return; }
@@ -3574,14 +3631,7 @@ async function loadFolder() {
     renderCriteriaBoxes();
     // Rebuild the rubric headers from the saved cache for THIS folder. A
     // non-empty list replaces the defaults; an empty/absent list keeps them.
-    if (Array.isArray(data.checklist) && data.checklist.length) {
-      KEYWORDS = data.checklist.map(k => ({
-        label: String(k.label || "").trim(),
-        type:  k.type === "growth" ? "growth" : "positive",
-      })).filter(k => k.label);
-    } else {
-      KEYWORDS = DEFAULT_KEYWORDS.map(k => ({...k}));   // restore template
-    }
+    KEYWORDS = restoreKeywords(data);
     for (const k in byKey) delete byKey[k];
     STUDENTS.forEach(st => {
       byKey[st.key] = st;
@@ -3596,6 +3646,8 @@ async function loadFolder() {
     renderTable();
     renderRoster();
     updateCamModNote();   // advisory above the checklist when anything is MODIFIED
+    // Save a list that wasn't saved yet, so the next load finds it whole.
+    if (!(data.checklist || []).length || data.checklist_recovered) saveChecklistNow();
   } catch (e) { setStatus(""); alert("Error: " + e); }
 }
 function setStatus(t){ $("#status").textContent = t; }
@@ -3947,6 +3999,8 @@ function onLinkClick(key) {
 async function linkPartners(a, b) {
   setStatus("Linking…");
   try {
+    // The server combines the comments it holds, so send it anything still unsaved.
+    await Promise.all([a, b].map(key => byKey[key] && save(byKey[key])));
     const res = await fetch("/api/group/link", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({a_key:a, b_key:b})

@@ -217,6 +217,69 @@ assert.equal(st.comment, 'Strengths: Tone. Typed.');
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+    def test_linking_saves_unsaved_comments_first(self):
+        node = shutil.which(os.environ.get("CAM_TEST_NODE", "node"))
+        if not node:
+            self.skipTest("Node.js is required for workspace UI checks")
+        source = (ROOT / "cam_grading_workspace/app.py").read_text(encoding="utf-8")
+        begin = source.index("async function linkPartners(")
+        function = source[begin:source.index("\n}\n", begin) + 2]
+        script = function + r"""
+const assert = require('node:assert/strict');
+let GROUPS = [];
+const byKey = {a: {key: 'a', comment: 'Unsaved.'}, b: {key: 'b', comment: ''}};
+const order = [];
+const setStatus = () => {}, renderTable = () => {}, renderRoster = () => {}, alert = fail => { throw new Error(fail); };
+const save = async st => { await null; order.push('save ' + st.key + ': ' + st.comment); };
+global.fetch = async url => {
+  order.push(url);
+  return {ok: true, json: async () => ({groups: [{id: 1}], students: [{key: 'b', comment: 'Unsaved.'}]})};
+};
+linkPartners('a', 'b').then(() => {
+  assert.deepEqual(order, ['save a: Unsaved.', 'save b: ', '/api/group/link']);
+  assert.equal(byKey.b.comment, 'Unsaved.');
+  assert.equal(GROUPS.length, 1);
+}).catch(error => { console.error(error); process.exit(1); });
+"""
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_keyword_list_stays_whole_on_load(self):
+        node = shutil.which(os.environ.get("CAM_TEST_NODE", "node"))
+        if not node:
+            self.skipTest("Node.js is required for workspace UI checks")
+        source = (ROOT / "cam_grading_workspace/app.py").read_text(encoding="utf-8")
+        begin = source.index("function restoreKeywords(")
+        function = source[begin:source.index("\n}\n", begin) + 2]
+        begin = source.index("const DEFAULT_KEYWORDS = [")
+        template = source[begin:source.index("];", begin) + 2]
+        script = template + "\n" + function + r"""
+const assert = require('node:assert/strict');
+const labels = list => list.map(k => k.label);
+const whole = labels(DEFAULT_KEYWORDS);
+assert.ok(whole.length > 3);
+// Nothing saved: the whole template, as a copy that can be edited safely.
+assert.deepEqual(labels(restoreKeywords({checklist: []})), whole);
+assert.deepEqual(labels(restoreKeywords({})), whole);
+restoreKeywords({checklist: []})[0].label = 'Changed';
+assert.notEqual(DEFAULT_KEYWORDS[0].label, 'Changed');
+// Rebuilt from ticks that are all in the template: the template was in use.
+const ticked = [{label: whole[1], type: 'positive'}];
+assert.deepEqual(labels(restoreKeywords({checklist: ticked, checklist_recovered: true})), whole);
+// Rebuilt from ticks outside the template: a custom list, so keep what's there.
+const custom = [{label: 'Own words', type: 'positive'}, {label: whole[1], type: 'positive'}];
+assert.deepEqual(labels(restoreKeywords({checklist: custom, checklist_recovered: true})),
+                 ['Own words', whole[1]]);
+// A saved list is the teacher's, even when it's shorter than the template.
+assert.deepEqual(labels(restoreKeywords({checklist: ticked, checklist_recovered: false})), [whole[1]]);
+// Types come through, and blank labels go.
+assert.deepEqual(restoreKeywords({checklist: [{label: ' A ', type: 'growth'}, {label: ' ', type: 'x'}]}),
+                 [{label: 'A', type: 'growth'}]);
+"""
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 class PdfSelectionTests(unittest.TestCase):
     def test_ranges_original_numbering_and_invalid_input(self):
         self.assertEqual(visible_pages(12, "1-9, 11"), [10, 12])
@@ -391,6 +454,130 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual({s["comment_line"] for s in saved["students"]}, {"Strengths: Colour."})
         self.load()
         self.assertEqual(self.ws.STATE["students"][ben]["comment_line"], "Strengths: Colour.")
+
+    def link_fixture(self, *names):
+        """Fictional partners, returned as {first name: student}."""
+        for name in names:
+            with fitz_open() as doc:
+                doc.new_page().insert_text((60, 60), f"Fictional work by {name}")
+                doc.save(self.folder / f"{name}.pdf")
+        self.load()
+        return {st["key"].split(":")[-1].split()[0]: st for st in self.ws.STATE["students"].values()}
+
+    def mark(self, st, **fields):
+        response = self.client.post("/api/save", json={"key": st["key"], **fields})
+        self.assertEqual(response.status_code, 200)
+
+    def link(self, a, b):
+        response = self.client.post("/api/group/link", json={"a_key": a["key"], "b_key": b["key"]})
+        self.assertEqual(response.status_code, 200, response.get_json())
+
+    def test_linking_combines_comments_and_ticks(self):
+        s = self.link_fixture("Ben Okafor")
+        self.mark(s["ada"], keywords=["Shading"], comment="Strengths: Shading. Typed for Ada.",
+                  comment_line="Strengths: Shading.")
+        self.mark(s["ben"], keywords=["Colour"], comment="Strengths: Colour. Typed for Ben.",
+                  comment_line="Strengths: Colour.")
+        self.link(s["ada"], s["ben"])
+        for st in s.values():
+            self.assertEqual(st["keywords"], ["Shading", "Colour"])
+            self.assertEqual(st["comment_line"], "Strengths: Shading, Colour.")
+            self.assertEqual(st["comment"],
+                             "Strengths: Shading, Colour. Typed for Ada. Typed for Ben.")
+        # Still combined after a reload, and linking again repeats nothing.
+        self.load()
+        ada, ben = sorted(self.ws.STATE["students"])
+        self.client.post("/api/group/link", json={"a_key": ben, "b_key": ada})
+        self.assertEqual(self.ws.STATE["students"][ada]["comment"],
+                         "Strengths: Shading, Colour. Typed for Ada. Typed for Ben.")
+
+    def test_linking_handles_older_and_identical_comments(self):
+        s = self.link_fixture("Ben Okafor", "Chie Sato")
+        # No remembered line: the ticks' line comes off. Unrelated text stays whole.
+        self.mark(s["ada"], keywords=["Shading"], comment="Strengths: Shading. Older text.")
+        self.mark(s["ben"], keywords=[], comment="Same words.")
+        self.mark(s["chie"], keywords=[], comment="Same words.")
+        self.link(s["ben"], s["chie"])
+        self.assertEqual(s["ben"]["comment"], "Same words.")
+        self.link(s["ada"], s["ben"])
+        for st in s.values():
+            self.assertEqual(st["comment"], "Strengths: Shading. Older text. Same words.")
+
+    def test_linking_repeats_text_rather_than_risk_losing_it(self):
+        s = self.link_fixture("Ben Okafor", "Chie Sato")
+        self.mark(s["ada"], comment="Typed for Ada.")
+        self.mark(s["ben"], comment="Same words.")
+        self.mark(s["chie"], comment="Same words.")
+        self.link(s["ada"], s["ben"])
+        self.link(s["ada"], s["chie"])
+        # Only a whole comment counts as the same, so these words appear twice.
+        self.assertEqual(s["chie"]["comment"], "Typed for Ada. Same words. Same words.")
+
+    def test_linking_shares_the_first_graded_members_grades(self):
+        s = self.link_fixture("Ben Okafor", "Chie Sato")
+        # Clicked first with no grade: the partner's grade reaches both, and the
+        # first student's typed comment is kept.
+        self.mark(s["ada"], comment="Typed for Ada.")
+        self.mark(s["ben"], grades={"A": "6"}, comment="Typed for Ben.")
+        self.link(s["ada"], s["ben"])
+        self.assertEqual(s["ada"]["grades"], {"A": "6"})
+        self.assertEqual(s["ada"]["comment"], "Typed for Ben. Typed for Ada.")
+        self.assertTrue(s["ada"]["graded"])
+        # A new partner joining doesn't change the group's grade, even clicked first.
+        # A grade only the new partner has on another criterion is kept.
+        self.mark(s["chie"], grades={"A": "2", "C": "4"}, comment="Typed for Chie.")
+        self.link(s["chie"], s["ada"])
+        for st in s.values():
+            self.assertEqual(st["grades"], {"A": "6", "C": "4"})
+            self.assertEqual(st["comment"], "Typed for Ben. Typed for Ada. Typed for Chie.")
+
+    def test_linking_two_graded_students_keeps_the_first_clicked(self):
+        s = self.link_fixture("Ben Okafor")
+        self.mark(s["ada"], grades={"A": "3"}, late_marked=True, comment="Late submission.",
+                  comment_line="Late submission.")
+        self.mark(s["ben"], grades={"A": "7"}, late_marked=False)
+        self.link(s["ben"], s["ada"])
+        for st in s.values():
+            self.assertEqual(st["grades"], {"A": "7"})
+            self.assertFalse(st["late_marked"])
+            self.assertEqual(st["comment"], "")
+
+    def test_generated_line_matches_the_page(self):
+        node = shutil.which(os.environ.get("CAM_TEST_NODE", "node"))
+        if not node:
+            self.skipTest("Node.js is required for workspace UI checks")
+        source = (ROOT / "cam_grading_workspace/app.py").read_text(encoding="utf-8")
+        begin = source.index("function autoComment(")
+        page = source[begin:source.index("\n}\n", begin) + 2]
+        checklist = [{"label": "Shading", "type": "positive"}, {"label": "Detail", "type": "growth"}]
+        self.ws.STATE["checklist"] = checklist
+        for keywords, late in ((["Shading", "Detail"], True), (["Detail"], False), (["Gone"], False),
+                               ([], True), ([], False)):
+            with self.subTest(keywords=keywords, late=late):
+                student = {"keywords": keywords, "late_marked": late}
+                script = (f"const KEYWORDS = {json.dumps(checklist)};\n{page}\n"
+                          f"process.stdout.write(autoComment({json.dumps(student)}));")
+                result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.ws._generated_line(student), result.stdout)
+
+    def test_keyword_list_is_saved_whole_and_stays_on_reload(self):
+        whole = [{"label": "Shading", "type": "positive"}, {"label": "Colour", "type": "positive"},
+                 {"label": "Detail", "type": "growth"}]
+        self.assertEqual(self.loaded["checklist"], [])
+        self.assertFalse(self.loaded["checklist_recovered"])
+        # What the page does on load when no list is saved.
+        self.client.post("/api/checklist", json={"checklist": whole})
+        self.mark(self.student, keywords=["Shading"], comment="Strengths: Shading.")
+        self.load()
+        self.assertEqual(self.loaded["checklist"], whole)
+        self.assertFalse(self.loaded["checklist_recovered"])
+
+    def test_keyword_list_rebuilt_from_ticks_says_so(self):
+        self.mark(self.student, keywords=["Shading"], comment="Strengths: Shading.")
+        self.load()
+        self.assertEqual(self.loaded["checklist"], [{"label": "Shading", "type": "positive"}])
+        self.assertTrue(self.loaded["checklist_recovered"])
 
     def test_comment_edited_in_cam_keeps_the_remembered_line(self):
         key = self.student["key"]

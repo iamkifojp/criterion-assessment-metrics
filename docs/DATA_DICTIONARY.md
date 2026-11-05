@@ -324,8 +324,11 @@ never persisted, rebuilt on each load.
   ```jsonc
   { "id": "<groupId>", "members": ["<studentKey>", …], "color": "<hex/name>" }
   ```
-  Linked partners **share one grade** (`_sync_group_grades`). Colours are
-  allocated from `GROUP_COLORS`, avoiding collisions.
+  Linked partners **share one grade** (`_sync_group_grades`), from the first graded
+  member in the group's order, and a criterion only another member has a grade on is
+  kept. Their ticks and typed comments **combine**, so a group's comment can be longer
+  than one student's. Unlinking leaves each student with the combined result. Colours
+  are allocated from `GROUP_COLORS`, avoiding collisions.
 
 ### B.3 Student record — ⚠ two coexisting shapes
 

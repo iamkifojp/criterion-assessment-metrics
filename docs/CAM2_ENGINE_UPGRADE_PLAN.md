@@ -779,15 +779,38 @@ were met in the browser check below.
   - **A save's reply no longer overwrites newer text.** It's older than anything typed or
     ticked while it was on its way, and it could otherwise bring old text back.
   - **`comment_line` needs no bump to `CACHE_VERSION`,** since it's optional.
+- **Two more problems this phase found, fixed here at the teacher's decision (2026-11-06):**
+  - **Linking partners replaced one student's comment, grades and ticks with no warning.**
+    Now the grade comes from the first graded member and reaches the group, as before, and
+    **every comment combines**, so a group's comment can be longer than one student's. Ticks
+    combine too, under one generated line. Linking saves both students first, because the
+    server combines what it holds.
+    - **There's no record of when a grade was given.** So with two students already graded,
+      the one clicked first wins. A new partner joining a group never changes its grade.
+    - **A criterion only one member has a grade on is kept,** rather than deleted.
+    - **Only a whole comment counts as the same.** So a third partner whose words already sit
+      inside the combined text repeats them, which P10 prefers to losing any.
+    - **Unlinking leaves each student with the combined result,** and Late stays one flag for
+      the group, from the first graded member.
+    - **This needs the generated line on the server** (`_generated_line`), a second copy of the
+      page's `autoComment`. A test runs both on the same input.
+  - **A keyword list never edited came back after a reload with only the ticked keywords,**
+    because the default list wasn't saved, and the server rebuilds a missing list from ticks.
+    Now the page saves the list as soon as a task opens. A rebuilt list whose ticks are all in
+    the default list brings back the whole default list. Otherwise it's a custom list, and
+    what was ticked is all that can be recovered.
+    - **A task already reloaded before this fix stays short.** Its short list was saved, and it
+      can't be told from one the teacher shortened on purpose, so its keywords need adding back
+      by hand.
+- **Checked for those two:** CAM 309 and CAM2 216. In the same sandbox: the keyword list on
+  first open, after ticks and reloads, rebuilt from ticks, custom, and shortened on purpose;
+  linking with typed and unsaved comments, a graded partner and a grade given after linking;
+  a tick and a deadline change after linking; a reload, unlinking and the export. The link
+  buttons were pressed by script. The first run of this check lost typed text that hadn't
+  been saved, which is why linking now saves first.
 - **Not checked:** an older workspace on another computer, which from reading its code drops
-  the field on save. Draft restoring ran in a server test only, not in the browser.
-- **Found, and left as it is:**
-  - **Linking partners still replaces the second student's comment** with the first's
-    (`_sync_group_grades`), so text typed on the second is lost. Linking is a deliberate step
-    and isn't one of I15's three triggers, but it is typed text being lost.
-  - **A task whose keyword list was never edited comes back after a reload with only the
-    ticked keywords.** This came up in the sandbox. It's outside this phase's change, and
-    wasn't compared with the old code.
+  the field on save. Draft restoring ran in a server test only, not in the browser, and linked
+  drafts ran in server tests only. Linking wasn't tried with the mouse.
 
 ### Phase 3 — CAM: decide per criterion in Window 3 · M–L
 
@@ -981,6 +1004,10 @@ matrix as Phase 4. Nothing is released yet.
   - what `file_from_newer_version` means on a computer not yet updated;
   - in the workspace, ticks and deadline changes no longer overwrite typed comments, so
     the tick-first workaround can stop;
+  - linking partners now combines their comments and ticks, and the first graded member's
+    grade reaches the group;
+  - a keyword list no longer shrinks on reload, and a list that already shrank needs its
+    keywords adding back by hand;
   - every exam's overall and question comments now go into the term comment prompt, and
     so to the AI service the teacher has chosen, and exams no longer take the strength
     and growth places;
