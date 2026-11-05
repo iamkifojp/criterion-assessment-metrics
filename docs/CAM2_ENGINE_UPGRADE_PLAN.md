@@ -931,8 +931,8 @@ the wording without settling everything.
   - **A grade decided in the pop-up lost the overall comment,** because the comment box started
     empty, which counts as clearing it (Q3). A new grade on a paper now starts with its overall
     comment, and clearing the box is still respected.
-- **Checked since the first run, in a sandbox on Windows:** the real app on fictional exams, by
-  mouse: the pop-up showing the paper's comment, saving it, a student with no paper showing 0
+- **Checked since the first run, in a sandbox on Windows:** the real app on fictional exams,
+  partly by mouse and partly by script: the pop-up showing the paper's comment, saving it, a student with no paper showing 0
   on the graded criterion only, and adding then removing a plain marks exam's grade. **Window
   2's `awaiting decision` tag** also showed correctly, which Phase 2 hadn't run. **The report's
   rows** ran in tests, not through a downloaded report.
