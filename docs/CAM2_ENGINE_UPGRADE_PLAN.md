@@ -1,6 +1,6 @@
 # Upgrading CAM's vendored CAM2 to the latest dev version: assessment and plan
 
-**Status:** v5, 2026-11-05. Decisions D10–D17 (§5) are locked by the teacher. v5 adds
+**Status:** v5, 2026-11-05. Decisions D10–D18 (§5) are locked by the teacher. v5 adds
 the Google Apps Script route that turns Classroom submissions into PDFs (Appendix A). v3
 changed D10, D11 and D13: a paper's repeated levels stay on the exam, and the teacher
 decides one grade per criterion for the assignment in Window 3. v4 corrects D16: a
@@ -389,6 +389,14 @@ Numbering continues from the convergence plan. D10–D15 were locked by the teac
   CAM's bundle its own `Licences` folder, modelled on CAM2's. This is engineering work
   following CAM2's existing approach, not legal advice. The paid licence from Artifex
   remains the alternative if the AGPL ever becomes unsuitable.
+- **D18 · No new release until the upgrade is finished.** Decided by the teacher on
+  2026-11-05. There is no separate licence-only release, so the Licences folder promised
+  on the `v2026.11.01` release page arrives with the upgrade. That release is then
+  published with Mac and Windows binaries of **both CAM and CAM2**.
+  - CAM2 already builds both. CAM's bundle is Windows only today
+    (`tools/build_windows_bundle.py`), so the teacher's choice of a Mac CAM adds Phase 4M.
+  - The July releases were deleted on 2026-11-05 and their tags kept, so `v2026.11.01` is
+    the only CAM release until then.
 
 ### 5.1 Points that go ahead on a default
 
@@ -433,7 +441,9 @@ teacher changes it.
 
 ## 6. Phases
 
-Order: 0 → 1 and 2 (independent of each other) → 3 → 4 → 5 → 6. One commit per phase,
+Order: 0 → 1 and 2 (independent of each other) → 3 → 4 → 4M → 5 → 6, with 4M's first
+step (the Gatekeeper check) worth doing early because it can be done at any time. One
+commit per phase,
 with tests. Phases 2 and 3 land on the **current pin** so the reader is right before
 anything new arrives, the same order the convergence plan used.
 
@@ -612,6 +622,55 @@ blank dropdown can't invent a grade, and a re-send can't change a teacher's deci
   starts, CAM2 opens in host mode and sends to CAM, and the `Licences` folder is there.
 
 *Done when:* the whole matrix passes. Nothing is released yet.
+
+### Phase 4M — CAM: a Mac binary · M–L (D18)
+
+Scoped from reading the code. None of it has been built or tried. Apple Silicon only, as
+CAM2 decided, since there's no Intel Mac to build and test on.
+
+- **Check Gatekeeper first; this is the main risk.** CAM2 needs "Open Anyway" once
+  because PyInstaller packs it into one signed app. CAM can't copy that: it starts the
+  workspace and CAM2 as separate Python processes through `sys.executable`
+  (`app.py:2833`, `exam_bridge.py:280`), so it needs a real Python inside the download,
+  as Windows has, along with hundreds of compiled libraries. If a downloaded copy makes
+  the Mac object to each of those, the free route won't work. Try it early with a small
+  unsigned download on a Mac that didn't build it. If it fails, the choices are Apple's
+  paid signing and notarising (US$99 a year, the teacher's decision), or staying on
+  running from source.
+- **A new `tools/build_mac_bundle.py`**, sharing what it can with the Windows tool. Python
+  has no embeddable Mac download, so this needs a relocatable build such as
+  python-build-standalone, and `requirements.txt` installed into it. The `._pth` path
+  rules become an explicit `sys.path` set-up in the launcher, keeping `exam_grading` off
+  the path as today.
+- **A Mac launcher**, replacing `Start CAM.vbs` and the troubleshooting `.bat`: start
+  Streamlit headless on port 8600, wait for its health check, open the browser, and write
+  `logs/cam.log`, plus a READ ME FIRST with Mac steps, modelled on CAM2's.
+- **Screens that are Windows only today:**
+  - `pick_folder` returns nothing off Windows, and the five 📁 Browse buttons are hidden
+    (`app.py:6684`, `6773`, `7728`, `9986`, `10247`). A teacher would have to type every
+    path, so add a Mac folder picker, for example through `osascript`.
+  - "Start fresh" offers no default folder off Windows (`app.py:10267`).
+  - Placeholder paths show only Windows examples.
+- **Stop the workspace when CAM stops.** The Windows job object at `app.py:2744` doesn't
+  run on a Mac, so a crash could leave the workspace running.
+- **Check on a Mac:** file locking already has a Mac path (`persistence.py:1392`), but the
+  bundle hasn't run it against OneDrive's Mac folder (`~/Library/CloudStorage`).
+- **Licences per platform.** Mac libraries differ, so pin exact versions and keep notices
+  for each platform, with Phase 4's build check on both. The Mac runtime needs its own
+  entry.
+- **Audit and tests.** The same credential and data checks as the Windows zip, including a
+  check of the final zip, and a check that links and signatures survive unzipping, as
+  CAM2's Mac build does.
+- **Sandbox end to end from an unzipped copy:** temp prefs and `db_custom_path`, on a Mac
+  account with no developer Python. CAM starts, Browse works, the workspace opens, and
+  CAM2 opens in host mode and sends to CAM. **This Mac's prefs point at real data, so the
+  test must not run under them.**
+- **A cross-computer check:** one fictional data folder synced between the Mac bundle and
+  the Windows bundle, in both directions.
+- Phase 5's guides gain the Mac steps and screenshots.
+
+*Done when:* a downloaded zip runs on a Mac that didn't build it, with the same exam
+matrix as Phase 4. Nothing is released yet.
 
 ### Phase 5 — Documents and release notes · S–M
 
