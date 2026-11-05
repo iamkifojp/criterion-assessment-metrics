@@ -4,8 +4,9 @@
 v6 merges [CAM2_FEEDBACK_FOR_CAM.md](CAM2_FEEDBACK_FOR_CAM.md) into Phases 1 to 6 and
 brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by the teacher.
 Q4's trial still sets the F6 wording in Phase 3. The smaller points
-(§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done,
-and nothing in Phases 1 to 6 is built yet except CAM2's hand-over fix (I5).
+(§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done.
+Phase 1's code is built on CAM2's `phase1-slides-and-comment-limits` branch, not yet merged
+or tagged (see its progress note). Nothing in Phases 2 to 6 is built yet.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -651,6 +652,45 @@ anything new arrives, the same order the convergence plan used.
 upgrades or misroutes a session, `model.VERSION` is still 2, a 16:9 PDF is recognised
 and can be sliced into whole-slide questions and graded, and new comments stop at their
 limits with no saved comment cut.
+
+**Progress, 2026-11-05.** Built in CAM2's working tree. The tag isn't cut, so the "done
+when" above isn't met in a tagged version yet.
+
+- **Checked here, on fictional data with a throwaway app-data folder:** CAM2's tests (352
+  pass, 1 skipped) on both PyMuPDF 1.28.2 with Pillow 12.3 and the pinned PyMuPDF 2.0 with
+  Pillow 13; slide detection, grid, crops and reports; comment limits in the browser, in
+  English and Japanese, including older longer comments. In the browser, two boxes of the
+  12-screen deck were drawn by hand and the other ten entered through the same set-up
+  route. On one early try a level click sent no request. It didn't happen again in three
+  more tries, so its cause is unknown.
+- **The I5 reproduction,** with real launcher processes in both directions: `v0.3.1-dev`
+  against this tree with its version changed and `model.VERSION` raised to 3, as the
+  second pull will do. Each launcher stopped the other version and was handed its own
+  exam. Opened through the server's route, not on screen, the `v0.3.1-dev` exam stayed at
+  version 2. The newer launcher's exam went to version 3, as its own engine does (I4), so
+  the newer server never touched the older launcher's exam.
+- **Crop size.** On a fictional 12-screen deck for 28 students, at PowerPoint's size:
+
+  | Deck | PNG crops | JPEG crops at 85 | The PDFs themselves |
+  |---|---|---|---|
+  | All photos | 1.62 GB | 0.19 GB | 0.20 GB |
+  | A photo and text on each slide | 0.83 GB | 0.11 GB | 0.10 GB |
+  | Text only | 0.04 GB | 0.08 GB | under 0.01 GB |
+
+  The photos were synthetic, so real decks will differ. That's too big for a synced
+  class folder, so JPEG crops came in as this phase allows, more narrowly than the
+  slide-deck plan's item 2. **They're for questions on a slide size only, and the paper
+  size says which, so there's no `crop_format` key.** Name crops stay PNG because CAM
+  reads them as PNG (`exam_bridge.py:370`), and written papers stay PNG for handwriting.
+- **An older version and a slide session.** `v0.3.1-dev` refuses it with `Unknown paper
+  size` and leaves the folder unchanged, but its `/api/state` keeps failing until it's
+  restarted. CAM's current pin refuses it with `file_from_newer_version`, like any
+  version 2 session (I4). Phase 5's notes should say so.
+- **Left to do:**
+  - the teacher tries Appendix A on a small real assignment;
+  - check the Windows unblock advice on a real computer;
+  - cut the tag, and build the Mac download here and the Windows one on a Windows computer;
+  - share it with colleagues.
 
 ### Phase 2 — CAM: correct Apply, bridge and storage, on the current pin · M
 
