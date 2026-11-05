@@ -22,6 +22,7 @@ Line numbers refer to CAM `main` at `002ab0c`.
 |---|---|---|
 | **F6:** exam comments should carry weight in term comments | Keep the overall comment when Window 3 decides a grade, and add an always-included exam block to the LLM prompt | Upgrade plan, Phase 3 |
 | CAM2's feedback document | Keep it out of CAM's bundle once it arrives in `exam_grading/` | Upgrade plan, Phase 4 |
+| **F2's comment limits:** 300 characters on a question, 600 overall | Nothing to read, and the session version doesn't change. CAM still limits what goes into the term comment prompt | Upgrade plan, Phase 1 and Q8 |
 
 **Why F6 can't wait.** The term comment reads only `student.scores` (`_current_term_evidence`, `app.py:6117`):
 
@@ -57,7 +58,7 @@ None of these change the current upgrade.
 | **F2:** notes and highlights on answers | `engine/exam_bridge.py` reads the note text with each question's comment, and F6's block includes it | Without this, notes never reach CAM's records or term comments |
 | **F3:** one comment list in both apps | Nothing while F5 is the plan | On hold. F5 would replace it |
 | **F5:** move drafts and assignments into CAM2, and retire the workspace | Tell CAM2 when a task is a whole submission, read the same CSV the workspace writes (still to check), and later remove the workspace, OAuth and Drive code | **Direction agreed; D16 stays as it is for now** (upgrade plan, Q6). The workspace stays in use until CAM2 has proved it can take over, so Phase 3's draft check mark is still right. Amend D16 at F5's last stage |
-| **F7:** a permanent place for a year's work | `<class cloud folder>/assignments/<task>/`, chosen once, and later a view of a student's work over time | **Design one student ID across years before the first year's data builds up.** Classes are separate for each year today |
+| **F7:** a permanent place for a year's work | `<class cloud folder>/assignments/<task>/`, chosen once, and later a view of a student's work over time | **No new student ID is needed:** a school email and its number stay the same throughout a student's time at the school (upgrade plan, Q7). Classes are separate for each year today, and exam results are stored by exam name alone, so those need solving first |
 | **F8:** compact and delete on CAM2's start screen | Nothing to read: compacting leaves `cam2_session.json` and `grades.json` alone, so Sync won't re-read the session, and name crops stay for Window 2 | Deleting an exam in CAM moves it to `exams/_deleted/` (`exam_bridge.py:376`), which doesn't free space, so CAM may need a way to show or empty that folder |
 
 F9 to F15 are optional ideas from research, and nothing in them needs CAM to change. If F14 is taken up, comparing exams over time still belongs in CAM.

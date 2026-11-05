@@ -2,9 +2,8 @@
 
 **Status:** v6, 2026-11-05. **Fixed:** the teacher accepted every answer in §5.2 that day.
 v6 merges [CAM2_FEEDBACK_FOR_CAM.md](CAM2_FEEDBACK_FOR_CAM.md) into Phases 1 to 6 and
-brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by the teacher. Two
-things are still to do under §5.2: Q4's trial sets the F6 wording in Phase 3, and Q7 needs
-the teacher to check the school's emails. The smaller points
+brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by the teacher.
+Q4's trial still sets the F6 wording in Phase 3. The smaller points
 (§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done,
 and nothing in Phases 1 to 6 is built yet except CAM2's hand-over fix (I5).
 
@@ -17,9 +16,9 @@ vendored in CAM at `exam_grading/`.
 **Depends on:** [CAM2_EXAM_CONVERGENCE_PLAN.md](CAM2_EXAM_CONVERGENCE_PLAN.md). This
 plan keeps its numbering and amends its D3 and D4. It also feeds
 [SLIDE_DECK_EXAM_PLAN.md](SLIDE_DECK_EXAM_PLAN.md), which is not built yet.
-**Colleagues' feedback:** in this upgrade are F4, the workspace's comment bug (Phase 2W),
-F6, exam comments in term comments (Phase 3), and keeping development documents out of
-the bundle (Phase 4). The others wait for a later CAM2 update (§6.1). The details stay in
+**Colleagues' feedback:** in this upgrade are F2's limits on comment length (Phase 1), F4,
+the workspace's comment bug (Phase 2W), F6, exam comments in term comments (Phase 3), and
+keeping development documents out of the bundle (Phase 4). The others wait for a later CAM2 update (§6.1). The details stay in
 CAM2's `Feedback-and-Upgrades.md`.
 
 Read `CLAUDE.md` first. Phases 0 and 6 touch real data, and the sandbox, backup and
@@ -530,22 +529,27 @@ teacher changes it.
   criterion results. It covers every exam on this term, whether or not a grade has been
   decided, and an unfinished paper's comments too, because the teacher sent them. A
   comment on a question not counted because of a choice group stays out.
+- **P13 · How the source material is shared out (F6, Q4).** *Default: about 6,000
+  characters in all, with up to 4,000 for exams and 2,000 for drafts and assignments.*
+  Either side can use what the other leaves. Exams' overall comments always go in whole.
+  If it's over, whole question comments are left out, taken evenly across exams and never
+  cut mid-sentence, and the teacher is told how many.
 
 ### 5.2 Questions settled for v6
 
 The teacher accepted each answer below on 2026-11-05, and Phases 1 to 6 are written on
-them. The last column names the phases each answer affects. Q7's check is still the
-teacher's to make.
+them. The last column names the phases each answer affects.
 
 | # | Question | Answer | Affects |
 |---|---|---|---|
-| Q1 | **One CAM2 pull or two?** F1 and F2 raise the session version again, so I4 happens again. More feedback is still to come | **Two.** The Phase 1 tag holds slide pages only. Waiting has no end date, and it would also hold back the Licences folder and the I5 and F4 fixes (D18). Phase 0 found no real sessions, so a second version costs one more "update every computer first" notice. D18's single release then covers this upgrade only | Phases 1, 2, 4, 5 |
+| Q1 | **One CAM2 pull or two?** F1 and F2 raise the session version again, so I4 happens again. More feedback is still to come | **Two.** The Phase 1 tag holds slide pages and comment limits (Q8), and leaves the session at version 2. Waiting has no end date, and it would also hold back the Licences folder and the I5 and F4 fixes (D18). Phase 0 found no real sessions, so a second version costs one more "update every computer first" notice. D18's single release then covers this upgrade only | Phases 1, 2, 4, 5 |
 | Q2 | **Should exams still compete for the strength and growth places in the term comment?** | **No.** Since they're always included, exam scores leave the ranking, and the places go to assignments. Otherwise one exam can take every place (I16). The cost: "highest-scoring pieces" no longer includes an exam, so the block's instruction has to cover strengths and growth | Phase 3 |
 | Q3 | **Which overall comment does the block use if the teacher edits it in Window 3?** | **The edited one.** If grades exist for the exam, use their comments, each different text once, and otherwise `ExamResult.comment`. Clearing them removes it. A re-send updates only copies the teacher hasn't edited | Phase 3 |
-| Q4 | **How large is a "large place"?** One instruction may not do it in a default 100-word comment, and one exam can bring about 5,000 characters of comments | **Try it before fixing the wording.** Generate comments for fictional students, and the teacher judges. Keep the overall comment whole. Set a limit on question comments only if that trial needs it | Phase 3 |
+| Q4 | **How large is a "large place"?** One instruction may not do it in a default 100-word comment, and one exam can bring about 5,000 characters of comments | **The teacher's sizes:** a term comment of about 100 words, up to about 150 at the end of the year, from at most 500 to 1,000 words of exams, drafts and assignments together. Below that, the AI tends to copy word for word. **So a limit is needed** (P13): even at CAM2's new limits (Q8), one 15-question exam comes to about 850 words, and drafts and assignments have no limit. A trial on fictional students still sets the wording | Phase 3 |
 | Q5 | **Does D18 still hold for F4?** A deadline change can wipe a whole task's comments, and the fix can't reach the teacher's computers before the release | **Yes,** with the workaround, since the teacher has already chosen one release. Do Phase 2W early, so an exception is quick if comments are lost | Phases 2W, 5 |
 | Q6 | **Is F5 agreed?** CAM2's table says "Direction agreed", and CAM's note says amend D16 "when F5 is agreed" | **Record it as direction agreed, with D16 standing until F5's last stage.** Nothing in Phases 1 to 6 changes. Build nothing else in the workspace, and Phase 4M only checks that it runs on a Mac from a local folder | Phases 3, 4M |
-| Q7 | **Does a student's school email stay the same from year to year?** CAM's student ID comes from it (`student_id_from_email`, `engine/ingestion.py:319`), and exam sessions store that ID. F7 asks for one ID across years before a year's data builds up | **Check now, and build nothing in this upgrade.** If the email stays, the ID may already be stable. If not, design F7's ID before the next intake | §6.1 only |
+| Q7 | **Does a student's school email stay the same from year to year?** CAM's student ID comes from it (`student_id_from_email`, `engine/ingestion.py:319`), and exam sessions store that ID. F7 asks for one ID across years before a year's data builds up | **Yes.** The teacher confirms that an address and its number stay the same for a student's whole time at the school, as at most schools. So F7 needs no new ID, and this upgrade builds nothing for it. With letters then a number (`reg1001`), CAM keeps only the number, so that number must be unique across the school | §6.1 only |
+| Q8 | **How much can a teacher write on a paper?** | **300 characters on a question (about 50 words) and 600 for the overall comment (about 100 words).** The teacher's point: nobody writes more than that for each of 20 students. These come ahead of the rest of F2, in the Phase 1 tag, so this release has them | Phases 1, 3, 5 |
 
 ---
 
@@ -598,9 +602,9 @@ anything new arrives, the same order the convergence plan used.
 
 - **Hand-over: done in `v0.3.1-dev`.** `running_instance()` compares versions and stops
   any other version. What remains is the two-direction test below.
-- **What the tag holds (Q1).** Slide pages and the fixes below. **F1, F2 and F8 to F15
-  stay out,** so the session stays at version 2. No work on them starts in this tag's
-  branch.
+- **What the tag holds (Q1).** Slide pages, comment limits (Q8) and the fixes below. **F1,
+  the rest of F2 and F8 to F15 stay out,** so the session stays at version 2. No work on
+  them starts in this tag's branch.
 - **Slide pages (D17, I14)**, from item 1 of the slide-deck plan's Phase 1:
   - add `Slide 16:9` and `Slide 4:3` to `PAPER_SIZES_MM` and `GRIDS`, at about 5 mm
     cells with the cells square (about 51 × 29 and 51 × 38);
@@ -610,6 +614,16 @@ anything new arrives, the same order the convergence plan used.
   - add them to the paper choices in `step1.js` and `boxes.js`, and to `i18n/en.json`
     and `ja.json`;
   - leave old sessions untouched.
+- **Comment limits (Q8)**, from CAM2's F2, on Step 4's question comment and Step 5's
+  overall comment:
+  - count characters, because Japanese has no spaces, and show a counter near the limit;
+  - refuse a longer comment with a short message, in `i18n/en.json` and `ja.json`, rather
+    than using a browser length limit, which silently trims pasted text. Check it when
+    saving too, in `set_grade` and `set_overall_comment`;
+  - never cut a saved comment. A longer one can be kept or shortened, but can't grow;
+  - the line generated from ticks doesn't count, and never stops a tick;
+  - change nothing in the session's format;
+  - move the agreed design to CAM2's `PLAN.md`.
 - **Measure crop size** with a fictional photo-heavy deck. A whole slide is a 2667 × 1500
   PNG. If a class's folder is too big, bring in the slide-deck plan's JPEG crops
   (Phase 1, item 2) too. Its other Phase 1 items stay in that plan.
@@ -623,7 +637,10 @@ anything new arrives, the same order the convergence plan used.
     unchanged;
   - grid and range round trips for both slide sizes;
   - an old session opening with its layout unchanged;
-  - a browser check of a 12-screen fictional deck, from choosing the file to grading.
+  - a browser check of a 12-screen fictional deck, from choosing the file to grading;
+  - comment limits: at and over each limit, pasted text, Japanese text, a tick on a comment
+    at its limit, and an older session with a longer comment, which opens and saves with
+    that comment unchanged.
 - **The teacher tries Appendix A on a small real assignment**, in the school account, and
   checks the PDFs' layout, the time a class takes and how large decks behave. Those PDFs
   stay in the teacher's data folder, never in this repository.
@@ -631,8 +648,9 @@ anything new arrives, the same order the convergence plan used.
   computer**. Share it with colleagues, since they're the ones exposed.
 
 *Done when:* the I5 reproduction, run with launchers at or after `v0.3.1-dev`, no longer
-upgrades or misroutes a session, `model.VERSION` is still 2, and a 16:9 PDF is recognised
-and can be sliced into whole-slide questions and graded.
+upgrades or misroutes a session, `model.VERSION` is still 2, a 16:9 PDF is recognised
+and can be sliced into whole-slide questions and graded, and new comments stop at their
+limits with no saved comment cut.
 
 ### Phase 2 — CAM: correct Apply, bridge and storage, on the current pin · M
 
@@ -742,10 +760,20 @@ leaves students whose Late flag didn't change untouched.
   - **Leave out** exams excused for that student (`assessment_exclusions_for`). Pass
     comments through `clean_comment`, as evidence is, which drops the `Strengths:` and
     `Areas to develop:` labels from CAM2's comments.
-  - **Fix the wording and any limit from a trial (Q4).** Use fictional students with long
-    comments: 15 question comments of 300 characters, and two exams in one term. The block
-    tells the LLM to use this as a main source for both strengths and growth. If a limit is
-    needed, keep the overall comment whole and say how many question comments were left out.
+  - **Limit the source material (Q4, P13).** Build this in CAM, because CAM2's limits (Q8)
+    don't settle it: two exams at those limits still go over, and an older session can hold
+    longer comments. Count characters, not words, because Japanese has no spaces. Drafts
+    and assignments have no limit, so they count towards the total. Show the teacher how many comments were left out, beside the
+    generated comment.
+  - **Ask for a summary, not a copy.** Tell the LLM to summarise in its own words, and not
+    to pad when there's little material. Today's prompt doesn't say this, and it shows
+    evidence inside quotation marks (`Evidence.as_text`), so leave those off the new block.
+  - **Fix the wording from a trial (Q4).** Use fictional students at 100 and 150 words:
+    one with little material, one at about 500 words, one at about 1,000, and one over the
+    limit with 15 question comments of 300 characters and two exams in one term. The block
+    tells the LLM to use this as a main source for both strengths and growth.
+  - **End of year:** the existing **Word limit** setting already goes from 40 to 400, so 150
+    words needs no new code.
 - Round-half-up for any new percentage display, not Python's `round()`.
 - Sandbox browser check: temp prefs, temp `db_custom_path`, fictional class. Include
   the 12-screen fixture from the slide-deck plan. Its A 1, B 5, C 2 and D 5 levels must
@@ -762,7 +790,9 @@ tests show that:
 - a comment edited or cleared in Window 3 is respected;
 - an exam on four criteria sends its overall comment once and takes no strength or growth
   place;
-- a re-sent comment replaces only copies the teacher hasn't edited.
+- a re-sent comment replaces only copies the teacher hasn't edited;
+- material over the limit leaves out whole question comments, keeps every overall comment,
+  and reports the number left out.
 
 ### Phase 4 — Pull CAM2, notices, bundle · M–L
 
@@ -879,6 +909,10 @@ matrix as Phase 4. Nothing is released yet.
   - every exam's overall and question comments now go into the term comment prompt, and
     so to the AI service the teacher has chosen, and exams no longer take the strength
     and growth places;
+  - a term with a lot of comments may have some question comments left out of that prompt,
+    and CAM says how many;
+  - CAM2 now limits a new question comment to 300 characters and an overall comment to 600,
+    and comments already saved are never cut;
   - a later CAM2 update will raise the session version again, so the "update every
     computer first" step will come back (Q1).
 
@@ -919,10 +953,10 @@ upgrade.
 
 | Entry | What it asks of this upgrade |
 |---|---|
-| **F1, F2:** session version 3 | Don't let Phase 1's tag raise the version (Q1). Keep the bridge routing per question, and the F6 block in one function, so notes are one addition. F1's ceilings need nothing from CAM: `read_session` doesn't read them, and rubrics stay out of 8 |
+| **F1, F2:** session version 3 | Don't let Phase 1's tag raise the version (Q1). F2's comment limits come early (Q8), and its notes, with their own limit of 120 characters, stay here. Keep the bridge routing per question, and the F6 block in one function, so notes are one addition. F1's ceilings need nothing from CAM: `read_session` doesn't read them, and rubrics stay out of 8 |
 | **F3** | Nothing. It's on hold, because F5 would replace it |
 | **F5:** retire the workspace | D16 stands until its last stage (Q6). Add nothing to the workspace beyond Phase 2W |
-| **F7:** a year's work and one student ID | Answer Q7. `exam_results` is keyed by exam name alone (`models.py:179`), so one student with a same-named exam in two classes would collide, and that needs fixing before students carry across years. `_walk_class` skips only `exams/`, so a new `assignments/` folder would be scanned for CSVs |
+| **F7:** a year's work and one student ID | Nothing for the ID itself (Q7). `exam_results` is keyed by exam name alone (`models.py:179`), so one student with a same-named exam in two classes would collide, and that needs fixing before students carry across years. `_walk_class` skips only `exams/`, so a new `assignments/` folder would be scanned for CSVs |
 | **F8:** compact and delete | Nothing to read. CAM uses only `crops/__name__/` (`exam_bridge.py:370`), and Sync reads only the session and grades files. Showing or emptying `exams/_deleted/` is separate CAM work |
 | **F9 to F15** | Nothing. Comparing exams over time stays in CAM (F14) |
 
