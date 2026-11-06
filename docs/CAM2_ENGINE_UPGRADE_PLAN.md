@@ -5,9 +5,10 @@ v6 merges [CAM2_FEEDBACK_FOR_CAM.md](CAM2_FEEDBACK_FOR_CAM.md) into Phases 1 to 
 brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by the teacher.
 Q4's trial set the F6 wording in Phase 3. The smaller points
 (§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done.
-Phase 1's code is built on CAM2's `phase1-slides-and-comment-limits` branch, not yet merged
-or tagged (see its progress note). Phases 2, 2W and 3 are on CAM's `main` (see their progress
-notes). Phases 4 to 6 aren't built yet, and Phase 4 needs the Phase 1 tag.
+Phase 1 is on CAM2's `main`, tagged `v0.3.2-dev` (`4423090`) and published as a pre-release
+with both downloads on 2026-11-06. The teacher's Appendix A trial is still open (see its
+progress notes). Phases 2, 2W and 3 are on CAM's `main` (see their progress
+notes). Phases 4 to 6 aren't built yet. Phase 4 pins the Phase 1 tag.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -43,19 +44,23 @@ When I ask to start, plan or build a new phase, or when you are about to move on
 ```
 
 **Where things stand:** Phases 0, 2, 2W and 3 are on CAM's `main`, after a review of each, and
-all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). Nothing is released
-(D18). The next step is finishing Phase 1, because Phase 4 needs its tag.
+all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). No new CAM release
+(D18). Phase 1 is tagged and out as CAM2's `v0.3.2-dev` pre-release (updated 2026-11-06),
+so Phase 4 can start once the rest of Phase 1 is finished or knowingly left open. CAM's tests
+also pass on the Mac (473 with 13 skipped: the 8 waiting for Phase 4, and 5 that need Node).
 
 **Still open in Phase 1:**
 
 | Step | Where it can happen |
 |---|---|
-| Review CAM2 PR #1 (`phase1-slides-and-comment-limits`), which hasn't been reviewed. Phases 2 and 3 each needed fixes after review, so expect some | The Mac |
-| The teacher tries Appendix A on a small real assignment, in the school account | School, on the Mac. PDFs stay in the data folder, never in a repo |
-| Retry the level click that once sent no request (Phase 1's progress note) | The Mac |
-| Merge the PR, set CAM2's version, cut the tag, build the Mac download | The Mac, after the review |
-| Check the Windows unblock advice, and build the Windows download | **A Windows computer only** |
-| Share the build with colleagues | Once both downloads exist |
+| ~~Review CAM2 PR #1~~ Done 2026-11-06: two small fixes, then merged | The Mac |
+| The teacher tries Appendix A on a small real assignment, in the school account. **Left open by the teacher's choice when the tag was cut.** A fix it needs goes in a later tag | School, on the Mac. PDFs stay in the data folder, never in a repo |
+| ~~Retry the level click~~ Done 2026-11-06: explained, not a lost request (Phase 1's progress note) | The Mac |
+| ~~Merge the PR, set CAM2's version, cut the tag, build the Mac download~~ Done 2026-11-06: `v0.3.2-dev` at `4423090` | The Mac |
+| ~~Build the Windows download~~ Done 2026-11-06 | A Windows computer |
+| Check the Windows unblock advice: that unblocking the zip before unzipping is enough | **A Windows computer only** |
+| ~~Make the `v0.3.2-dev` pre-release~~ Done 2026-11-06: both zips, the sample exams and the two source archives | |
+| Share the build with colleagues | Now |
 
 **Also worth doing on the Mac:** Phase 4M's Gatekeeper check needs a download on a Mac that
 didn't build it, and it decides whether the free Mac route works at all.
@@ -755,11 +760,41 @@ when" above isn't met in a tagged version yet.
   size` and leaves the folder unchanged, but its `/api/state` keeps failing until it's
   restarted. CAM's current pin refuses it with `file_from_newer_version`, like any
   version 2 session (I4). Phase 5's notes should say so.
+- **Left to do:** see the progress note below.
+
+**Progress, 2026-11-06, on the Mac.** Merged and tagged.
+
+- **Review of CAM2 PR #1.** No blocking bugs. Two small fixes went in before the merge:
+  - a PDF page that is only a photo (no text, one picture over 90% or more of it), as some
+    phone apps save them, is no longer guessed as a slide size;
+  - in Step 1, trying a slide size and going back to a paper size restores the
+    *landscape* box.
+- **Two design points the teacher may want to revisit, not changed:** an older comment over
+  the limit can't grow past its last saved length, so rewording it with a pause in between
+  can be refused; and Google's 16:10 slide size isn't detected and has no button (Slide 16:9
+  works, with cells that aren't square).
+- **The level click that sent no request: explained.** Choosing a level focuses **Next
+  paper**, which scrolls the page and the grade column, so the levels move from under the
+  pointer and a second click can land on empty space. It's in every CAM2 version so far,
+  and CAM2's `PLAN.md` ("Still needed", item 4) records it with a possible fix. In a sandboxed
+  browser run of a fictional 12-slide deck, every click on a level that was really under the
+  pointer sent its request, and what was saved matched.
+- **Tagged `v0.3.2-dev`** at CAM2 `4423090`, the commit that sets the version. CAM2's tests
+  pass there, 354 with 1 skipped (it needs Node), on PyMuPDF 1.28.2 with Pillow 12.3 and on
+  the pinned PyMuPDF 2.0 with Pillow 13.
+- **Mac download built** from that commit:
+  `CAM2-exam-grading-Mac-AppleSilicon-v0.3.2-dev.zip`, 40 MB, SHA-256 `8acd06c1…115e5`.
+  The builder verified its signature and started it from an unzipped copy with a throwaway
+  data folder.
+- **Released** as the `v0.3.2-dev` pre-release, with the Windows zip built on Windows, both
+  zips, the sample exams and the two source archives. The Mac zip on the release matches the
+  one built here, byte for byte.
+- **Left open, by the teacher's choice:** the Appendix A trial, which the plan put before the
+  tag. Anything it finds goes in a later tag.
 - **Left to do:**
-  - the teacher tries Appendix A on a small real assignment;
-  - check the Windows unblock advice on a real computer;
-  - cut the tag, and build the Mac download here and the Windows one on a Windows computer;
-  - share it with colleagues.
+  - check on Windows that unblocking the zip before unzipping is enough;
+  - share the build with colleagues;
+  - the teacher's Appendix A trial.
 
 ### Phase 2 — CAM: correct Apply, bridge and storage, on the current pin · M
 
