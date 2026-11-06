@@ -9,8 +9,8 @@ Phase 1 is on CAM2's `main`, tagged `v0.3.2-dev` (`4423090`) and published as a 
 with both downloads on 2026-11-06, and nothing in it is open: the teacher's Appendix A
 trial moved to after the whole upgrade (§6.1). Phases 2, 2W and 3 are on CAM's `main` (see their progress
 notes). Phase 4's code is on the `cam2-upgrade-phase4` branch, pinning the Phase 1 tag;
-its browser matrix passed on the Mac and on the Windows Surface; the Windows build is still
-to do (see its progress note). Phases 5
+its browser matrix passed on the Mac and on the Windows Surface, and the Windows build was
+built and booted there (see its progress note). Phases 5
 and 6 aren't built yet.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
@@ -50,8 +50,8 @@ When I ask to start, plan or build a new phase, or when you are about to move on
 ```
 
 **Phase 4 (2026-11-06):** its code is on the `cam2-upgrade-phase4` branch (PR #8). The browser
-matrix passed on the Mac and on the Windows Surface (2026-11-06). Still to do: the Windows
-build.
+matrix passed on the Mac and on the Windows Surface, and the Windows build was built and
+booted on the Surface (2026-11-06). All of Phase 4's checks are done.
 
 **Where things stand:** Phases 0, 2, 2W and 3 are on CAM's `main`, after a review of each, and
 all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). No new CAM release
@@ -1220,8 +1220,8 @@ the wording without settling everything.
 *Done when:* the whole matrix passes. Nothing is released yet.
 
 **Progress, 2026-11-06, on the Mac and the Windows Surface.** The code is on the
-`cam2-upgrade-phase4` branch. The browser matrix passed on both; the Windows build is still
-to do.
+`cam2-upgrade-phase4` branch. The browser matrix passed on both, and the Windows build was
+built and booted on the Surface.
 
 - **Pulled:** CAM2 `v0.3.2-dev` (`4423090`) as `exam_grading/`. Its tree hash, `cbf9445`,
   equals the tag's, and the tree before the pull equalled the old pin's, so nothing had been
@@ -1334,8 +1334,29 @@ to do.
 - **Still to do in Phase 4:**
   - ~~**The same browser run on the Windows Surface**~~ Done 2026-11-06 (above),
     including the 📁 Browse folder dialog, checked by the teacher.
-  - **On a Windows computer:** a full build, which runs the pins and licence checks for real,
-    then boot it with its embedded Python, CAM2 in host mode, and the `Licences` folder.
+  - ~~**On a Windows computer:** a full build~~ Done 2026-11-06 on the Surface (below).
+- **Windows build, on the Surface (2026-11-06):** `python tools/build_windows_bundle.py`
+  built `CAM-portable-v2026.11.06.zip` from `21cca70` with embedded Python 3.14.6. The build
+  installed exactly the 87 pins with `--no-deps`, passed its pin and licence checks, and
+  removed pip. Unzipped into a sandbox (sandbox prefs and data paths, no OneDrive
+  variables), and started with the bundle's own `runtime\python.exe`, as the
+  troubleshooting `.bat` does:
+  - **CAM starts** with no error on the page, and Settings shows **About CAM and its
+    licences**.
+  - **`Licences`** holds `NOTICE.txt`, `AGPL-3.0.txt`, `CAM-MIT.txt`, `CAM2-MIT.txt` and
+    `THIRD-PARTY-NOTICES.txt`. `tools`, CAM2's tests and `docs/CAM2_FEEDBACK_FOR_CAM.md`
+    are left out.
+  - **CAM2 in host mode** from the bundle: a new exam from CAM, a 16:9 deck found, sliced
+    with the bundle's PyMuPDF 2.0, names from CAM's class list, graded, sent; CAM synced
+    8 scores.
+  - The real database's size and timestamp were unchanged.
+  - **Seen, not Phase 4's:** the bundle still ships CAM's own `tests` folder, `AGENTS.md`
+    and `CLAUDE.md`, as before Phase 4 (only `tools`, the plans and CAM2's development
+    files are removed). Worth a decision before the release.
+  - **The Streamlit traceback** ("Expected ASGI message 'http.response.start'") appears in
+    the bundle too, once per run in `logs\cam.log`. It comes from Streamlit 1.58's own
+    server, and Streamlit has no setting to turn it off. `Start CAM.vbs` hides the console,
+    so teachers see it only through the troubleshooting `.bat`. No change for now.
 - **For the release (Phases 5 and 6):** attach `pymupdf-2.0.tar.gz` and
   `mupdf-1.28.5-source.tar.gz` to CAM's release, as NOTICE.txt says, and mention the licence
   in the release notes.
