@@ -18,6 +18,7 @@ from .slicer import Layout
 Progress = Optional[Callable[[int, int], None]]
 MAX_MARKS = 100
 MAX_LABEL = 20
+MAX_SECTION_NAME = 60
 
 
 # --- Step 1: scans -------------------------------------------------------------------
@@ -510,7 +511,8 @@ def _forget_student_files(session: storage.Session, student_id: str) -> None:
     paths = [session.path(f"{storage.THUMBS_DIR}/{student_id}.jpg")]
     crops = session.path(storage.CROPS_DIR)
     if os.path.isdir(crops):
-        paths += [os.path.join(crops, r, f"{student_id}.png") for r in os.listdir(crops)]
+        paths += [os.path.join(crops, r, f"{student_id}.{ext}") for r in os.listdir(crops)
+                  for ext in ("png", "jpg")]
     for path in paths:
         try:
             os.remove(path)
@@ -563,19 +565,21 @@ def set_layout(config: dict, paper: str, density: str, landscape: bool) -> dict:
     return config
 
 
-def set_mode(config: dict, mode: str, grades_data: Optional[dict] = None) -> dict:
-    """Marks or rubric. Once grading has started the mode is fixed, because
-    marks and rubric levels cannot be converted into each other."""
+def set_mode(config: dict, mode: str) -> dict:
+    """Marks or rubric, as a starting point only: it decides what a question
+    card asks for first. Changing it changes no question and no grade."""
     if mode not in ("marks", "rubric"):
         raise UserError("unknown_mode", mode=mode)
-    if (config.get("mode") and mode != config["mode"]
-            and grading_summary.has_grades(grades_data or {})):
-        raise UserError("mode_locked")
     config["mode"] = mode
     return config
 
 
 def set_rubrics(config: dict, raw_rubrics: List[dict]) -> dict:
+    # A question with no marks and no ticks counts as ticked on an exam's only
+    # rubric. That stops being true once there is another, so tick it for real.
+    for q in config.get("questions") or []:
+        q["rubric_ids"] = grading_summary.question_rubric_ids(config, q)
+        q.pop("rubric_id", None)
     cleaned = []
     used = set()
     for i, raw in enumerate(raw_rubrics or [], 1):
@@ -590,8 +594,7 @@ def set_rubrics(config: dict, raw_rubrics: List[dict]) -> dict:
         cleaned.append(rubric)
     config["rubrics"] = cleaned
     for q in config.get("questions") or []:
-        q["rubric_ids"] = [rid for rid in _picked_rubrics(q) if rid in used]
-        q.pop("rubric_id", None)
+        q["rubric_ids"] = [rid for rid in q["rubric_ids"] if rid in used]
     return config
 
 
@@ -607,16 +610,57 @@ def _clean_boxes(ranges, layout: Layout) -> List[str]:
     return [slicer.format_range(slicer.parse_range(r, layout)) for r in ranges or []]
 
 
+def _clean_sections(config: dict, payload: dict) -> List[dict]:
+    """The sections in a saved draft. Each keeps its share, which only
+    :func:`set_section_weight` changes. Without ``sections`` nothing changes."""
+    if "sections" not in payload:
+        return config.get("sections") or []
+    old = {s["id"]: s for s in config.get("sections") or []}
+    raws = payload["sections"] or []
+    taken = set(old) | {str(raw.get("id") or "").strip() for raw in raws}
+    cleaned, seen = [], set()
+    for raw in raws:
+        sid = str(raw.get("id") or "").strip()
+        if not sid or sid in seen:
+            n = 1
+            while f"sec{n}" in taken:
+                n += 1
+            sid = f"sec{n}"
+            taken.add(sid)
+        seen.add(sid)
+        before = old.get(sid, {})
+        cleaned.append({"id": sid, "name": str(raw.get("name") or "").strip()[:MAX_SECTION_NAME],
+                        "weight": before.get("weight"), "weight_typed": bool(before.get("weight_typed"))})
+    return cleaned
+
+
+def _place_in_sections(questions: List[dict], sections: List[dict]) -> None:
+    """Sections follow the order of the paper, so a question sits in the section
+    it names or, if that is earlier or unknown, the one before it: moving a
+    question past a divider moves it into that section."""
+    order = {s["id"]: i for i, s in enumerate(sections)}
+    at = 0
+    for q in questions:
+        if sections:
+            at = max(at, order.get(q.get("section_id"), at))
+            q["section_id"] = sections[at]["id"]
+        else:
+            q.pop("section_id", None)
+
+
 def set_questions(config: dict, payload: dict, grades_data: Optional[dict] = None) -> dict:
-    """Save the name box, questions and choice groups as drawn so far.
+    """Save the name box, sections, questions and choice groups as drawn so far.
 
     Drafts may be incomplete (a question without a box yet); everything must
     be complete only when slicing (:func:`check_ready`). A deleted question's
-    grades are kept, so a new question never reuses its id.
+    grades are kept, so a new question never reuses its id. A question with a
+    grade can't gain or lose its marks, because marks and rubric levels can't
+    be converted.
     """
     layout = Layout.from_config(config.get("layout"))
     rubric_ids = [r["id"] for r in config.get("rubrics") or []]
     old = {q["id"]: q for q in config.get("questions") or []}
+    sections = _clean_sections(config, payload)
     crops_known(config)
 
     questions = []
@@ -635,11 +679,23 @@ def set_questions(config: dict, payload: dict, grades_data: Optional[dict] = Non
             raise UserError("question_needs_max", question=label or qid)
         if max_marks is not None and not 1 <= max_marks <= MAX_MARKS:
             raise UserError("question_max_range", question=label or qid, max=MAX_MARKS)
+        if (qid in old and bool(old[qid].get("max")) != bool(max_marks)
+                and grading_summary.question_has_grade(grades_data or {}, qid)):
+            raise UserError("question_marks_locked", question=label or qid)
+        if qid in old and max_marks and max_marks != old[qid].get("max"):
+            highest = grading_summary.highest_mark(grades_data or {}, qid)
+            if max_marks < highest:
+                raise UserError("question_max_below_grade", question=label or qid, mark=highest)
         picked = set(_picked_rubrics(raw))
-        questions.append({"id": qid, "label": label,
-                          "boxes": _clean_boxes(raw.get("boxes"), layout),
-                          "max": max_marks,
-                          "rubric_ids": [rid for rid in rubric_ids if rid in picked]})
+        question = {"id": qid, "label": label,
+                    "boxes": _clean_boxes(raw.get("boxes"), layout),
+                    "max": max_marks,
+                    "rubric_ids": [rid for rid in rubric_ids if rid in picked]}
+        section_id = raw.get("section_id", old.get(qid, {}).get("section_id"))
+        if section_id:
+            question["section_id"] = str(section_id)
+        questions.append(question)
+    _place_in_sections(questions, sections)
 
     groups = []
     known = {q["id"] for q in questions}
@@ -648,6 +704,8 @@ def set_questions(config: dict, payload: dict, grades_data: Optional[dict] = Non
         groups.append({"id": str(g.get("id") or f"g{i}"), "questions": qids,
                        "answer": int(g.get("answer") or 0),
                        "pick": grading_summary.group_pick(g)})
+    grading_summary.check_groups_in_sections({"questions": questions, "sections": sections,
+                                              "choice_groups": groups})
 
     name_box = _clean_boxes(payload.get("name_box"), layout)
     changed = (name_box != config.get("name_box")
@@ -658,11 +716,70 @@ def set_questions(config: dict, payload: dict, grades_data: Optional[dict] = Non
     config["name_box_skipped"] = bool(payload.get("name_box_skipped")) and not name_box
     config["questions"] = questions
     config["choice_groups"] = groups
+    config["sections"] = sections
+    grading_summary.rebalance_shares(config)
     stale = stale_regions(config)
     if stale is not None:
         config["sliced"] = not stale
     elif changed:
         config["sliced"] = False
+    return config
+
+
+def set_weighted(config: dict, on: bool) -> dict:
+    """Turn section weightings on or off. Typed shares are kept for next time."""
+    config["weighted"] = bool(on)
+    grading_summary.rebalance_shares(config)
+    return config
+
+
+def set_section_weight(config: dict, section_id: str, value) -> dict:
+    """A section's share of the paper, typed by the teacher (None or blank puts
+    it back to automatic). It keeps that share and the sections not typed share
+    the rest. If every other section was typed, the last of them turns automatic
+    again, so the teacher never has to make the shares add up."""
+    sharing = grading_summary.sections_with_marks(config)
+    stored = {s["id"]: s for s in config.get("sections") or []}
+    if section_id not in stored:
+        raise UserError("unknown_section", section=section_id)
+    if value in (None, ""):
+        stored[section_id]["weight_typed"] = False
+        grading_summary.rebalance_shares(config)
+        return config
+    try:
+        share = value if isinstance(value, int) and not isinstance(value, bool) else int(str(value).strip())
+    except ValueError:
+        raise UserError("section_weight_invalid", value=value)
+    others = [stored[s["id"]] for s in sharing if s["id"] != section_id]
+    if not 0 <= share <= 100 or section_id not in {s["id"] for s in sharing}:
+        raise UserError("section_weight_invalid", value=value)
+    if not others:
+        return config                     # the only section with marks is always 100
+    freed = others[-1] if all(s.get("weight_typed") for s in others) else None
+    room = 100 - sum(s["weight"] for s in others if s.get("weight_typed") and s is not freed)
+    if share > room:
+        raise UserError("section_weight_too_big", max=room)
+    if freed:
+        freed["weight_typed"] = False
+    stored[section_id].update(weight=share, weight_typed=True)
+    grading_summary.rebalance_shares(config)
+    return config
+
+
+def report_options(config: dict) -> dict:
+    return dict(model.DEFAULT_REPORT_OPTIONS, **(config.get("report_options") or {}))
+
+
+def set_report_options(config: dict, raw: dict) -> dict:
+    """Save the report options the teacher changed; the rest stay as they are."""
+    options = report_options(config)
+    for key in ("section_results", "overall_criteria", "rubric_table", "overall_marks"):
+        if key in raw:
+            options[key] = bool(raw[key])
+    if "no_images_for" in raw:
+        known = {s["id"] for s in grading_summary.sections(config)}
+        options["no_images_for"] = [sid for sid in raw["no_images_for"] or [] if sid in known]
+    config["report_options"] = options
     return config
 
 
@@ -713,9 +830,6 @@ def check_ready(config: dict) -> None:
     questions = config.get("questions") or []
     if not questions:
         raise UserError("no_questions")
-    mode = config.get("mode")
-    if mode not in ("marks", "rubric"):
-        raise UserError("unknown_mode", mode=mode)
     labels = set()
     for q in questions:
         label = q.get("label") or ""
@@ -726,12 +840,8 @@ def check_ready(config: dict) -> None:
         labels.add(label.casefold())
         if not q.get("boxes"):
             raise UserError("question_needs_box", question=label)
-        if mode == "marks" and not q.get("max"):
-            raise UserError("question_needs_max", question=label)
-        if mode == "rubric" and not grading_summary.question_rubric_ids(config, q):
-            raise UserError("question_has_no_rubric", question=label)
-    if mode == "rubric" and not config.get("rubrics"):
-        raise UserError("rubric_missing")
+        if grading_summary.question_mode(config, q) is None:
+            raise UserError("question_needs_marks_or_criterion", question=label)
     groups = [g for g in config.get("choice_groups") or []]
     if groups:
         grading_summary.check_choice_groups(config)

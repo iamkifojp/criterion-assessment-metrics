@@ -16,6 +16,8 @@
   --warn-soft: #fff3d6;
   --danger: #b42318;
   --danger-soft: #fde8e6;
+  --next: #a21caf;
+  --next-ink: #ffffff;
   --radius: 10px;
   --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 2px 8px rgba(16, 24, 40, .06);
   --font: "Segoe UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
@@ -39,6 +41,8 @@
     --warn-soft: #3a2b12;
     --danger: #ff8a7a;
     --danger-soft: #3d1c19;
+    --next: #e879f9;
+    --next-ink: #2a0a2e;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4);
     color-scheme: dark;
   }
@@ -275,7 +279,13 @@ details.advanced .row { margin-top: 8px; }
 .tick-list { display: flex; flex-wrap: wrap; gap: 4px 0; margin-bottom: 12px; }
 table.summary { width: 100%; border-collapse: collapse; margin: 12px 0; background: var(--surface); border-radius: var(--radius); overflow: hidden; }
 table.summary th, table.summary td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); }
-table.summary td:nth-child(2) { font-family: ui-monospace, Consolas, monospace; font-size: .85rem; }
+.table-scroll { overflow-x: auto; }
+.question-table .num { width: 5em; }
+.question-table th.tick, .question-table td.tick { text-align: center; }
+.question-table .section-row td { background: var(--surface-2); }
+.section-heading { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
+.section-heading .section-name { flex: 1; min-width: 0; font-weight: 600; }
+.link-btn { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
 
 @media (max-width: 900px) {
   .boxes-layout { grid-template-columns: 1fr; }
@@ -361,7 +371,17 @@ table.preview tr.header-row td { color: var(--muted); font-style: italic; }
 .band-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .descriptor { margin: 4px 0 0; font-size: .875rem; line-height: 1.4; white-space: pre-wrap; }
 .grade-card .comment { margin: 12px 0; }
+.comment-note { margin: 4px 0 0; color: var(--muted, inherit); }
+textarea.too-long { border-color: var(--warn); outline-color: var(--warn); }
 .grade-card #next-paper { width: 100%; }
+/* Which question this is, and the move to the next one, must not be missed:
+   an answer read against the wrong question looks like a very wrong answer. */
+.question-name { color: var(--next); font-size: 1.5rem; font-weight: 800; }
+.btn.next-question { background: var(--next); border-color: var(--next); color: var(--next-ink); font-size: 1.3rem; font-weight: 800; }
+.btn.next-question:hover { filter: brightness(1.08); }
+.last-paper { color: var(--next); font-weight: 700; }
+.now-grading { margin: 0 0 10px; padding: 8px 16px; border-radius: var(--radius); background: var(--next); color: var(--next-ink);
+  font-size: 1.4rem; font-weight: 800; text-align: center; }
 
 @media (max-width: 1000px) {
   .grade-layout { grid-template-columns: 1fr; }
@@ -402,6 +422,15 @@ table.preview tr.header-row td { color: var(--muted); font-style: italic; }
 .stat-row td { background: var(--surface-2); font-weight: 600; font-size: .9rem; }
 .stat-row .sticky-col { background: var(--surface-2); }
 .export-card { margin-top: 20px; }
+.results-card { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.results-card label.check { margin: 0; font-weight: 600; }
+.tick-hint { margin: 2px 0 0 26px; }
+.shares { display: flex; flex-direction: column; gap: 6px; margin-left: 26px; }
+.share-name { min-width: 12em; }
+.criterion-cell { white-space: nowrap; }
+.report-options { margin: 12px 0; }
+.report-options h3 { margin: 0 0 4px; }
+.preview-row { margin: 12px 0; }
 .actions.left { justify-content: flex-start; margin-top: 16px; }
 .export-card .banner { margin-top: 16px; }
 

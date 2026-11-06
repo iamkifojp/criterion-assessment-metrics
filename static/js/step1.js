@@ -4,9 +4,8 @@ import { get, post, waitForJob } from "./api.js";
 import { t } from "./i18n.js";
 import { enterWizard, goTo } from "./main.js";
 import { act, app, config, handleError, render } from "./store.js";
-import { button, coach, confirmBox, debounce, h, modal, pickerWait, progressOverlay, toast } from "./ui.js";
+import { button, coach, confirmBox, debounce, h, isSlide, modal, paperLabel, PAPERS, pickerWait, progressOverlay, toast } from "./ui.js";
 
-const PAPERS = ["A4", "B5", "A3"];
 const STREAM = ["combined", "photos"];
 
 function draft() {
@@ -207,7 +206,7 @@ function sourceChooser(s, onChange, { forAdd = false } = {}) {
         h("div", { class: "choice-row" },
           layoutCard("pages", "📃", t("step1.layout_pages"), t("step1.layout_pages_hint")),
           layoutCard("booklet", "📖", t("step1.layout_booklet"), t("step1.layout_booklet_hint"))));
-      if (s.layout === "pages" && scanInfo(s).landscape) {
+      if (s.layout === "pages" && scanInfo(s).landscape && !isSlide(scanInfo(s).paper)) {
         parts.push(h("p", { class: "warn-text" }, t("step1.layout_landscape_hint")));
       }
     }
@@ -264,6 +263,15 @@ const loadDefaultFolder = debounce(async (exam) => {
   } catch { /* leave as is */ }
 }, 300);
 
+// Slides are landscape. Trying a slide size and coming back to a paper size gives
+// the paper back the way it was, so upright papers don't keep a turned grid.
+function choosePaper(d, paper) {
+  if (isSlide(paper) && !isSlide(d.paper)) d.paperLandscape = d.landscape;
+  if (!isSlide(paper) && isSlide(d.paper) && d.paperLandscape !== undefined) d.landscape = d.paperLandscape;
+  if (isSlide(paper)) d.landscape = true;
+  d.paper = paper;
+}
+
 export function renderNewSession() {
   const d = draft();
   if (!d.saveFolder) loadDefaultFolder(d.exam);
@@ -278,8 +286,8 @@ export function renderNewSession() {
   const drawPaper = () => paperHolder.replaceChildren(
     h("div", { class: "seg big" }, PAPERS.map((p) => h("button", {
       type: "button", class: d.paper === p ? "on" : "", "aria-pressed": d.paper === p ? "true" : "false",
-      onclick: () => { d.paper = p; drawPaper(); updateCreate(); },
-    }, p, d.detected === p ? h("span", { class: "badge" }, t("step1.detected")) : null))),
+      onclick: () => { choosePaper(d, p); drawPaper(); updateCreate(); },
+    }, paperLabel(p), d.detected === p ? h("span", { class: "badge" }, t("step1.detected")) : null))),
     h("label", { class: "check" }, h("input", { type: "checkbox", checked: d.landscape,
       onchange: (e) => { d.landscape = e.target.checked; } }), t("step1.landscape")));
   drawPaper();
@@ -291,6 +299,7 @@ export function renderNewSession() {
       d.paper = guess.paper;
       d.landscape = !!guess.landscape;
       d.detected = guess.paper;
+      delete d.paperLandscape;
       drawPaper();
     }
     updateCreate();

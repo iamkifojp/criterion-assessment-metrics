@@ -26,7 +26,7 @@ from engine.pickers import documents_folder, open_in_file_manager, pick_folder, 
 from engine.slicer import Layout
 
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
-VERSION = "0.2.0-dev"
+VERSION = "0.3.2-dev"
 
 
 def create_app(state: AppState | None = None, shutdown=None) -> Flask:
@@ -69,9 +69,14 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
         return {
             "folder": state.session.folder,
             "config": dict(config, students=students,
-                           keywords=keywords.keyword_list(config, language())),
+                           keywords=keywords.keyword_list(config, language()),
+                           report_options=workflow.report_options(config)),
             "grid": {"cols": layout.cols, "rows": layout.rows},
+            "comment_limits": {"question": grading_summary.MAX_QUESTION_COMMENT,
+                               "overall": grading_summary.MAX_OVERALL_COMMENT},
             "grades": {"grades": grades.get("grades") or {}, "overall": grades.get("overall") or {}},
+            "locked_questions": [q["id"] for q in config.get("questions") or []
+                                 if grading_summary.question_has_grade(grades, q["id"])],
             "progress": grading_summary.progress(config, grades),
             "summary": grading_summary.class_summary(config, grades),
             "saved_at": state.last_saved_at(),
@@ -248,7 +253,7 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
         with state.lock:
             newer = session.config_file.newer_emergency_copy()
             if newer:
-                state.config = newer
+                state.config = model.upgrade_session(newer, state.grades)
                 state.save_config()
             newer = session.grades_file.newer_emergency_copy()
             if newer:
@@ -375,8 +380,12 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
         step = int(body().get("step") or 1)
         if not 1 <= step <= 5:
             raise UserError("unknown_step")
-        if step >= 3 and not state.config.get("sliced"):
-            raise UserError("not_sliced")
+        if step >= 3:
+            if not state.config.get("sliced"):
+                raise UserError("not_sliced")
+            # Marks and criteria can change after slicing, so check again before
+            # anything is graded: a mark can't be ranked against a level.
+            workflow.check_ready(state.config)
         set_step(step)
         state.save_config()
         return ok()
@@ -429,7 +438,8 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
         known = {q["id"] for q in state.config.get("questions") or []} | {model.NAME_BOX_ID}
         if region_id not in known:
             abort(404)
-        return session_file(f"{storage.CROPS_DIR}/{region_id}/{student_id}.png", "image/png")
+        name = slicer.crop_file(region_id, student_id, Layout.from_config(state.config.get("layout")))
+        return session_file(f"{storage.CROPS_DIR}/{name}", "image/jpeg" if name.endswith(".jpg") else "image/png")
 
     @app.get("/api/page/<student_id>/<int:page>")
     def page_image(student_id, page):
@@ -470,7 +480,7 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
     @app.post("/api/setup/mode")
     def setup_mode():
         state.require_session()
-        workflow.set_mode(state.config, body().get("mode"), state.grades)
+        workflow.set_mode(state.config, body().get("mode"))
         set_step(2)
         state.save_config()
         return ok()
@@ -645,9 +655,10 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
 
     @app.post("/api/overall")
     def overall():
-        """Overall comment, report-only total (marks) or final levels (rubric).
+        """Overall comment, report-only total or percentage, or final levels.
 
-        An empty or null total/level goes back to the calculated value.
+        An empty or null total or percentage goes back to the calculated value,
+        and an empty or null final level means no final level.
         """
         state.require_session()
         data = body()
@@ -659,10 +670,37 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
             if "report_total" in data:
                 value = data.get("report_total")
                 grading_summary.set_report_total(state.grades, sid, None if value in ("", None) else value)
+            if "report_percent" in data:
+                value = data.get("report_percent")
+                grading_summary.set_report_percent(state.grades, sid, None if value in ("", None) else value)
             for rid, level in (data.get("final_levels") or {}).items():
                 grading_summary.set_final_level(state.config, state.grades, sid, rid,
                                                 None if level in ("", None) else level)
             state.save_grades()
+        return ok()
+
+    @app.post("/api/weighting")
+    def weighting():
+        """Turn section weightings on or off."""
+        state.require_session()
+        workflow.set_weighted(state.config, bool(body().get("on")))
+        state.save_config()
+        return ok()
+
+    @app.post("/api/section-weight")
+    def section_weight():
+        """A section's share of the paper; empty puts it back to automatic."""
+        state.require_session()
+        data = body()
+        workflow.set_section_weight(state.config, str(data.get("section_id")), data.get("value"))
+        state.save_config()
+        return ok()
+
+    @app.post("/api/report-options")
+    def set_report_options():
+        state.require_session()
+        workflow.set_report_options(state.config, body())
+        state.save_config()
         return ok()
 
     @app.post("/api/choice")
@@ -704,6 +742,20 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
 
         job = state.start_job("export", work)
         return ok(job=job.id)
+
+    @app.get("/api/report-preview/<student_id>")
+    def report_preview(student_id):
+        """One student's PDF, to check before making the whole class's reports."""
+        session = state.require_session()
+        lang = request.args.get("lang") or language()
+        if lang not in i18n.LANGUAGES:
+            raise UserError("unknown_language", language=lang)
+        student = workflow.find_student(state.config, student_id)
+        with state.lock:
+            config, grades = dict(state.config), dict(state.grades)
+        return send_file(io.BytesIO(reports.preview_pdf(session, config, grades, student, lang)),
+                         mimetype="application/pdf", max_age=0,
+                         download_name=reports.report_filename(config, student, set()))
 
     @app.post("/api/open-folder")
     def open_folder_in_os():

@@ -4,7 +4,365 @@ All notable changes to CAM2 are listed here, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are
 year-month-day.
 
-## [Unreleased]
+## [0.3.2-dev] - 2026-11-06
+
+A test build with slide pages and limits on comment length. Sessions stay at
+version 2, so they open in `v0.3.1-dev` too, except a session on a slide size (see the note).
+
+### Added
+
+- **Slide decks saved as PDFs.** `Slide 16:9` and `Slide 4:3` are new paper sizes with
+  square cells of about 5 mm (51 × 29 and 51 × 38). A PDF is recognised by the shape of
+  its landscape pages, so PowerPoint's and Google's sizes both work. Photos of the same
+  shape aren't taken for slides, even saved as PDFs, and US Letter still isn't recognised.
+  Trying a slide size in Step 1 and going back to a paper size puts the landscape box
+  back as it was. A question on a slide size is cropped as a JPEG, because a class's
+  whole-slide PNGs came to about 1.6 GB on a photo-heavy test deck, and about 0.2 GB as
+  JPEGs.
+- **Limits on comment length:** 300 characters on a question and 600 for an overall
+  comment. A counter shows from 80% of the limit. A longer comment is refused and stays
+  in the box, unsaved, until it is shortened, and CAM2 won't leave the screen until then.
+  Grades and quick comments still work meanwhile, and the line quick comments generate
+  doesn't count. A longer comment already saved is never cut. It can be kept or
+  shortened, but can't grow.
+
+### Note
+
+An older CAM2 can't open a session on a slide size. It says **Unknown paper size** and
+changes nothing in the session folder, but needs restarting before it opens another.
+
+## [0.3.1-dev] - 2026-11-05
+
+A test build with fixes from colleagues' first tries of `v0.3.0-dev`. Sessions are
+unchanged, so they open in either version.
+
+### Added
+- **How to unblock CAM2 on Windows,** in the README, READ ME FIRST and the Windows
+  quick guide. Colleagues had to tick **Unblock** in the file's Properties to start
+  CAM2, and their school laptops have no **More info > Run anyway**.
+- **What to do when the Mac's approval gets stuck,** in READ ME FIRST: restart the Mac
+  and open CAM2 again. The Mac quick guide has no room for it.
+
+### Fixed
+- **A new version no longer opens an older one that is still running.** It stops the
+  older one and starts itself, and this works from `v0.2.0-dev` and `v0.3.0-dev`.
+
+### Changed
+- **The README says "weightings"** rather than "shares of the paper", which confused
+  teachers.
+- **No Intel Mac download is planned,** as there is no Intel Mac to build and test on.
+
+## [0.3.0-dev] - 2026-11-03
+
+The test build for colleagues, with exam sections, mixed papers and the new report.
+Session files are version 2, so sessions from `v0.2.0-dev` open and are upgraded, but
+once saved here `v0.2.0-dev` can no longer open them.
+
+### Documents for the test build (2026-11-03)
+
+#### Added
+- **The quick guide** says to give each question marks or a criterion, and to choose
+  what goes on the report.
+- **READ ME FIRST** says what happens to sessions from an older version.
+- **`/api/prefs`, `test_host.py` and `--port`** in ARCHITECTURE.md and the README.
+
+#### Changed
+- **The version is now `0.3.0-dev`,** as `v0.2.0-dev` already has its downloads on
+  the Releases page.
+- **PLAN.md now describes the app as built:** the starting choice, the question card,
+  the review table, the report, the gradebook and the calculations follow
+  [Exam-Section-Plan.md](Exam-Section-Plan.md), and rubric averages and suggested
+  levels are gone.
+- **The steps for making a release** in PLAN.md now include the sample exams.
+- **Step 2's hint and the quick guide** say to box each question and its answer, as the
+  screen itself does, not just the answer.
+- **The test guide** no longer calls the optional rubric tab a failure: the check is
+  that a marks teacher is never sent to a rubric screen.
+
+### Clearer screens after testing the sample exam (2026-11-03)
+
+#### Added
+- **"Save Qn & start a new section at question n+1"** in Draw boxes, below "Save Qn &
+  add question n+1".
+- **"Now grading Qn"** across the grading screen, on the paper that "Go to Qn" lands on.
+- **A warning above the export buttons** that says what each one replaces. Making
+  student PDFs deletes every PDF in `student_pdfs` and overwrites the gradebook.
+  Making the gradebook only overwrites the gradebook and leaves the PDFs.
+
+#### Changed
+- **Moving to the next question is hard to miss.** "Go to Qn" is bigger and a colour of
+  its own, and the question's name is large and in that colour above the answer and on
+  the grading card. A teacher who misses the move reads the next question's answers
+  against the last one's marks.
+- **The review table puts decisions first.** After the name come the calculated total,
+  Total on report, each criterion with its final level, and the overall comment, so
+  final levels no longer need scrolling to. Section totals and each question's grade
+  follow. The student's name stays frozen on the left, and the gradebook's columns have
+  not moved.
+- **"Answer images" is now "Include student's answer images for".**
+
+### Exam sections, Phase 7, part 1: sample exams (2026-11-03)
+
+Phase 7 of [Exam-Section-Plan.md](Exam-Section-Plan.md) is now in two parts: sample
+exams to test with first, then Windows and Mac test builds to share with colleagues.
+
+#### Added
+- **`tools/make_sample_exam.py`** makes a whole made-up exam in English and Japanese: 6
+  students' scanned papers, a class list, three rubrics to upload, and a test guide
+  with the grades to give and the results to expect. The guide's numbers are worked
+  out without CAM2's engine, and `tests/test_sample_exam.py` checks that they match it.
+
+#### Changed
+- **The README** now describes what the app does today.
+
+### Exam sections, Phase 6: the gradebook (2026-11-03)
+
+The Excel gradebook for [Exam-Section-Plan.md](Exam-Section-Plan.md). Only the
+plan's final run-through is left.
+
+#### Added
+- **Section columns:** each section's marks and percentage when two or more sections
+  have marks, its weighted marks with weighting on, and the class average, highest
+  and lowest for its marks.
+- **`% on report`,** beside the calculated percentage. An adjusted result is yellow in
+  both report columns.
+- **The sections on the second sheet,** with their questions, their marks and, with
+  weighting on, their shares.
+
+#### Changed
+- **With weighting on, only percentages are given overall.** A total out of the
+  paper's marks would not agree with them. The sections' marks are still there.
+- **Final-level columns appear only with Overall criterion results on,** as on the
+  review screen and the report.
+- **A paper with no marks questions has no Adjusted by teacher column.**
+
+### Exam sections, Phase 5: the report (2026-11-03)
+
+The student PDF for [Exam-Section-Plan.md](Exam-Section-Plan.md). Every report
+option now takes effect. The gradebook's new columns come in Phase 6.
+
+#### Added
+- **See one report first** on the export card opens the chosen student's PDF in the
+  browser, in the chosen language, and writes nothing to the reports folder.
+- **A results table,** with one row per section if Section results is on, and a
+  Weighted marks column when weighting is on. On a mixed paper the overall line says
+  what it covers.
+- **A box beside each rubric table** with the final level, the criterion's marks and
+  its grades, when Overall criterion results is on. The final level's band is
+  shaded. With the Rubric table option off, the boxes print on their own.
+- **Questions grouped by section,** with a heading. A section with its images turned
+  off prints a grid of five grades per row, and a row for any question with a
+  comment or a note.
+
+#### Changed
+- **The report's order** is now header, results, rubrics, overall comment, questions.
+- **Rubric grades print with their criterion:** `B5`, or `Knowledge 5` when the name
+  doesn't end in a single letter. The list of every question's grade near the top is
+  gone, because the questions already show them.
+- **Percentages print to 1 decimal place.**
+
+#### Removed
+- **The mock-up** (`tools/make_report_mockup.py` and `doc/mockups/`), now that real
+  reports replace it.
+
+### Exam sections, Phase 4: Step ⑤ review (2026-11-03)
+
+The review screen for [Exam-Section-Plan.md](Exam-Section-Plan.md). A mixed paper
+can now be set up, graded and reviewed. The report options are saved, but most of
+them only take effect with the new report layout in Phase 5, and the gradebook's
+new columns come in Phase 6.
+
+#### Added
+- **Overall criterion results,** off by default and offered only when the exam uses
+  criteria. It gathers each criterion's marks and grades (`Marks 6 / 10 · 60.0%`,
+  `Grades B6, B5`) beside a final level the teacher decides.
+- **Section columns** in the review table, with the class average, highest and
+  lowest (`summary.sections`), when two or more sections have marks.
+- **Weight the sections,** with a share for each section. With it on, the table
+  shows percentages instead of a total, and **% on report** takes the place of
+  **Total on report** (`/api/weighting`, `/api/section-weight`, `report_percent`).
+- **Report options** on the export card, each hidden when it does not apply
+  (`/api/report-options`).
+- **An export warning** naming the students with no final level, when some have one
+  and others don't.
+
+#### Changed
+- **The review table follows each question,** with no regard to the first screen's
+  choice.
+- **Typing a final level or a total keeps your place** in the table, so a column can
+  be filled in with the Tab key.
+- **A final level prints only with Overall criterion results on.** A session from an
+  older CAM2 with final levels already typed has it turned on when opened.
+
+### Exam sections, Phase 3: Step ④ grading (2026-11-03)
+
+Grading for [Exam-Section-Plan.md](Exam-Section-Plan.md). A mixed paper can now be
+graded, but Step ⑤ still shows it wrongly until Phase 4, so only marks-only or
+rubric-only exams can be reviewed properly for now.
+
+#### Changed
+- **Each question grades its own way in Step ④.** It shows mark buttons or rubric
+  levels as that question is set up, with no regard to the first screen's choice.
+- **CAM2 checks the set-up again before going on to Steps ③ to ⑤,** because marks
+  and criteria can change after slicing. A question with neither, or a choice group
+  that mixes marks and rubric questions, now stops it, including from the step bar.
+- **A question's maximum can't go below a grade already given**
+  (`question_max_below_grade`), so a paper can't end up with 3 out of 2.
+
+#### Fixed
+- **Adding a second rubric could cut a question loose from its criterion.** A
+  question with no marks and no ticks counts as ticked on an exam's only rubric, so
+  its levels were left with no criterion once there was another. It now gets a real
+  tick when rubrics change.
+
+#### Removed
+- The `question_has_no_rubric` message, which nothing can reach any more.
+
+### Exam sections, Phase 2: Step ② screens (2026-11-03)
+
+The set-up screens for [Exam-Section-Plan.md](Exam-Section-Plan.md). A teacher can
+now set up a mixed paper with sections, but Steps ④ and ⑤ still follow the
+exam-wide choice until Phases 3 and 4, so only marks-only or rubric-only exams can
+be graded properly for now.
+
+#### Added
+- **Sections in the question list.** **Start a new section here** adds a divider,
+  each section has an optional name, and moving a question past a divider moves it
+  into that section. A section with no questions left goes away, and so does the
+  last divider when only one section would remain.
+- **The Slice screen's question list is now an editable table,** with one row per
+  question: its marks box, a tick per criterion and how it will be graded. Filling
+  these in never needs slicing again.
+- **A check on mixed papers.** The Slice screen names the questions graded with
+  rubric levels, so a forgotten marks box isn't taken for one. It also names any
+  question with neither marks nor a criterion.
+- **`locked_questions`** in the session view, so the screens can show which
+  questions already have grades.
+
+#### Changed
+- **Every question card has both a marks box and criteria.** The first screen only
+  decides which comes first, and the card says how the question will be graded as
+  you fill it in. Until the exam has a rubric, criteria show as a small **Add
+  criteria (optional)** link.
+- **The rubric tab is always there.** A teacher who starts from Marks is never sent
+  to it, sees it marked optional and can leave with **Not now, go back**. The last
+  rubric can be removed unless levels have been given on it.
+- **Once a question has grades,** a rubric question's marks box is disabled. A marks
+  question stays a marks question, but its number can still be corrected.
+- **In a one-rubric exam, a question with marks only counts as ticked if it really
+  is ticked.** The screens now show this too, and a new question is only ticked for
+  you if you started from Rubric.
+
+#### Fixed
+- **A change was lost if you left Step 2 within half a second of making it.** Going
+  to another step now saves it first.
+
+### Exam sections, Phase 1: engine (2026-11-03)
+
+The engine for [Exam-Section-Plan.md](Exam-Section-Plan.md). The screens come in
+later phases, so sections, weighting and report options can't be reached from
+the app yet.
+
+#### Added
+- **Sections.** A paper can be divided into sections (`sections` in the session,
+  `section_id` on a question). With none, the whole paper is one section.
+- **Each question grades its own way.** It uses marks if it has a `max`, and
+  rubric levels if it has none but has a criterion
+  (`grading_summary.question_mode`). A paper can mix the two freely, and a mark
+  is never added to, ranked against or read as a level.
+- **Section marks and criterion marks** in each student's summary. A criterion's
+  rubric grades are listed as given, beside its marks total.
+- **Section weightings** (`weighted`, `workflow.set_section_weight`). The shares
+  always add up to exactly 100, a typed share stays, and one section always stays
+  automatic. Percentages are worked out exactly and rounded once, at the end.
+- **`report_percent`**: with weighting on, the override on the report is a
+  percentage rather than a total.
+- **Report options** are saved with the session (`workflow.set_report_options`).
+
+#### Changed
+- **Choosing Marks or Rubric no longer locks anything.** It is only a starting
+  point. Instead, a question with a grade can't gain or lose its marks
+  (`question_marks_locked`), and every other question stays open.
+- **Slicing asks each question for marks or a criterion**
+  (`question_needs_marks_or_criterion`), replacing the checks on the whole exam.
+- **A final level is only ever typed by the teacher** and must be a level in one
+  of the rubric's bands. Blank means no level, and it does not print. The wipe
+  guard now counts final levels.
+- **The report and gradebook read each question's own grading**, so a mixed paper
+  works. Their new layouts come in Phases 5 and 6.
+- **Session files are now version 2**, so an older CAM2 refuses them. When an
+  older session opens, or an old emergency copy is restored, a rubric session
+  loses any stale `max`, and a marks session loses any stale criteria. Its marks
+  and levels stay the same.
+
+#### Removed
+- **Rubric averages and suggested levels**, from the engine, the review screen
+  and the gradebook. A level is a best-fit judgement, not arithmetic.
+- **`mode_locked`** and `rubric_missing`.
+
+## [0.2.0-dev] - 2026-11-02
+
+The first test build, and everything before it.
+
+### Phase 5: Windows and Mac packages (2026-11-02)
+
+The Windows and Apple Silicon Mac downloads can now be built. Both are on the
+Releases page as the pre-release `v0.2.0-dev`, with the PyMuPDF and MuPDF source.
+The run-through on other computers is still to do.
+
+#### Added
+- **`tools/build_mac.py`** builds
+  `dist/CAM2-exam-grading-Mac-AppleSilicon-v<version>.zip` (about 40 MB), with
+  its own READ ME FIRST and quick guide wording, and checks the app from a copy
+  unzipped again. The app has no Dock icon. Macs with an Intel chip aren't
+  covered for now.
+- **The Mac documents walk through the first-run approval**, tried on a really
+  downloaded zip. They warn against **Move to Trash** and explain the malware
+  message, and the quick guide has screenshots of each step.
+- **`licences/`**: the zip now has a `Licences` folder with the GNU AGPL text,
+  an overview notice, CAM2's MIT licence and the licence texts of the other
+  bundled libraries. The download includes PyMuPDF, so as a whole it is under
+  the AGPL; CAM2's own code stays MIT. `READ ME FIRST.txt` says this in English
+  and Japanese, with the link to the source code. The Windows and Mac downloads
+  share these files, and the notice says where to get the PyMuPDF and MuPDF
+  source.
+- **`tools/build_windows.py`** builds
+  `dist/CAM2-exam-grading-Windows-v<version>.zip` (about 38 MB, 77 MB unzipped)
+  in its own clean environment, and starts the packaged app to check it before
+  zipping.
+- **`tools/cam2.spec`**, the PyInstaller recipe: one folder, no console window.
+- **`requirements-build.txt`** pins the library and PyInstaller versions for builds.
+- **`READ ME FIRST.txt`** and **`CAM2 Quick Guide.pdf`** (`tools/build_quick_guide.py`)
+  in the zip, each in English and Japanese.
+
+#### Changed
+- **The packages are now PyInstaller executables**, not an embedded Python
+  started by a `.bat` file as PLAN.md first said. Teachers double-click
+  `Start CAM2 Exam Grading.exe`. With no console window, output goes to
+  `logs/cam2.log` in the app-data folder, so there is no separate troubleshooting
+  launcher.
+- **The first-run warning is now SmartScreen's** *Windows protected your PC*,
+  because the `.exe` is unsigned. The READ ME and the quick guide explain
+  **More info** → **Run anyway**.
+
+#### Fixed
+- **Double-clicking the running Mac app did nothing**, so a teacher who closed
+  the tab could not get back for 10 minutes. It now opens the browser again.
+- **The packaged Mac app wrote nothing to `logs/cam2.log`.** Its output went
+  nowhere, instead of being missing as on Windows.
+- **A stopped CAM2 left `server.json` behind on Windows.** It tried to delete
+  the file while it still had it open. This did no harm, since the next start
+  checks that the port really answers, but the file now goes.
+
+#### Tested
+- On the Windows build computer, with the package unzipped to a folder with a
+  Japanese name and spaces: a combined PDF through to English and Japanese
+  reports and the gradebook; booklet and photo previews; Excel and Shift-JIS
+  class lists; quit and resume; a late paper; the folder picker returning a
+  Japanese folder name, and cancelled; and the screens in a browser.
+- **Not yet tried:** a zip downloaded from the internet and the SmartScreen
+  warning, a computer that has never run CAM2, and a USB stick or OneDrive
+  session folder from the package.
 
 ### Pickers inside CAM's portable bundle (2026-11-01)
 

@@ -74,10 +74,7 @@ def apply(config: dict, grades_data: dict, student_id: str, question_id: str,
     picked = [label for label in known if label in set(picked or [])]
     grading_summary.set_grade(config, grades_data, student_id, question_id)   # checks ids
     entry = grades_data["grades"][student_id][question_id]
-    comment = str(entry.get("comment") or "")
-    old_line = str(entry.get("keyword_text") or "")
-    if old_line and comment.startswith(old_line):
-        comment = comment[len(old_line):].lstrip("\n")
+    comment = grading_summary.typed_comment(entry.get("comment"), str(entry.get("keyword_text") or ""))
     line = comment_line(kw_list, picked, language)
     entry["comment"] = "\n".join(part for part in (line, comment) if part)
     entry["keywords"] = picked

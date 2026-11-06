@@ -1,6 +1,7 @@
 """Start CAM2 Exam Grading.
 
-* If CAM2 is already running on this computer, just open the browser on it.
+* If this version of CAM2 is already running on this computer, just open the
+  browser on it. Another version that is running is stopped first.
 * Otherwise start the server on 127.0.0.1 only (nothing is visible on the
   school network), on the first free port from 5182, and open the browser.
 * Stop by itself once no CAM2 tab has sent a heartbeat for 10 minutes
@@ -21,6 +22,7 @@ import argparse
 import json
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -29,7 +31,7 @@ import webbrowser
 
 from werkzeug.serving import make_server
 
-from app import create_app
+from app import VERSION, create_app
 from appstate import AppState
 from engine import host, pickers, storage
 from engine.errors import UserError
@@ -37,6 +39,7 @@ from engine.errors import UserError
 DEFAULT_PORT = 5182
 IDLE_SECONDS = 10 * 60
 CHECK_SECONDS = 30
+STOP_WAIT_CHECKS = 50
 SERVER_FILE = "server.json"
 
 
@@ -65,15 +68,39 @@ def watch_idle(state: AppState, idle: int, shutdown, clock=time.monotonic, sleep
             return
 
 
+def _ping(url: str) -> dict:
+    with urllib.request.urlopen(url + "api/ping", timeout=1.5) as resp:
+        return json.load(resp)
+
+
+def stop_instance(url: str) -> None:
+    """Ask a running CAM2 to quit, and wait until it has stopped answering."""
+    with urllib.request.urlopen(urllib.request.Request(url + "api/quit", method="POST"), timeout=10):
+        pass
+    for _ in range(STOP_WAIT_CHECKS):
+        time.sleep(0.2)
+        try:
+            _ping(url)
+        except OSError:
+            return
+
+
 def running_instance() -> str | None:
-    """URL of a CAM2 server already running on this computer, if any."""
+    """URL of a CAM2 server of this version already running on this computer, if any.
+
+    One of another version is stopped instead. Opening it would show the teacher
+    that version, which may not be able to open sessions this one has saved.
+    """
     try:
         with open(_server_file(), encoding="utf-8") as fh:
             port = int(json.load(fh)["port"])
         url = f"http://127.0.0.1:{port}/"
-        with urllib.request.urlopen(url + "api/ping", timeout=1.5) as resp:
-            if json.load(resp).get("app") == "cam2":
+        found = _ping(url)
+        if found.get("app") == "cam2":
+            if found.get("version") == VERSION:
                 return url
+            print(f"Stopping CAM2 {found.get('version')} to start {VERSION}.")
+            stop_instance(url)
     except (OSError, ValueError, KeyError):
         pass
     return None
@@ -91,12 +118,32 @@ def free_port(start: int) -> int:
 
 
 def _log_to_file_if_windowless() -> None:
-    """pythonw has no console: send output to the app-data log instead."""
-    if sys.stdout is None or sys.stderr is None:
+    """No console: send output to the app-data log instead.
+
+    pythonw has no sys.stdout at all. The packaged Mac app has one that goes
+    nowhere, so being packaged has to count too.
+    """
+    if sys.stdout is None or sys.stderr is None or pickers._frozen():
         logs = os.path.join(storage.app_data_dir(), "logs")
         os.makedirs(logs, exist_ok=True)
         log = open(os.path.join(logs, "cam2.log"), "a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stderr = log
+
+
+def start_in_background_if_mac_double_click() -> bool:
+    """Run the packaged Mac app's server in a child, and let this process end.
+
+    macOS starts nothing when a running app is double-clicked, and CAM2 has no
+    window to bring forward, so a teacher who closed the tab could not get back
+    for 10 minutes. With this process gone, each double-click starts afresh, and
+    the child opens the browser on the server that is already running.
+    The double-click passes no arguments; the child is given one so it stays.
+    """
+    if sys.platform != "darwin" or not pickers._frozen() or sys.argv[1:]:
+        return False
+    subprocess.Popen([sys.executable, "--idle", str(IDLE_SECONDS)], start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
 
 
 def main(argv=None) -> int:
@@ -164,8 +211,9 @@ def main(argv=None) -> int:
         state.close_session()
         try:
             with open(_server_file(), encoding="utf-8") as fh:
-                if json.load(fh).get("pid") == os.getpid():
-                    os.remove(_server_file())
+                pid = json.load(fh).get("pid")
+            if pid == os.getpid():      # after closing it: Windows can't delete an open file
+                os.remove(_server_file())
         except (OSError, ValueError):
             pass
     return 0
@@ -174,4 +222,6 @@ def main(argv=None) -> int:
 if __name__ == "__main__":
     if sys.argv[1:2] == [pickers.PICK_FLAG]:      # packaged app: a Windows file dialog
         raise SystemExit(pickers._main(sys.argv[2:]))
+    if start_in_background_if_mac_double_click():
+        raise SystemExit(0)
     raise SystemExit(main())

@@ -12,7 +12,7 @@ from PIL import Image
 from engine import slicer
 from engine.errors import UserError
 from engine.slicer import Box, Layout
-from tests.helpers import POINTS_PER_MM, center_color, make_image, make_pdf
+from tests.helpers import POINTS_PER_MM, center_color, make_image, make_pdf, make_photo_pdf
 
 RED, BLUE = (255, 0, 0), (0, 0, 255)
 
@@ -23,7 +23,8 @@ class GridTests(unittest.TestCase):
                     # CAM's "compact" and "fine", still read from older sessions
                     ("A4", "normal"): (15, 21), ("A4", "fine"): (21, 30),
                     ("B5", "normal"): (13, 18), ("B5", "fine"): (18, 25),
-                    ("A3", "normal"): (21, 30), ("A3", "fine"): (30, 42)}
+                    ("A3", "normal"): (21, 30), ("A3", "fine"): (30, 42),
+                    ("Slide 16:9", "5mm"): (29, 51), ("Slide 4:3", "5mm"): (38, 51)}
         for (paper, density), (cols, rows) in expected.items():
             layout = Layout(paper, density)
             self.assertEqual((layout.cols, layout.rows), (cols, rows))
@@ -140,6 +141,57 @@ class PaperDetectionTests(unittest.TestCase):
         self.assertEqual(slicer.detect_paper_mm(182, 257), ("B5", False))   # JIS
         self.assertEqual(slicer.detect_paper_mm(420, 297), ("A3", True))
         self.assertIsNone(slicer.detect_paper_mm(215.9, 279.4))           # US Letter
+        self.assertIsNone(slicer.detect_paper_mm(279.4, 215.9))           # US Letter, turned
+
+    def test_slides_are_detected_by_shape(self):
+        inches = ((13.333, 7.5, "Slide 16:9"), (10, 5.625, "Slide 16:9"), (10, 7.5, "Slide 4:3"),
+                  (26.667, 15, "Slide 16:9"))
+        for w, h, paper in inches:
+            self.assertEqual(slicer.detect_paper_mm(w * 25.4, h * 25.4), (paper, True))
+
+    def test_only_landscape_pages_and_pdfs_count_as_slides(self):
+        self.assertIsNone(slicer.detect_paper_mm(190.5, 254))             # upright 4:3: likely a photo
+        self.assertIsNone(slicer.detect_paper_mm(254, 190.5, slides=False))
+        self.assertEqual(slicer.detect_paper_mm(297, 210, slides=False), ("A4", True))
+
+    def test_slide_cells_are_square(self):
+        for paper, shape in (("Slide 16:9", 16 / 9), ("Slide 4:3", 4 / 3)):
+            layout = Layout(paper, landscape=True)
+            self.assertAlmostEqual((shape / layout.cols) / (1 / layout.rows), 1, delta=0.02)
+
+    def test_slide_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, inches, paper in (("ppt.pdf", (13.333, 7.5), "Slide 16:9"),
+                                        ("google.pdf", (10, 5.625), "Slide 16:9"),
+                                        ("old.pdf", (10, 7.5), "Slide 4:3")):
+                path = make_pdf(os.path.join(tmp, name), size=(inches[0] * 72, inches[1] * 72))
+                self.assertEqual(slicer.detect_paper(path), (paper, True))
+            photo = make_image(os.path.join(tmp, "photo.jpg"), (1600, 1200), dpi=72)
+            self.assertIsNone(slicer.detect_paper(photo))
+
+    def test_a_photo_saved_as_a_pdf_is_not_a_slide(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for size in ((1600, 1200), (1920, 1080)):
+                photo = make_photo_pdf(os.path.join(tmp, f"photo{size[0]}.pdf"), size)
+                self.assertIsNone(slicer.detect_paper(photo))
+            # A slide with a photo behind its title, or a photo framed on a slide, is a slide.
+            titled = make_photo_pdf(os.path.join(tmp, "titled.pdf"), text="Unit 3: Light")
+            self.assertEqual(slicer.detect_paper(titled), ("Slide 4:3", True))
+            framed = make_photo_pdf(os.path.join(tmp, "framed.pdf"), cover=0.8)
+            self.assertEqual(slicer.detect_paper(framed), ("Slide 4:3", True))
+            # A photo of a page the size of A4 is still A4.
+            a4 = make_photo_pdf(os.path.join(tmp, "a4.pdf"), (297 / 0.48 * 72 / 25.4, 210 / 0.48 * 72 / 25.4))
+            self.assertEqual(slicer.detect_paper(a4), ("A4", True))
+
+    def test_slide_ranges_round_trip(self):
+        for paper in ("Slide 16:9", "Slide 4:3"):
+            layout = Layout(paper, landscape=True)
+            whole = Box(3, 0, 0, layout.cols - 1, layout.rows - 1)
+            self.assertEqual(slicer.parse_range(slicer.format_range(whole), layout), whole)
+            self.assertEqual(slicer.snap_rect(3, 0, 0, 1, 1, layout), whole)
+            self.assertEqual(slicer.range_to_bbox(2667, 1500, whole, layout), (0, 0, 2667, 1500))
+            with self.assertRaises(UserError):
+                slicer.parse_range(f"{slicer.col_name(layout.cols)}1", layout)
 
     def test_detects_from_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -213,6 +265,26 @@ class ScanFileTests(unittest.TestCase):
         taken = set()
         self.assertEqual(slicer.unique_name("A.pdf", taken), "A.pdf")
         self.assertEqual(slicer.unique_name("a.pdf", taken), "a (2).pdf")
+
+
+class SlideCropTests(unittest.TestCase):
+    def test_a_slide_is_cropped_whole_as_a_jpeg_and_its_name_box_as_a_png(self):
+        layout = Layout("Slide 16:9", landscape=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            scan = make_pdf(os.path.join(tmp, "deck.pdf"), pages=2, size=(13.333 * 72, 7.5 * 72),
+                            fills={2: [(layout, 25, 14, RED)]})
+            whole = [Box(2, 0, 0, layout.cols - 1, layout.rows - 1)]
+            crops = os.path.join(tmp, "crops")
+            summary = slicer.slice_all([("s001", scan)], [("q1", whole), ("__name__", whole)], layout, crops)
+            self.assertEqual((summary["crops"], summary["errors"]), (2, []))
+            with Image.open(os.path.join(crops, "q1", "s001.jpg")) as im:
+                self.assertEqual((im.format, im.size), ("JPEG", (2667, 1500)))
+                self.assertGreater(center_color(im)[0], 200)
+            self.assertTrue(os.path.isfile(os.path.join(crops, "__name__", "s001.png")))
+
+    def test_paper_crops_stay_png(self):
+        self.assertEqual(slicer.crop_file("q1", "s001", Layout("A4", landscape=True)), "q1/s001.png")
+        self.assertEqual(slicer.crop_file("q1", "s001", Layout("Slide 4:3", landscape=True)), "q1/s001.jpg")
 
 
 class SlicingTests(unittest.TestCase):

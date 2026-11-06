@@ -442,10 +442,11 @@ def open_session(folder: str):
     if not is_session_folder(folder):
         raise UserError("not_a_session_folder", folder=folder)
     session = Session(folder)
-    config = session.config_file.load()
     grades = session.grades_file.load()
+    config = model.upgrade_session(session.config_file.load(), grades)
     if config.get("session_id") != grades.get("session_id"):
         raise UserError("session_files_mismatch", folder=folder)
+    grades["version"] = model.VERSION
     return session, config, grades
 
 
