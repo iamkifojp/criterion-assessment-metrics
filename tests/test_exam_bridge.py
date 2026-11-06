@@ -209,9 +209,9 @@ class ReadSessionTests(_SessionBase):
         self.assertEqual((r.mode, r.total, r.max_total, r.questions), ("rubric", 0, 0, {}))
         self.assertEqual(r.levels, {"Q1": {"r1": 5, "r2": 3}, "Q2": {"r1": 6}})
         self.assertEqual(r.not_answered, ["Q3"])
-        # r1: (5+6)/2 = 5.5 -> 6 (half up, not Python's round-to-even).
-        # r2: teacher's 4 beats the suggested (3+0)/2 = 1.5 -> 2.
-        self.assertEqual(r.final_levels, {"r1": 6, "r2": 4})
+        # Only the level the teacher typed arrives (I1). CAM2 no longer averages
+        # r1's 5 and 6 into a suggestion, so r1 waits for a decision in Window 3.
+        self.assertEqual(r.final_levels, {"r2": 4})
 
     def test_reading_writes_nothing(self):
         folder = self.marks_session()
