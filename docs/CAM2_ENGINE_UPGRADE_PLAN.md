@@ -6,8 +6,8 @@ brings the plan up to CAM2 `5931f22`. Decisions D10–D18 (§5) are locked by th
 Q4's trial set the F6 wording in Phase 3. The smaller points
 (§5.1) go ahead on the stated default unless the teacher changes them. Phase 0 is done.
 Phase 1 is on CAM2's `main`, tagged `v0.3.2-dev` (`4423090`) and published as a pre-release
-with both downloads on 2026-11-06. The teacher's Appendix A trial is still open (see its
-progress notes). Phases 2, 2W and 3 are on CAM's `main` (see their progress
+with both downloads on 2026-11-06, and nothing in it is open: the teacher's Appendix A
+trial moved to after the whole upgrade (§6.1). Phases 2, 2W and 3 are on CAM's `main` (see their progress
 notes). Phases 4 to 6 aren't built yet. Phase 4 pins the Phase 1 tag.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
@@ -54,7 +54,7 @@ also pass on the Mac (473 with 13 skipped: the 8 waiting for Phase 4, and 5 that
 | Step | Where it can happen |
 |---|---|
 | ~~Review CAM2 PR #1~~ Done 2026-11-06: two small fixes, then merged | The Mac |
-| The teacher tries Appendix A on a small real assignment, in the school account. **Left open by the teacher's choice when the tag was cut.** A fix it needs goes in a later tag | School, on the Mac. PDFs stay in the data folder, never in a repo |
+| ~~The teacher tries Appendix A~~ Moved on 2026-11-06, by the teacher's choice, to after the whole upgrade (§6.1) | |
 | ~~Retry the level click~~ Done 2026-11-06: explained, not a lost request (Phase 1's progress note) | The Mac |
 | ~~Merge the PR, set CAM2's version, cut the tag, build the Mac download~~ Done 2026-11-06: `v0.3.2-dev` at `4423090` | The Mac |
 | ~~Build the Windows download~~ Done 2026-11-06 | A Windows computer |
@@ -64,6 +64,21 @@ also pass on the Mac (473 with 13 skipped: the 8 waiting for Phase 4, and 5 that
 
 **Also worth doing on the Mac:** Phase 4M's Gatekeeper check needs a download on a Mac that
 didn't build it, and it decides whether the free Mac route works at all.
+
+**The teacher's decisions on what was still open (2026-11-06):**
+
+- **The teacher won't run CAM until this upgrade is released,** and will update every
+  computer first. So the interim advice (I5) is no longer needed, and an older CAM or
+  workspace on another computer is out of scope.
+- **After the release, the teacher tries** the Appendix A route and AI term comments
+  (Phase 6, step 7, and §6.1).
+- **CAM2's Japanese wording** gets feedback after the public release. No colleague can
+  check it before, as none has used a digital grading system in Japanese.
+- **The level buttons that move after a grade** are fixed in the next CAM2 update, so
+  they reach CAM with the second pull.
+- **Still not run, and not decided:** a CAM2 exam's row in a downloaded report (Phases 2
+  and 3), and restoring and linking drafts in the browser (Phase 2W). Phase 4's browser
+  checks can cover them.
 
 **Decisions made since v6 that later phases rely on:**
 
@@ -666,6 +681,8 @@ anything new arrives, the same order the convergence plan used.
 - **Release page (P5).** Done for `v2026.11.01`, with the teacher's go-ahead: a Licences
   section, and the zip unchanged. The two July releases have no notice. The teacher is
   considering deleting them while keeping their tags, so I9 still applies to those.
+- **Interim advice (I5): no longer needed** (2026-11-06). The teacher won't run CAM until
+  this upgrade is released and on every computer, so CAM's old launcher never runs.
 - **What the published `v2026.11.01` zip holds.** PyMuPDF 2.0 with MuPDF 1.28.5, Pillow
   12.3.0 and anthropic 2.3.0, 98 packages in all. So real users already run PyMuPDF 2.0,
   while §7's tests ran on 1.28.2. Phase 4's check on 2.0 matters for that reason. Its
@@ -789,13 +806,13 @@ when" above isn't met in a tagged version yet.
 - **Released** as the `v0.3.2-dev` pre-release, with the Windows zip built on Windows, both
   zips, the sample exams and the two source archives. The Mac zip on the release matches the
   one built here, byte for byte.
-- **Left open, by the teacher's choice:** the Appendix A trial, which the plan put before the
-  tag. Anything it finds goes in a later tag.
+- **The Appendix A trial moved,** by the teacher's choice: first left open when the tag was
+  cut, then moved to after the whole upgrade (§6.1). Anything it finds goes in a later tag.
 - **The test builds' checks, accepted as done (2026-11-06, the teacher's decision).**
   Colleagues have used them on their own computers largely without problems, so the
   Windows unblock advice and the rest of CAM2's Phase 5 run-through count as done, though
   they weren't tried item by item. CAM2's `PLAN.md` and README say the same.
-- **Left to do:** the teacher's Appendix A trial.
+- **Left to do:** nothing in Phase 1.
 
 ### Phase 2 — CAM: correct Apply, bridge and storage, on the current pin · M
 
@@ -963,7 +980,9 @@ were met in the browser check below.
   been saved, which is why linking now saves first.
 - **Not checked:** an older workspace on another computer, which from reading its code drops
   the field on save. Draft restoring ran in a server test only, not in the browser, and linked
-  drafts ran in server tests only. Linking wasn't tried with the mouse.
+  drafts ran in server tests only. Linking wasn't tried with the mouse. **The older
+  workspace is out of scope** (2026-11-06): the teacher updates every computer before
+  running CAM again.
 
 ### Phase 3 — CAM: decide per criterion in Window 3 · M–L
 
@@ -1071,7 +1090,7 @@ the wording without settling everything.
     out the exam block.
   - **Exam comments did feed both strengths and growth** in every comment read.
   - **Still to check:** real comments on the teacher's usual model, and Japanese text, which
-    the trial didn't cover.
+    the trial didn't cover. The teacher tries these after the release (Phase 6, step 7).
 - **Tests on the pin, with Phases 2, 2W and 3 together:** CAM 473 (8 skipped, all waiting for a
   version 2 session), CAM2 216.
 - **Older CAM, rerun with all three:** the engine at `1c41655` reads a mixed exam with the new
@@ -1082,7 +1101,8 @@ the wording without settling everything.
   fixture with its A 1, B 5, C 2 and D 5 levels grouped, a decision, blank clearing it, Apply
   with its summary, the changed-levels flag and Keep grade, an unfinished paper, a mixed and
   a weighted exam, the plain marks panel, Add assignment, and the exam block in a compiled
-  prompt. Generating a comment through an AI wasn't run.
+  prompt. Generating a comment through an AI wasn't run. The teacher does that in Phase 6,
+  step 7.
 - **Choices this phase settled:**
   - **Window 1 has no per-student dropdowns for an exam with rubrics.** P2 keeps the mapping,
     the progress count and one Apply, so the re-send rule no longer has a dropdown to read.
@@ -1279,8 +1299,9 @@ session.
    they are, and neither a re-send nor Apply replaces them silently.
 6. In the workspace, change one tick on a low-stakes task that already has typed comments,
    and check that the text stays. **Don't try the deadline first on real work.**
-7. Generate one term comment on a student with an exam, as the teacher would normally.
-   The teacher judges whether the exam has a large enough place (Q4).
+7. Generate one term comment on a student with an exam, as the teacher would normally,
+   on the usual model, and in Japanese too if used. The teacher judges whether the exam
+   has a large enough place (Q4).
 
 **Rollback:** revert CAM to the previous release and restore `exams/` from the step 3
 copy. A v2 session can't be opened by older code. CAM2 also leaves a v1 copy in
@@ -1305,6 +1326,8 @@ upgrade.
 | **F7:** a year's work and one student ID | Nothing for the ID itself (Q7). `exam_results` is keyed by exam name alone (`models.py:179`), so one student with a same-named exam in two classes would collide, and that needs fixing before students carry across years. `_walk_class` skips only `exams/`, so a new `assignments/` folder would be scanned for CSVs |
 | **F8:** compact and delete | Nothing to read. CAM uses only `crops/__name__/` (`exam_bridge.py:370`), and Sync reads only the session and grades files. Showing or emptying `exams/_deleted/` is separate CAM work |
 | **F9 to F15** | Nothing. Comparing exams over time stays in CAM (F14) |
+| **The Appendix A trial** (moved from Phase 1, 2026-11-06) | Nothing. The teacher tries the Apps Script route on a small real assignment once this upgrade is released. Anything it needs goes in a later CAM2 tag |
+| **Level buttons that move after a grade** (CAM2's `PLAN.md`) | Nothing. The fix goes in the next CAM2 update and reaches CAM with the second pull |
 
 **The second pull:** change CAM2, tag it, and `git subtree pull`. Add the F2 note fields to
 `test_exam_bridge.py` with it. Release notes repeat the "update every computer first"
