@@ -93,6 +93,92 @@ class SessionLifecycleTests(StorageTestCase):
             storage.create_session(self.folder, "  ")
 
 
+class OldSessionTests(StorageTestCase):
+    """Sessions saved before sections, as version 1."""
+
+    RUBRIC = {"id": "r1", "name": "Criterion A",
+              "bands": [{"levels": "0", "min": 0, "max": 0, "descriptor": ""},
+                        {"levels": "1-8", "min": 1, "max": 8, "descriptor": ""}]}
+
+    def write_old(self, mode, questions, grades, rubrics=()):
+        session, config, stored = storage.create_session(self.folder, "Old exam")
+        config.update(version=1, mode=mode, questions=questions, rubrics=list(rubrics),
+                      students=[{"id": "s001"}, {"id": "s002"}])
+        for key in ("sections", "weighted"):
+            del config[key]
+        session.config_file.save(config)
+        session.grades_file.save(dict(stored, version=1, **grades))
+
+    def test_marks_session_gives_the_same_marks(self):
+        self.write_old("marks", [{"id": "q1", "label": "Q1", "max": 5, "rubric_ids": ["r1"]},
+                                 {"id": "q2", "label": "Q2", "max": 10, "rubric_id": "r1"}],
+                       {"grades": {"s001": {"q1": {"value": 4, "comment": ""},
+                                            "q2": {"value": "not_answered", "comment": ""}}},
+                        "overall": {"s001": {"report_total": 6}}}, [self.RUBRIC])
+        _, config, grades = storage.open_session(self.folder)
+        self.assertEqual(config["version"], model.VERSION)
+        marks = grading_summary.student_summary(config, grades, "s001")["marks"]
+        self.assertEqual((marks["total"], marks["max"], marks["percent"], marks["report_total"], marks["adjusted"]),
+                         (4, 15, 26.7, 6, True))
+        # Criteria left from before the teacher chose Marks don't start counting
+        self.assertEqual([q["rubric_ids"] for q in config["questions"]], [[], []])
+        self.assertIsNone(grading_summary.student_summary(config, grades, "s001")["rubrics"]["r1"]["marks"])
+
+    def test_rubric_session_with_a_stale_max_gives_the_same_levels(self):
+        self.write_old("rubric", [{"id": "q1", "label": "Q1", "max": 5, "rubric_ids": ["r1"]},
+                                  {"id": "q2", "label": "Q2", "max": 5, "rubric_id": "r1"},
+                                  {"id": "q3", "label": "Q3", "max": 5}],
+                       {"grades": {"s001": {"q1": {"value": None, "comment": "", "levels": {"r1": 7}},
+                                            "q2": {"value": 6, "comment": ""},
+                                            "q3": {"value": 3, "comment": ""}}},
+                        "overall": {"s001": {"final_levels": {"r1": None}}, "s002": {"final_levels": {"r1": 4}}}},
+                       [self.RUBRIC])
+        _, config, grades = storage.open_session(self.folder)
+        self.assertEqual([grading_summary.question_mode(config, q) for q in config["questions"]], ["rubric"] * 3)
+        result = grading_summary.student_summary(config, grades, "s001")
+        self.assertEqual(result["levels"], {"q1": {"r1": 7}, "q2": {"r1": 6}, "q3": {"r1": 3}})
+        self.assertEqual(result["counted"], {"q1": {"r1": 7}, "q2": {"r1": 6}, "q3": {"r1": 3}})
+        self.assertEqual((result["marks"]["total"], result["marks"]["max"]), (0, 0))    # no level read as a mark
+        # A level the teacher didn't type starts blank; one they did stays
+        self.assertIsNone(result["rubrics"]["r1"]["final"])
+        self.assertEqual(grading_summary.student_summary(config, grades, "s002")["rubrics"]["r1"]["final"], 4)
+        # The level is still a level, and can still be changed as one
+        grading_summary.set_grade(config, grades, "s001", "q2", 8)
+        self.assertEqual(grades["grades"]["s001"]["q2"]["levels"], {"r1": 8})
+
+    def test_an_old_session_with_final_levels_keeps_them_showing(self):
+        self.write_old("rubric", [{"id": "q1", "label": "Q1", "rubric_ids": ["r1"]}],
+                       {"grades": {}, "overall": {"s1": {"final_levels": {"r1": 5}}}}, [self.RUBRIC])
+        _, config, grades = storage.open_session(self.folder)
+        self.assertTrue(config["report_options"]["overall_criteria"])
+        self.assertEqual(grades["overall"]["s1"]["final_levels"]["r1"], 5)
+
+    def test_an_old_session_without_final_levels_starts_with_them_off(self):
+        self.write_old("rubric", [{"id": "q1", "label": "Q1", "rubric_ids": ["r1"]}],
+                       {"grades": {}, "overall": {"s1": {"final_levels": {"r1": None}}}}, [self.RUBRIC])
+        _, config, _ = storage.open_session(self.folder)
+        self.assertFalse((config.get("report_options") or {}).get("overall_criteria"))
+
+    def test_upgrade_runs_only_once(self):
+        self.write_old("rubric", [{"id": "q1", "label": "Q1", "max": 5, "rubric_ids": ["r1"]}],
+                       {"grades": {}, "overall": {}}, [self.RUBRIC])
+        session, config, grades = storage.open_session(self.folder)
+        self.assertIsNone(config["questions"][0]["max"])
+        config["questions"][0]["max"] = 6                       # marks added later, on purpose
+        session.config_file.save(config)
+        session.grades_file.save(grades)
+        _, config, grades = storage.open_session(self.folder)
+        self.assertEqual(config["questions"][0]["max"], 6)
+        self.assertEqual((config["version"], grades["version"]), (model.VERSION, model.VERSION))
+        with open(os.path.join(self.folder, storage.SESSION_FILE), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["version"], model.VERSION)
+
+    def test_new_files_are_the_new_version(self):
+        self.assertEqual(model.VERSION, 2)
+        self.assertEqual(model.new_session("Exam", "x")["version"], 2)
+        self.assertEqual(model.new_grades("x")["version"], 2)
+
+
 class SafeSaveTests(StorageTestCase):
     def test_save_increments_generation_and_verifies(self):
         session, config, grades = self.new_session()

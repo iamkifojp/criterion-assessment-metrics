@@ -142,3 +142,55 @@ export function debounce(fn, ms) {
 export const QUESTION_COLORS = ["#e4572e", "#17a2b8", "#8e44ad", "#2e8b57", "#d4a017",
   "#c2185b", "#1f6feb", "#6d4c41", "#00897b", "#7b8794"];
 export const NAME_COLOR = "#2563eb";
+
+// --- Paper sizes -----------------------------------------------------------------------------
+
+export const PAPERS = ["A4", "B5", "A3", "Slide 16:9", "Slide 4:3"];
+export const isSlide = (paper) => paper === "Slide 16:9" || paper === "Slide 4:3";
+export const paperLabel = (paper) => (paper === "Slide 16:9" ? t("paper.slide_16_9")
+  : paper === "Slide 4:3" ? t("paper.slide_4_3") : paper);
+
+// --- Comment boxes ---------------------------------------------------------------------------
+
+// A comment over its limit is refused, not trimmed, as a browser's maxlength would
+// trim pasted text. It stays in the box, unsaved, until it is short enough. The same
+// rule is checked on the server (grading_summary), which also counts code points.
+const COUNT_FROM = 0.8;           // the counter appears at this share of the limit
+const refused = new Map();        // box key -> the refused text, kept across redraws
+
+function typedPart(text, line) {
+  return line && text.startsWith(line) ? text.slice(line.length).replace(/^\n+/, "") : text;
+}
+
+// saved() gives the comment now saved; save(text) and flush() go to a debounced saver.
+// line is the part generated from quick comments, which doesn't count.
+export function commentField({ key, limit, saved, line = "", save, flush, attrs = {} }) {
+  const length = (text) => [...typedPart(text, line)].length;
+  const note = h("p", { class: "comment-note small", "aria-live": "polite" });
+  const check = () => {
+    const n = length(box.value);
+    const over = n > limit && n > length(saved());
+    if (over) refused.set(key, typedPart(box.value, line)); else refused.delete(key);
+    box.classList.toggle("too-long", over);
+    note.classList.toggle("warn-text", over);
+    note.textContent = over ? t("comment.too_long", { count: n, limit })
+      : n > limit ? t("comment.saved_longer", { count: n, limit })
+        : n >= limit * COUNT_FROM ? `${n} / ${limit}` : "";
+    return over;
+  };
+  const box = h("textarea", { ...attrs,
+    oninput: () => { if (check()) flush(); else save(box.value); },
+    onblur: () => flush() },
+  refused.has(key) ? [line, refused.get(key)].filter(Boolean).join("\n") : saved());
+  check();
+  return [box, note];
+}
+
+// True, and says so, if a refused comment needs shortening before leaving this screen.
+export function commentRefused() {
+  const box = document.querySelector("textarea.too-long");
+  if (!box) { refused.clear(); return false; }
+  toast(t("comment.shorten_first"), "error");
+  box.focus();
+  return true;
+}

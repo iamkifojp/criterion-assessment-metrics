@@ -159,6 +159,10 @@ class ExamResult:
     #   weighted: CAM2's weighting applies to this paper's marks (D12)
     #   criterion_marks: CAM2 rubric id -> {"total", "max", "percent"} as CAM2
     #     reports them (D13). Never a grade: only the teacher's decision is one
+    #   report_total, report_percent: what CAM2's report prints when the
+    #     teacher typed over the calculated total (or, when weighted, the
+    #     percentage) in CAM2. Both None when the report prints the calculated
+    #     figures. Shown beside them, never used in CAM's own figures
     mode: str = ""
     session_id: str = ""
     not_answered: List[str] = field(default_factory=list)
@@ -170,6 +174,13 @@ class ExamResult:
     percent: Optional[float] = None
     weighted: bool = False
     criterion_marks: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    report_total: Optional[float] = None
+    report_percent: Optional[float] = None
+
+    @property
+    def adjusted(self) -> bool:
+        """CAM2's report prints a figure the teacher typed over the calculated one."""
+        return self.report_total is not None or self.report_percent is not None
 
 
 @dataclass

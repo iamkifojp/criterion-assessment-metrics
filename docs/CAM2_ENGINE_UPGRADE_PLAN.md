@@ -8,7 +8,10 @@ Q4's trial set the F6 wording in Phase 3. The smaller points
 Phase 1 is on CAM2's `main`, tagged `v0.3.2-dev` (`4423090`) and published as a pre-release
 with both downloads on 2026-11-06, and nothing in it is open: the teacher's Appendix A
 trial moved to after the whole upgrade (§6.1). Phases 2, 2W and 3 are on CAM's `main` (see their progress
-notes). Phases 4 to 6 aren't built yet. Phase 4 pins the Phase 1 tag.
+notes). Phase 4's code is on the `cam2-upgrade-phase4` branch, pinning the Phase 1 tag;
+its browser matrix passed on the Mac and on the Windows Surface, and the Windows build was
+built and booted there (see its progress note). Phases 5
+and 6 aren't built yet.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -28,6 +31,9 @@ over any older memory there.
 2. **Add the phase check to the user-level `~/.claude/CLAUDE.md`,** if it isn't there, creating
    the file if needed and keeping what's already in it. Use the text below.
 3. **Then run that check on Phase 1,** and report back before building anything.
+4. **For Phase 4's browser checks on the Windows Surface** (2026-11-06), follow
+   [tools/browser_check/README.md](../tools/browser_check/README.md): it has the sandbox
+   start script, the fixtures, each check and the results the Mac run got.
 
 ```markdown
 ## Before starting a new phase, check the earlier phases are finished
@@ -42,6 +48,10 @@ When I ask to start, plan or build a new phase, or when you are about to move on
 
 **Why:** when I moved on to later phases with issues still open in earlier ones, the problems piled up and took a long review to untangle.
 ```
+
+**Phase 4 (2026-11-06):** its code is on the `cam2-upgrade-phase4` branch (PR #8). The browser
+matrix passed on the Mac and on the Windows Surface, and the Windows build was built and
+booted on the Surface (2026-11-06). All of Phase 4's checks are done.
 
 **Where things stand:** Phases 0, 2, 2W and 3 are on CAM's `main`, after a review of each, and
 all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). No new CAM release
@@ -76,9 +86,16 @@ didn't build it, and it decides whether the free Mac route works at all.
   check it before, as none has used a digital grading system in Japanese.
 - **The level buttons that move after a grade** are fixed in the next CAM2 update, so
   they reach CAM with the second pull.
-- **Still not run, and not decided:** a CAM2 exam's row in a downloaded report (Phases 2
-  and 3), and restoring and linking drafts in the browser (Phase 2W). Phase 4's browser
-  checks can cover them.
+- **Browser checks wait until Phase 4's code is in (decided 2026-11-06).** The teacher
+  won't run CAM2 again until this upgrade is done, so the checks not yet run, a CAM2 exam's
+  row in a downloaded report (Phases 2 and 3) and restoring and linking drafts in the
+  browser, with the mouse (Phase 2W), join Phase 4's sandbox browser run, after its code.
+- **Older CAM2 comments over the new limits stay as they are (decided 2026-11-06).** Only
+  colleagues testing CAM2 have any, and they can shorten them. Nothing in CAM changes:
+  the workspace's comments have no limit, and the term comment takes drafts and
+  assignments whole (`engine/exam_feedback.py`).
+- **Google's 16:10 slide size goes in the next CAM2 update (decided 2026-11-06),** with
+  the level buttons (§6.1).
 
 **Decisions made since v6 that later phases rely on:**
 
@@ -1183,17 +1200,166 @@ the wording without settling everything.
 - Read CAM2's adjusted report figures in `read_session`, and show them beside the calculated
   ones (see Phase 3's progress note).
 - `python tools/run_all_tests.py` passes, including with PyMuPDF 2.0.
+- **PyMuPDF for the bundle is 2.0,** as CAM2's tag pins and its release's source archive
+  matches. 2.1 also installs `pymupdf_layout`, `pymupdf4llm`, onnxruntime, numpy and
+  networkx, which nothing in CAM or CAM2 uses, so moving to it is a separate decision
+  with its own licence check.
 - Sandbox end to end with `exam_grading/tools/make_sample_exam.py` and a real browser:
   marks; rubric with and without final levels; levels on one criterion across many
   questions; marks ticked on a criterion; a 16:9 slide deck; mixed from both starting
   choices; weighted;
   choice groups; and a v1 session upgraded mid-grading. Each must Sync, be decided in
   Window 3 or carried by Apply, and show in Windows 2 and 3, leaving session folders
-  byte-identical after Sync. Its comments must reach the term comment prompt.
+  byte-identical after Sync. Its comments must reach the term comment prompt. **Also run
+  the checks left from earlier phases:** a CAM2 exam's row in a downloaded report, and
+  restoring and linking drafts in the workspace with the mouse. This run comes after
+  Phase 4's code, since the teacher runs CAM2 only once the upgrade is done.
 - **On a Windows computer:** build the bundle and boot it with its embedded Python. CAM
   starts, CAM2 opens in host mode and sends to CAM, and the `Licences` folder is there.
 
 *Done when:* the whole matrix passes. Nothing is released yet.
+
+**Progress, 2026-11-06, on the Mac and the Windows Surface.** The code is on the
+`cam2-upgrade-phase4` branch. The browser matrix passed on both, and the Windows build was
+built and booted on the Surface.
+
+- **Pulled:** CAM2 `v0.3.2-dev` (`4423090`) as `exam_grading/`. Its tree hash, `cbf9445`,
+  equals the tag's, and the tree before the pull equalled the old pin's, so nothing had been
+  edited in place.
+- **I1 tests:** the two now expect only typed final levels, and a new test shows a rubric
+  exam with no typed level brings Apply nothing. The 8 tests waiting for a version 2
+  session now run and pass.
+- **Adjusted report figures:** `read_session` keeps `report_total` and `report_percent`
+  only when CAM2 marks them `adjusted`, as CAM2 does, so typing the calculated figure
+  again isn't an adjustment. They're saved and validated with the exam result. Window 1's
+  marks panel and Window 3's total show "report shows 18/20 (typed in CAM2)" beside the
+  calculated figure, which stays what CAM shows and works with. The downloaded report pack
+  prints only decided grades, so it needed no change.
+- **Bundle:** `EXAM_DEV_PATHS` gains the four CAM2 paths, and
+  `docs/CAM2_FEEDBACK_FOR_CAM.md` stays out. `test_windows_bundle.py` covers all five.
+- **Notices (D15):** `tools/bundle_licences.py` and
+  `tools/bundle-requirements-windows.txt`.
+  - **87 libraries,** pinned exactly with their licences and installed with `--no-deps`, so
+    nothing unpinned arrives. `python tools/bundle_licences.py pin windows` regenerates the
+    list from pip's dry run for Windows, keeps licences already checked, and marks a new
+    one `?`, which the build refuses.
+  - **CAM2's versions win** for the libraries both use (Flask, PyMuPDF 2.0, openpyxl and
+    their dependencies), **except Pillow:** CAM's Streamlit 1.58 needs it below 13, so it
+    is 12.3, which CAM2's tests also pass on.
+  - **PyMuPDF's add-ons stay out,** as CAM2's build does: `pymupdf_layout` and
+    `pymupdf4llm` are empty placeholder packages, and onnxruntime (80 MB), networkx,
+    psutil, PyYAML, tabulate and flatbuffers are only for PyMuPDF's AI layout. PyMuPDF
+    renders and reads text without them (checked with them blocked).
+  - **The build checks** that what was installed equals the pins, and that every library has
+    a licence and a licence text, then writes `Licences`: `NOTICE.txt` (the AGPL overview,
+    where the source is, and the library table), `AGPL-3.0.txt`, `CAM-MIT.txt`,
+    `CAM2-MIT.txt`, and `THIRD-PARTY-NOTICES.txt` with the embedded Python's licence and
+    each library's own licence files. Streamlit ships none, so its Apache-2.0 text is
+    stored in `tools/licence-texts/`. pip is removed after the install.
+  - **Where they are:** READ ME FIRST, the README, and a new **About CAM and its licences**
+    section at the end of Settings, in English and Japanese, worded like CAM2's.
+- **Tests, in a sandbox on the Mac:** CAM 487 (5 skipped, all needing Node) and CAM2 354
+  (1 skipped, Node), on the dev venv's PyMuPDF 2.0, and again in a venv with exactly the
+  pinned versions (Streamlit 1.58, Pillow 12.3, PyMuPDF 2.0, no add-ons). A stage-only
+  build has the `Licences` folder and none of the left-out files.
+- **Browser matrix, on the Mac (2026-11-06):** passed, in a sandbox copy of the tracked files
+  with every data path in temp, on the exact pinned libraries. The real database's timestamp
+  was the same before and after.
+  - **Sessions:** nine built with CAM2's engine (marks with a choice group, rubric with typed
+    levels for half the class, 12 levels on one criterion, marks ticked on two criteria, mixed
+    from both starting choices, weighted with a typed report percentage, an open "teacher
+    picks" group, and a version 1 session from the old pin, finished on the new engine), plus
+    a **16:9 slide deck through the real CAM2 screens**: started from CAM in host mode, slides
+    detected, boxes drawn, sliced, names matched from CAM's class list, graded, a report
+    total typed over, and sent.
+  - **Checked:** each Synced, with every total matching a hand calculation; session folders
+    byte-identical after every Sync (CAM2's own `cam2.lock` heartbeat aside); Apply for plain
+    marks and typed levels; decisions in Window 3's pop-up; ⏳ awaiting decision in Windows 2
+    and 3, never a 0; Window 3's wording with typed-only levels ("CAM2 final level: 6. Not in
+    the gradebook yet…"); the report-figure caption for a typed total, a weighted percentage
+    and one typed in CAM2's own screen; the version 1 session arriving with its typed level
+    only; exam comments in the term comment prompt, with no scores.
+  - **Left from earlier phases, now run:** a CAM2 exam's rows in a downloaded report-card pack
+    (decided grades and "awaiting decision"); linking two drafts **with the mouse** in the
+    workspace, which combined ticks and comments under one generated line and exported to
+    CAM; and **restoring drafts**: with the workspace's own state set aside, reopening from CAM
+    brought back every comment and tick from CAM's published copy, and a second export
+    duplicated nothing.
+  - **Not covered:** CAM2's native folder dialog (its "paste a path" box was used), and
+    generating a comment through an AI (Phase 6, step 7).
+- **Browser matrix, on the Windows Surface (2026-11-06):** passed, the same run as the Mac's,
+  through `tools/browser_check/start_sandbox.ps1` on Python 3.14.6 with exactly the pinned
+  libraries (so the Windows pins install). The real database's size and timestamp were the
+  same before and after, and nothing in the real data folder changed.
+  - **Tests in a sandbox copy first:** CAM 487 (5 skipped) and CAM2 354 (1 skipped). This
+    Surface has no Node, so the same tests skip as on the Mac.
+  - **Every row of the README's table matched** the Mac's figures: all nine sessions synced;
+    ⏳ awaiting decision in Windows 2 and 3, never a 0; Quiz 1, Choice open, Weighted final,
+    Unit test rubric, Essay, Lab practical, Mixed and V1 upgraded as listed; the term comment
+    prompt with three exam comments and no scores; a 16:9 slide deck through CAM2's real
+    screens (slides found, 24 pictures, names from CAM's class list, a typed report total
+    shown in CAM); the report-card pack; and the workspace drafts, linked with the mouse,
+    restored from CAM's published copy, and exported twice with no duplicates.
+  - **Session folders byte-identical** after every Sync and every Apply and decision, apart
+    from CAM2's `cam2.lock` while it had the slide deck open.
+  - **Fixed on the way:** `start_sandbox.ps1` wrote the sandbox prefs with a byte-order mark
+    (Windows PowerShell 5.1's `-Encoding UTF8`), which CAM's `json.load` rejects, so CAM
+    would have run with no data folder and never synced. It now writes UTF-8 without one,
+    and stops if the venv or the pinned install fails.
+  - **📁 Browse, checked by the teacher:** the in-app browser can't see a native window, so
+    paths were typed in the run. Afterwards the teacher clicked 📁 Browse in Add / Edit class
+    in the sandboxed CAM: the Windows "Choose this class's master directory" dialog opened at
+    the sandbox's `scans\master` folder.
+  - **Not covered:** an AI-generated comment (Phase 6, step 7).
+  - **Seen, not caused by Phase 4:** CAM2's "Total on report" box keeps the calculated total
+    in it, so typing appends (13 then 15 gave 1315), and it accepted 1315 on a /20 paper with
+    no warning. One Streamlit log traceback on a static file ("Expected ASGI message
+    'http.response.start'"), with no effect on the page. The term-comment prompt called Sam
+    Chen "Chen", because the sample class sorts names in Japanese register order.
+- **Found in the browser run** (none caused by Phase 4):
+  - **Report-card pack: correct as it is (the teacher's decision, 2026-11-06).** Once a student
+    has a grade on an exam, the pack lists only the criteria decided. Teachers often assess
+    one or two criteria per exam, sometimes one for the whole term, so the report should show
+    only what was assessed.
+  - **A restored draft loses its partner link.** Links live only in the workspace's own state,
+    so on a fresh computer the combined comments come back but the two cards aren't grouped.
+    No text is lost.
+  - **The level buttons move after a click** in CAM2's grading screen, as already recorded;
+    the next CAM2 update fixes it.
+  - **Cosmetic:** the report-figure caption wraps onto three lines in Window 1's narrow column,
+    and CAM2's Step 1 thumbnails show slides inside portrait cards.
+  - **Test setups only:** CAM's automatic exam sync and "Force full re-scan" need
+    `db_custom_path` in the prefs, so a harness that sets only `CAM_DB_PATH` never syncs
+    exams. Teachers always have the path set.
+- **Still to do in Phase 4:**
+  - ~~**The same browser run on the Windows Surface**~~ Done 2026-11-06 (above),
+    including the 📁 Browse folder dialog, checked by the teacher.
+  - ~~**On a Windows computer:** a full build~~ Done 2026-11-06 on the Surface (below).
+- **Windows build, on the Surface (2026-11-06):** `python tools/build_windows_bundle.py`
+  built `CAM-portable-v2026.11.06.zip` from `21cca70` with embedded Python 3.14.6. The build
+  installed exactly the 87 pins with `--no-deps`, passed its pin and licence checks, and
+  removed pip. Unzipped into a sandbox (sandbox prefs and data paths, no OneDrive
+  variables), and started with the bundle's own `runtime\python.exe`, as the
+  troubleshooting `.bat` does:
+  - **CAM starts** with no error on the page, and Settings shows **About CAM and its
+    licences**.
+  - **`Licences`** holds `NOTICE.txt`, `AGPL-3.0.txt`, `CAM-MIT.txt`, `CAM2-MIT.txt` and
+    `THIRD-PARTY-NOTICES.txt`. `tools`, CAM2's tests and `docs/CAM2_FEEDBACK_FOR_CAM.md`
+    are left out.
+  - **CAM2 in host mode** from the bundle: a new exam from CAM, a 16:9 deck found, sliced
+    with the bundle's PyMuPDF 2.0, names from CAM's class list, graded, sent; CAM synced
+    8 scores.
+  - The real database's size and timestamp were unchanged.
+  - **Seen, not Phase 4's:** the bundle still ships CAM's own `tests` folder, `AGENTS.md`
+    and `CLAUDE.md`, as before Phase 4 (only `tools`, the plans and CAM2's development
+    files are removed). Worth a decision before the release.
+  - **The Streamlit traceback** ("Expected ASGI message 'http.response.start'") appears in
+    the bundle too, once per run in `logs\cam.log`. It comes from Streamlit 1.58's own
+    server, and Streamlit has no setting to turn it off. `Start CAM.vbs` hides the console,
+    so teachers see it only through the troubleshooting `.bat`. No change for now.
+- **For the release (Phases 5 and 6):** attach `pymupdf-2.0.tar.gz` and
+  `mupdf-1.28.5-source.tar.gz` to CAM's release, as NOTICE.txt says, and mention the licence
+  in the release notes.
 
 ### Phase 4M — CAM: a Mac binary · M–L (D18)
 
@@ -1328,6 +1494,8 @@ upgrade.
 | **F9 to F15** | Nothing. Comparing exams over time stays in CAM (F14) |
 | **The Appendix A trial** (moved from Phase 1, 2026-11-06) | Nothing. The teacher tries the Apps Script route on a small real assignment once this upgrade is released. Anything it needs goes in a later CAM2 tag |
 | **Level buttons that move after a grade** (CAM2's `PLAN.md`) | Nothing. The fix goes in the next CAM2 update and reaches CAM with the second pull |
+| **Google's 16:10 slide size** (Phase 1's progress note, decided 2026-11-06) | Nothing. CAM2 detects it and gets a button in the next update, and it reaches CAM with the second pull. Until then a 16:10 deck can use Slide 16:9 |
+| **Older comments over the new limits** (Phase 1's progress note, decided 2026-11-06) | Nothing. Left as is: only colleagues testing CAM2 have any |
 
 **The second pull:** change CAM2, tag it, and `git subtree pull`. Add the F2 note fields to
 `test_exam_bridge.py` with it. Release notes repeat the "update every computer first"

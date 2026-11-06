@@ -1,13 +1,14 @@
-// Step 4: grade one question across every paper. In Rubric mode a question
-// assessed on several criteria is graded one criterion at a time: each
-// (question, criterion) pair is its own item, with tabs to switch criterion.
+// Step 4: grade one question across every paper, with marks or rubric levels
+// as that question is set up. A rubric question assessed on several criteria
+// is graded one criterion at a time: each (question, criterion) pair is its
+// own item, with tabs to switch criterion.
 // Left: the answer (zoomable) with the grade badge, or the whole page.
 // Right: the grading card — grade, Not answered, comment, Next paper.
 import { post } from "./api.js";
 import { t } from "./i18n.js";
 import { goTo } from "./main.js";
-import { act, app, config, criteriaOf, gradeOf, handleError, render } from "./store.js";
-import { button, debounce, formatTime, h, modal } from "./ui.js";
+import { act, app, config, criteriaOf, gradeOf, gradedWith, handleError, render } from "./store.js";
+import { button, commentField, commentRefused, debounce, formatTime, h, modal } from "./ui.js";
 import { parseRange } from "./boxes.js";
 
 const NA = "not_answered";
@@ -20,9 +21,9 @@ function entry(sid, qid) {
   return app.session.grades.grades?.[sid]?.[qid] || null;
 }
 
-// Every item graded across the class, in order: { q, r } (r null in Marks mode).
+// Every item graded across the class, in order: { q, r } (r null for a marks question).
 function items(c) {
-  return c.questions.flatMap((q) => (c.mode === "rubric"
+  return c.questions.flatMap((q) => (gradedWith(c, q) === "rubric"
     ? criteriaOf(c, q).map((r) => ({ q, r }))
     : [{ q, r: null }]));
 }
@@ -79,9 +80,12 @@ function firstPage(qid) {
 }
 
 // Moving to another paper or question keeps the whole-page view if the
-// teacher chose it, opened at the question's page.
+// teacher chose it, opened at the question's page. "Now grading" shows only on
+// the paper that "Go to Qn" lands on.
 function moveTo(changes) {
+  if (commentRefused()) return;
   const d = draft();
+  d.arrived = false;
   Object.assign(d, changes);
   d.revealed = null;
   d.page = firstPage(d.qid);
@@ -145,7 +149,7 @@ function levelText(r, value) {
 
 // The badge over the answer. A question on several criteria lists each one.
 function badgeText(c, q, sid) {
-  if (c.mode !== "rubric") {
+  if (gradedWith(c, q) === "marks") {
     const value = valueOf(sid, q.id);
     if (value === null) return null;
     return value === NA ? t("step4.badge_na") : `${value} / ${q.max}`;
@@ -250,6 +254,7 @@ export function renderStep4() {
   return h("main", { class: "page full grading" },
     questionBar,
     strip,
+    d.arrived && !allDone ? h("div", { class: "now-grading", role: "status" }, t("step4.now_grading", { label: itemLabel(item) })) : null,
     h("div", { class: "grade-layout" },
       viewer(c, d, item, student),
       h("aside", { class: "grade-card-col" }, allDone ? doneCard(c, item) : gradeCard(c, d, item, student))));
@@ -276,6 +281,7 @@ function viewer(c, d, item, student) {
   const nextId = nextStudentId(c, d, 1);
   const head = h("div", { class: "viewer-head" },
     h("div", { class: "row" },
+      h("span", { class: "question-name" }, itemLabel(item)),
       button(["◀ ", t("step4.prev_paper")], () => moveTo({ sid: prevId }), "small", { disabled: !prevId }),
       h("strong", {}, t("step4.paper_of", { n: index + 1, total: c.students.length })),
       nameOrReveal(d, student),
@@ -363,16 +369,15 @@ function gradeCard(c, d, item, student) {
   const q = item.q;
   const r = item.r;
   const value = valueOf(student.id, q.id, r?.id);
-  const comment = entry(student.id, q.id)?.comment || "";
   const choose = (v) => setGrade(student.id, q.id, v, r?.id);
   // Not answered is about the student's answer, so it covers every criterion.
   const notAnswered = () => setGrade(student.id, q.id, NA);
   const clear = () => setGrade(student.id, q.id, null, value === NA ? null : r?.id);
-  const crit = c.mode === "rubric" ? criteriaOf(c, q) : [];
 
   let grading;
-  if (c.mode === "rubric") {
-    grading = r ? h("div", { class: "bands-grade" },
+  if (r) {
+    const crit = criteriaOf(c, q);
+    grading = h("div", { class: "bands-grade" },
       crit.length > 1 ? criterionTabs(crit, q, student, r) : h("p", { class: "muted small" }, r.name),
       r.bands.map((band) => {
         const inBand = typeof value === "number" && band.min <= value && value <= band.max;
@@ -384,8 +389,8 @@ function gradeCard(c, d, item, student) {
               type: "button", class: `level-btn ${value === l ? "on" : ""}`, "aria-pressed": value === l ? "true" : "false",
               onclick: () => choose(l) }, String(l))))),
           band.descriptor ? h("p", { class: "descriptor" }, band.descriptor) : null);
-      })) : h("p", { class: "warn-text" }, t("error.question_has_no_rubric", { question: q.label }));
-  } else if ((q.max || 0) <= MAX_BUTTONS) {
+      }));
+  } else if (q.max <= MAX_BUTTONS) {
     const marks = [];
     for (let m = 0; m <= q.max; m++) marks.push(m);
     grading = h("div", { class: "mark-buttons" }, marks.map((m) => h("button", {
@@ -419,15 +424,16 @@ function gradeCard(c, d, item, student) {
       h("input", { type: "checkbox", checked: picked.includes(k.label),
         onchange: (e) => toggleKeyword(k.label, e.target.checked) }), k.label))));
 
-  const commentBox = h("textarea", { id: "comment-box", rows: "3", placeholder: t("grade.comment_placeholder"),
-    "aria-label": t("grade.comment_placeholder"),
-    oninput: (e) => saveComment(student.id, q.id, e.target.value),
-    onblur: () => saveComment.flush() }, comment);
+  const commentBox = commentField({ key: `${student.id}/${q.id}`, limit: app.session.comment_limits.question,
+    saved: () => entry(student.id, q.id)?.comment || "", line: entry(student.id, q.id)?.keyword_text || "",
+    save: (text) => saveComment(student.id, q.id, text), flush: saveComment.flush,
+    attrs: { id: "comment-box", rows: "3", placeholder: t("grade.comment_placeholder"),
+      "aria-label": t("grade.comment_placeholder") } });
 
   const nextId = nextStudentId(c, d, 1);
-  const outOf = c.mode === "rubric" ? "" : t("step4.out_of", { max: q.max });
+  const outOf = r ? "" : t("step4.out_of", { max: q.max });
   return h("section", { class: `card grade-card ${value !== null ? "graded" : ""}` },
-    h("h2", {}, itemLabel(item), outOf ? h("span", { class: "muted" }, " · ", outOf) : null),
+    h("h2", {}, h("span", { class: "question-name" }, itemLabel(item)), outOf ? h("span", { class: "muted" }, " · ", outOf) : null),
     hideNames() && d.revealed !== student.id ? null : h("p", { class: "muted small" }, student.display_name),
     grading,
     h("div", { class: "row" },
@@ -478,12 +484,12 @@ function criterionTabs(crit, q, student, current) {
 function lastPaperActions(c, d, item) {
   const list = items(c);
   const next = list[list.findIndex((x) => x.q === item.q && x.r === item.r) + 1];
-  return [h("p", { class: "muted" }, t("step4.last_paper")),
+  return [h("p", { class: "last-paper" }, t("step4.last_paper", { label: itemLabel(item) })),
     next
       ? button(t("step4.go_to_question", { label: itemLabel(next) }), () => {
         saveComment.flush();
-        moveTo({ qid: next.q.id, rid: next.r?.id || null, sid: firstFor(c, d, next) });
-      }, "primary big", { id: "next-paper" })
+        moveTo({ qid: next.q.id, rid: next.r?.id || null, sid: firstFor(c, d, next), arrived: true });
+      }, "next-question big", { id: "next-paper" })
       : button(t("step4.to_review"), () => { saveComment.flush(); goTo(5, { next: true }); }, "primary big", { id: "next-paper" })];
 }
 
@@ -495,8 +501,8 @@ function doneCard(c, item) {
       ? [h("p", {}, t("step4.next_question_hint", { label: itemLabel(remaining) })),
         button(t("step4.go_to_question", { label: itemLabel(remaining) }), () => moveTo({ qid: remaining.q.id,
           rid: remaining.r?.id || null,
-          sid: firstFor(c, { ungradedOnly: true }, remaining) }),
-        "primary big", { id: "next-paper" })]
+          sid: firstFor(c, { ungradedOnly: true }, remaining), arrived: true }),
+        "next-question big", { id: "next-paper" })]
       : [h("p", {}, t("step4.everything_done")),
         button(t("step4.to_review"), () => goTo(5, { next: true }), "primary big", { id: "next-paper" })],
     h("p", { class: "muted small" }, t("step4.show_all_hint")));

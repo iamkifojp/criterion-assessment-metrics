@@ -358,8 +358,25 @@ class SyncTests(_AppBase):
         self.assertEqual(app._apply_exam_bands(self.gb.assignments[0], "A", results), 2)
         self.assertEqual(self.gb.students["100003"].scores.get(Criterion.A, []), [])
 
-    def test_rubric_exam_confirms_levels_per_mapped_criterion(self):
+    def test_rubric_exam_without_typed_levels_brings_none(self):
+        # CAM2 suggests no final level (I1), so levels alone give Apply nothing
+        # to write: the teacher decides in Window 3.
         self.hosted(self.rubric_session)
+        self.sync()
+        asg = self.gb.assignments[0]
+        aoki = self.gb.students["100001"].exam_results[EXAM]
+        self.assertEqual(aoki.levels, {"Q1": {"r1": 5, "r2": 3}, "Q2": {"r1": 7}})
+        self.assertEqual(aoki.final_levels, {})
+        applied = app._apply_exam_rubric_levels(asg, {"r1": "A", "r2": "C"},
+                                                app._exam_results_for(EXAM))
+        self.assertEqual(applied, 0)
+        self.assertEqual(self.gb.students["100001"].scores.get(Criterion.A, []), [])
+
+    def test_rubric_exam_confirms_levels_per_mapped_criterion(self):
+        # Final levels the teacher typed in CAM2's Step 5.
+        self.hosted(self.rubric_session,
+                    overall={"s001": {"final_levels": {"r1": 6, "r2": 3}},
+                             "s002": {"final_levels": {"r1": 6}}})
         self.sync()
         asg = self.gb.assignments[0]
         meta = self.ss["exam_sessions"][CLASS][EXAM]
@@ -369,7 +386,7 @@ class SyncTests(_AppBase):
         aoki = self.gb.students["100001"].exam_results[EXAM]
         self.assertEqual(aoki.final_levels, {"r1": 6, "r2": 3})
         results = app._exam_results_for(EXAM)
-        # CAM2's levels go in as they are, with r2 scaled 0-4 → 0-8.
+        # The typed levels go in as they are, with r2 scaled 0-4 → 0-8.
         applied = app._apply_exam_rubric_levels(asg, {"r1": "A", "r2": "C"}, results)
         # Baba's Q2 has no level yet: not finished in CAM2, so held back.
         self.assertFalse(self.gb.students["100002"].exam_results[EXAM].complete)

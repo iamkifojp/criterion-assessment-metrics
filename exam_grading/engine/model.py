@@ -3,16 +3,22 @@
 ``cam2_session.json`` — the exam set-up (rarely changes once grading starts)::
 
     {
-      "format": "cam2-session", "version": 1,
+      "format": "cam2-session", "version": 2,
       "session_id": "<uuid>", "generation": 3, "saved_at": "...", "saved_by": "PC",
       "exam_name": "Y8 Science Midterm", "created_at": "...",
       "layout": {"paper": "A4", "density": "5mm", "landscape": false},
-      "mode": "marks" | "rubric" | null,
+      "mode": "marks" | "rubric" | null,                 # the starting choice only
       "rubrics":  [{"id": "r1", "name": "Criterion A",
                     "bands": [{"levels": "5–6", "descriptor": "..."}]}],
       "name_box": ["page1!A1:E2"] | [],
+      "sections": [{"id": "sec1", "name": "Scientific knowledge",
+                    "weight": 50, "weight_typed": false}],
+      "weighted": false,
+      "report_options": {"section_results": false, "overall_criteria": false,
+                         "rubric_table": true, "overall_marks": true,
+                         "no_images_for": ["sec1"]},
       "questions": [{"id": "q1", "label": "Q1", "boxes": ["page1!A4:J10"],
-                     "max": 5, "rubric_ids": ["r1"]}],
+                     "max": 5, "rubric_ids": ["r1"], "section_id": "sec1"}],
       "keywords": [{"label": "check calculations", "type": "growth" | "strength"}],
       "choice_groups": [{"id": "g1", "questions": ["q4", "q5", "q6"], "answer": 2,
                          "pick": "best" | "teacher"}],
@@ -29,37 +35,44 @@
 ``grades.json`` — written on every click while grading::
 
     {
-      "format": "cam2-grades", "version": 1,
+      "format": "cam2-grades", "version": 2,
       "session_id": "<uuid>", "generation": 41, "saved_at": "...", "saved_by": "PC",
       "grades":  {"s001": {"q1": {"value": 4, "comment": "Good",
                                   "keywords": [], "keyword_text": ""},
                            "q2": {"value": "not_answered", "comment": ""},
                            "q3": {"value": null, "comment": "",
                                   "levels": {"r2": 5, "r3": 4}}}},
-      "overall": {"s001": {"comment": "", "report_total": null,
+      "overall": {"s001": {"comment": "", "report_total": null, "report_percent": null,
                            "final_levels": {"r1": 6},
                            "chosen": {"g1": ["q4", "q6"]}}}
     }
 
-A question with no entry (or ``value`` null) is *ungraded*. A question
-assessed on several criteria (``rubric_ids``) keeps one level per criterion
-in ``levels``; older sessions have a single ``rubric_id``. Ids, not labels,
-key everything so a teacher can rename "Q1" without breaking crops or grades.
+A question grades with marks if it has a ``max``, and with rubric levels if
+not; there is no separate field for it (``grading_summary.question_mode``). A
+question with no entry (or ``value`` null) is *ungraded*. A question assessed
+on several criteria (``rubric_ids``) keeps one level per criterion in
+``levels``; older sessions have a single ``rubric_id``. Sections are optional:
+with none, the whole paper is one section. A final level is typed by the
+teacher, and blank means no level. Ids, not labels, key everything so a teacher
+can rename "Q1" without breaking crops or grades.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from .errors import UserError
 
 SESSION_FORMAT = "cam2-session"
 GRADES_FORMAT = "cam2-grades"
-VERSION = 1
+VERSION = 2
 
 NOT_ANSWERED = "not_answered"
 NAME_BOX_ID = "__name__"
+DEFAULT_REPORT_OPTIONS = {"section_results": False, "overall_criteria": False,
+                          "rubric_table": True, "overall_marks": True, "no_images_for": []}
 
 
 def now_iso() -> str:
@@ -85,6 +98,8 @@ def new_session(exam_name: str, session_id: str) -> dict:
         "mode": None,
         "rubrics": [],
         "name_box": [],
+        "sections": [],
+        "weighted": False,
         "questions": [],
         "choice_groups": [],
         "students": [],
@@ -116,7 +131,8 @@ def check_format(data, expected_format: str) -> dict:
 
 
 def grades_mass(data: dict) -> int:
-    """How much teacher work a grades file holds (graded cells + comments).
+    """How much teacher work a grades file holds (graded cells, comments and
+    final levels, none of which anything can recalculate).
 
     Used by the wipe guard: a save that would drop most of this is refused.
     """
@@ -131,6 +147,33 @@ def grades_mass(data: dict) -> int:
             if str(entry.get("comment") or "").strip():
                 count += 1
     for entry in (data.get("overall") or {}).values():
-        if isinstance(entry, dict) and str(entry.get("comment") or "").strip():
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("comment") or "").strip():
             count += 1
+        count += sum(1 for v in (entry.get("final_levels") or {}).values() if v is not None)
     return count
+
+
+def upgrade_session(config: dict, grades: Optional[dict] = None) -> dict:
+    """Bring a session saved by an older CAM2 up to the current version.
+
+    A question now grades with marks if it has a ``max``, so before anything
+    reads them: a rubric session's questions lose any ``max`` left from before
+    the teacher chose Rubric, and a marks session's lose any criteria left the
+    same way. Runs only once, because later a rubric session can gain marks.
+    Final levels are now shown only with Overall criterion results on, so a
+    session with any typed keeps them on.
+    """
+    if int(config.get("version") or 1) < 2:
+        for q in config.get("questions") or []:
+            if config.get("mode") == "rubric":
+                q["max"] = None
+            elif config.get("mode") == "marks":
+                q["rubric_ids"] = []
+                q.pop("rubric_id", None)
+        if any(v is not None for per in ((grades or {}).get("overall") or {}).values()
+               for v in ((per or {}).get("final_levels") or {}).values()):
+            config["report_options"] = dict(DEFAULT_REPORT_OPTIONS, overall_criteria=True)
+    config["version"] = VERSION
+    return config

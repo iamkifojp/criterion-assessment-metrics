@@ -342,6 +342,9 @@ def _validate_exam_result(value: Any, path: str,
         _add_issue(issues, f"{path}.percent", "expected-number-or-null")
     if "weighted" in value and not isinstance(value["weighted"], bool):
         _add_issue(issues, f"{path}.weighted", "expected-boolean")
+    for field in ("report_total", "report_percent"):
+        if field in value and not (value[field] is None or _is_number(value[field])):
+            _add_issue(issues, f"{path}.{field}", "expected-number-or-null")
     criterion_marks = value.get("criterion_marks", {})
     if not isinstance(criterion_marks, dict):
         _add_issue(issues, f"{path}.criterion_marks", "expected-object")
@@ -965,6 +968,10 @@ def _exam_result_to_dict(r: ExamResult) -> Dict[str, Any]:
         out["weighted"] = True
     if r.criterion_marks:
         out["criterion_marks"] = {str(k): dict(v) for k, v in r.criterion_marks.items()}
+    if r.report_total is not None:
+        out["report_total"] = float(r.report_total)
+    if r.report_percent is not None:
+        out["report_percent"] = float(r.report_percent)
     return out
 
 
@@ -1006,6 +1013,8 @@ def _exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
     raw_comments = d.get("question_comments")
     raw_percent = d.get("percent")
     raw_marks = d.get("criterion_marks")
+    raw_report_total = d.get("report_total")
+    raw_report_percent = d.get("report_percent")
     return ExamResult(
         assignment=d["assignment"],
         total=int(d.get("total", 0)),
@@ -1028,6 +1037,8 @@ def _exam_result_from_dict(d: Dict[str, Any]) -> ExamResult:
         criterion_marks={str(k): dict(v) for k, v in raw_marks.items()
                          if isinstance(v, dict)}
         if isinstance(raw_marks, dict) else {},
+        report_total=float(raw_report_total) if _is_number(raw_report_total) else None,
+        report_percent=float(raw_report_percent) if _is_number(raw_report_percent) else None,
     )
 
 

@@ -1,9 +1,11 @@
-// Step 2: marks or rubric → rubric builder → draw boxes → choice questions → slice.
+// Step 2: where to start → rubric builder (optional) → draw boxes → choice
+// questions → the question table and slicing.
 import { post, upload, waitForJob } from "./api.js";
 import { t, language } from "./i18n.js";
 import { goTo } from "./main.js";
-import { renderBoxes, questionDraft, saveQuestions } from "./boxes.js";
-import { act, app, config, criteriaOf, handleError, render } from "./store.js";
+import { firstInSection, gradedText, isLocked, lockNote, marksInput, questionDraft, renderBoxes, saveQuestions,
+  sectionHeading, setTick, startSection } from "./boxes.js";
+import { act, app, config, criteriaOf, gradedWith, handleError, render } from "./store.js";
 import { button, coach, debounce, h, progressOverlay, toast } from "./ui.js";
 
 const SUBSTEPS = ["mode", "rubric", "boxes", "choice", "slice"];
@@ -17,15 +19,25 @@ function defaultSub(c) {
 export function renderStep2() {
   const c = config();
   if (!app.draft.sub) app.draft.sub = defaultSub(c);
-  const subs = SUBSTEPS.filter((s) => s !== "rubric" || c.mode === "rubric");
-  const tabs = h("nav", { class: "subtabs", "aria-label": t("step2.parts") }, subs.map((s, i) => h("button", {
+  // The rubric tab is always there, but only a teacher who wants criteria is sent to it.
+  const tabName = (s) => (s === "rubric" && c.mode !== "rubric" && !(c.rubrics || []).length
+    ? t("step2.sub.rubric_optional") : t(`step2.sub.${s}`));
+  const tabs = h("nav", { class: "subtabs", "aria-label": t("step2.parts") }, SUBSTEPS.map((s, i) => h("button", {
     type: "button", class: s === app.draft.sub ? "on" : "",
     disabled: s !== "mode" && !c.mode,
-    onclick: () => { app.draft.sub = s; render(); },
-  }, `${String.fromCharCode(65 + i)}. ${t(`step2.sub.${s}`)}`)));
+    onclick: () => { app.draft.sub = s; app.draft.rubricFrom = null; render(); },
+  }, `${String.fromCharCode(65 + i)}. ${tabName(s)}`)));
   const screen = { mode: modeScreen, rubric: rubricScreen, boxes: renderBoxes,
     choice: choiceScreen, slice: sliceScreen }[app.draft.sub]();
   return h("main", { class: `page ${app.draft.sub === "boxes" ? "full" : "wide"}` }, tabs, screen);
+}
+
+// Open the rubric screen from a question, and come back to it afterwards.
+export function openRubrics(from) {
+  app.draft.rubricFrom = from;
+  app.draft.sub = "rubric";
+  window.scrollTo(0, 0);
+  render();
 }
 
 export function nextSub(after) {
@@ -36,7 +48,7 @@ export function nextSub(after) {
   render();
 }
 
-// --- A. Marks or rubric -------------------------------------------------------------
+// --- A. Where to start -------------------------------------------------------------
 
 function modeScreen() {
   const c = config();
@@ -81,6 +93,8 @@ const saveRubrics = debounce(async () => {
     app.saveError = null;
     // Keep the ids the server assigned so later saves match.
     data.session.config.rubrics.forEach((r, i) => { if (app.draft.rubrics[i]) app.draft.rubrics[i].id = r.id; });
+    const saved = new Map(data.session.config.questions.map((q) => [q.id, q.rubric_ids]));
+    app.draft.questions?.questions.forEach((q) => { if (saved.has(q.id)) q.rubric_ids = saved.get(q.id); });
     if (msg) { msg.textContent = ""; msg.hidden = true; }
     const status = document.querySelector(".save-status");
     if (status) status.classList.add("ok");
@@ -92,6 +106,15 @@ const saveRubrics = debounce(async () => {
 
 function rubricScreen() {
   const list = rubricDraft();
+  const c = config();
+  // Levels already given would have no criterion left to belong to.
+  const levelsGiven = (c.questions || []).some((q) => !q.max && isLocked(q));
+  const back = () => {
+    app.draft.sub = app.draft.rubricFrom || "boxes";
+    app.draft.rubricFrom = null;
+    window.scrollTo(0, 0);
+    render();
+  };
   const fileInput = h("input", { type: "file", accept: ".xlsx,.csv", hidden: true, onchange: async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -113,7 +136,7 @@ function rubricScreen() {
       h("label", { class: "grow" }, h("span", { class: "label" }, t("step2.rubric.name")),
         h("input", { type: "text", id: `rubric-name-${ri}`, value: rubric.name,
           oninput: (e) => { rubric.name = e.target.value; saveRubrics(); } })),
-      list.length > 1 ? button(t("step2.rubric.remove"), () => { list.splice(ri, 1); saveRubrics(); render(); }, "small ghost") : null),
+      list.length > 1 || !levelsGiven ? button(t("step2.rubric.remove"), () => { list.splice(ri, 1); saveRubrics(); render(); }, "small ghost") : null),
     h("table", { class: "bands" },
       h("thead", {}, h("tr", {}, h("th", {}, t("step2.rubric.levels")), h("th", {}, t("step2.rubric.descriptor")), h("th", {}, ""))),
       h("tbody", {}, rubric.bands.map((band, bi) => h("tr", {},
@@ -136,13 +159,14 @@ function rubricScreen() {
     h("p", { id: "rubric-error", class: "banner warn", hidden: true }),
     cards,
     button(t("step2.rubric.add"), () => { list.push(newRubric(list.length + 1)); saveRubrics(); render(); }),
-    h("div", { class: "actions" }, button(t("step2.rubric.done"), async () => {
-      await saveRubrics.flush();
-      const msg = document.getElementById("rubric-error");
-      if (msg && !msg.hidden) return;
-      if (!(config().rubrics || []).length) return;
-      nextSub("rubric");
-    }, "primary big")));
+    h("div", { class: "actions" },
+      !(c.rubrics || []).length ? button(t("step2.rubric.skip"), () => { app.draft.rubrics = null; back(); }, "ghost") : null,
+      button(t("step2.rubric.done"), async () => {
+        await saveRubrics.now();
+        const msg = document.getElementById("rubric-error");
+        if (msg && !msg.hidden) return;
+        back();
+      }, "primary big")));
 }
 
 // --- D. Choice questions --------------------------------------------------------------
@@ -150,6 +174,7 @@ function rubricScreen() {
 function choiceScreen() {
   const draft = questionDraft();
   const questions = draft.questions;
+  const sectionOf = new Map(questions.map((q) => [q.id, q.section_id]));
   if (app.draft.choiceOn === undefined) app.draft.choiceOn = draft.choice_groups.length > 0;
   const save = () => saveQuestions.now();
 
@@ -157,7 +182,9 @@ function choiceScreen() {
     h("h3", {}, t("step2.choice.group", { n: gi + 1 })),
     h("p", { class: "muted" }, t("step2.choice.tick")),
     h("div", { class: "tick-list" }, questions.map((q) => {
-      const elsewhere = draft.choice_groups.some((o, oi) => oi !== gi && o.questions.includes(q.id));
+      // A choice stays inside one section, or that section's total has no clear meaning.
+      const elsewhere = draft.choice_groups.some((o, oi) => oi !== gi && o.questions.includes(q.id))
+        || (g.questions.length > 0 && sectionOf.get(g.questions[0]) !== q.section_id);
       return h("label", { class: `check ${elsewhere ? "disabled" : ""}` },
         h("input", { type: "checkbox", checked: g.questions.includes(q.id), disabled: elsewhere,
           onchange: (e) => {
@@ -204,21 +231,73 @@ function choiceScreen() {
 
 // --- E. Slice -----------------------------------------------------------------------------
 
+// A marks box or a tick can change how a question is graded. This updates the
+// page in place, so the teacher can keep tabbing through the table.
+function refreshTable(c, d) {
+  d.questions.forEach((q) => {
+    document.getElementById(`graded-${q.id}`).textContent = gradedText(c, q);
+    const chosen = new Set(criteriaOf(c, q).map((r) => r.id));
+    (c.rubrics || []).forEach((r) => { document.getElementById(`tick-${q.id}-${r.id}`).checked = chosen.has(r.id); });
+  });
+  document.getElementById("setup-checks").replaceChildren(...setupChecks(c, d));
+}
+
+function questionTable(c, d) {
+  const rubrics = c.rubrics || [];
+  const row = (q) => h("tr", {},
+    h("th", { scope: "row" }, q.label || "?"),
+    h("td", {}, q.boxes.length || "—"),
+    h("td", {}, marksInput(q, `marks-${q.id}`, { "aria-label": t("step2.boxes.how_many_marks", { label: q.label || "?" }) },
+      () => refreshTable(c, d))),
+    rubrics.map((r) => h("td", { class: "tick" }, h("input", { type: "checkbox", id: `tick-${q.id}-${r.id}`,
+      "aria-label": `${q.label} · ${r.name}`, checked: criteriaOf(c, q).some((x) => x.id === r.id),
+      onchange: (e) => { setTick(c, q, r.id, e.target.checked); refreshTable(c, d); } }))),
+    h("td", {}, h("span", { id: `graded-${q.id}` }, gradedText(c, q)),
+      isLocked(q) ? h("div", { class: "warn-text small" }, lockNote(q)) : null),
+    h("td", { class: "tick" }, !firstInSection(d, q)
+      ? button(t("step2.sections.start_short"), () => startSection(d, q), "small ghost") : null));
+  return h("div", { class: "table-scroll" }, h("table", { class: "summary question-table" },
+    h("thead", {}, h("tr", {}, h("th", {}, t("step2.slice.question")), h("th", {}, t("step2.slice.boxes")),
+      h("th", {}, t("step2.slice.marks")), rubrics.map((r) => h("th", { class: "tick" }, r.name)),
+      h("th", {}, t("step2.slice.graded_with")), h("th", {}, ""))),
+    h("tbody", {}, d.questions.map((q) => [
+      d.sections.length && firstInSection(d, q) ? h("tr", { class: "section-row" }, h("td", { colspan: 5 + rubrics.length },
+        sectionHeading(d, d.sections.find((s) => s.id === q.section_id)))) : null,
+      row(q)]))));
+}
+
+const namesOf = (questions) => questions.map((q) => q.label || "?").join(", ");
+
+function mixedChoiceGroup(c, d) {
+  const byId = new Map(d.questions.map((q) => [q.id, q]));
+  return d.choice_groups.some((g) => new Set(g.questions.map((id) => gradedWith(c, byId.get(id)))).size > 1);
+}
+
+// What the teacher should look at before slicing. On a mixed paper this names
+// the questions with rubric levels, so a forgotten marks box isn't taken for one.
+function setupChecks(c, d) {
+  const by = (how) => d.questions.filter((q) => gradedWith(c, q) === how);
+  const rubric = by("rubric");
+  return [
+    by(null).length ? h("div", { class: "banner warn" }, t("step2.slice.needs_grading", { questions: namesOf(by(null)) })) : null,
+    rubric.length && by("marks").length
+      ? h("div", { class: "banner warn" }, t("step2.slice.mixed", { questions: namesOf(rubric) })) : null,
+    mixedChoiceGroup(c, d) ? h("div", { class: "banner danger" }, t("error.choice_group_mixed")) : null,
+  ].filter(Boolean);
+}
+
 function sliceScreen() {
   const c = config();
+  const d = questionDraft();
   const result = app.draft.sliceResult;
-  const rubricName = (q) => criteriaOf(c, q).map((r) => r.name).join(", ") || "—";
-  const summary = h("table", { class: "summary" },
-    h("thead", {}, h("tr", {}, h("th", {}, t("step2.slice.question")), h("th", {}, t("step2.slice.boxes")),
-      h("th", {}, c.mode === "rubric" ? t("step2.slice.rubric") : t("step2.slice.marks")))),
-    h("tbody", {}, (c.questions || []).map((q) => h("tr", {}, h("td", {}, q.label || "?"),
-      h("td", {}, q.boxes.join(", ") || "—"),
-      h("td", {}, c.mode === "rubric" ? rubricName(q) : (q.max ?? "—"))))));
-
   const parts = [h("h1", {}, t("step2.slice.title")),
-    coach(t("step2.slice.coach", { questions: (c.questions || []).length, students: c.students.length })),
+    coach(t("step2.slice.coach", { questions: d.questions.length, students: c.students.length })),
     h("p", {}, c.name_box?.length ? t("step2.slice.name_box_yes") : t("step2.slice.name_box_no")),
-    summary];
+    questionTable(c, d),
+    h("p", { class: "muted small" }, t("step2.slice.table_hint")),
+    !(c.rubrics || []).length ? h("p", {}, h("button", { type: "button", class: "link-btn",
+      onclick: () => openRubrics("slice") }, t("step2.boxes.add_criteria"))) : null,
+    h("div", { id: "setup-checks" }, setupChecks(c, d))];
 
   if (result) {
     parts.push(h("div", { class: result.errors.length ? "banner warn" : "banner ok" },

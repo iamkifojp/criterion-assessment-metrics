@@ -5,7 +5,7 @@ Run:  python -m unittest tests.test_keywords
 
 import unittest
 
-from engine import keywords, model
+from engine import grading_summary, keywords, model
 from engine.errors import UserError
 
 
@@ -76,6 +76,22 @@ class ApplyTests(unittest.TestCase):
         with self.assertRaises(UserError):
             keywords.apply(self.config, self.grades, "s9", "q1", [], "en")
 
+
+
+class CommentLimitTests(unittest.TestCase):
+    def test_a_tick_is_never_stopped_by_the_limit(self):
+        config, grades = exam()
+        keywords.set_list(config, [{"label": "units missing", "type": "growth"}])
+        grading_summary.set_grade(config, grades, "s1", "q1", comment="x" * grading_summary.MAX_QUESTION_COMMENT)
+        keywords.apply(config, grades, "s1", "q1", ["units missing"], "en")
+        entry = grades["grades"]["s1"]["q1"]
+        self.assertEqual(entry["comment"], f"{entry['keyword_text']}\n{'x' * 300}")
+        # Typing on is measured without the line, so the comment as it stands still saves.
+        grading_summary.set_grade(config, grades, "s1", "q1", comment=entry["comment"])
+        with self.assertRaises(UserError):
+            grading_summary.set_grade(config, grades, "s1", "q1", comment=entry["comment"] + "x")
+        keywords.apply(config, grades, "s1", "q1", [], "en")
+        self.assertEqual(grades["grades"]["s1"]["q1"]["comment"], "x" * 300)
 
 if __name__ == "__main__":
     unittest.main()

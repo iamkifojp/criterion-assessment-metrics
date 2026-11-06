@@ -311,7 +311,7 @@ def preview_first_paper(source: dict, files: Sequence[str], width: int = 180,
                         max_pages: int = 32) -> dict:
     """Small pictures of the first paper as it will be imported, so the
     teacher can see that pages are in order and the right way up."""
-    from .slicer import detect_paper_mm
+    from .slicer import detect_paper_mm, is_photo_page
     papers = plan_papers(source, files)
     if not papers:
         raise UserError("no_scans_found", folder="")
@@ -321,7 +321,10 @@ def preview_first_paper(source: dict, files: Sequence[str], width: int = 180,
         doc = build_paper(sources, source, papers[0])
         try:
             rect = doc[0].rect
-            detected = detect_paper_mm(rect.width * 25.4 / 72, rect.height * 25.4 / 72)
+            first = papers[0]["sides"][0]
+            slides = (first.path.lower().endswith(PDF_EXT)
+                      and not is_photo_page(sources.get(first.path)[first.page]))
+            detected = detect_paper_mm(rect.width * 25.4 / 72, rect.height * 25.4 / 72, slides=slides)
             for page in list(doc)[:max_pages]:
                 zoom = width / max(page.rect.width, 1)
                 pix = page.get_pixmap(matrix=_fitz().Matrix(zoom, zoom))

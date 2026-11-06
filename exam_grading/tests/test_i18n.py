@@ -18,6 +18,8 @@ JS_DIR = os.path.join(ROOT, "static", "js")
 DYNAMIC_KEYS = (
     [f"step.{n}" for n in range(1, 6)] + [f"step.{n}.hint" for n in range(1, 6)]
     + [f"step2.sub.{s}" for s in ("mode", "rubric", "boxes", "choice", "slice")]
+    + [f"step2.graded.{s}" for s in ("marks", "rubric", "none")]
+    + ["step2.locked.marks", "step2.locked.rubric"]
     + ["step2.mode.marks", "step2.mode.marks_hint", "step2.mode.rubric", "step2.mode.rubric_hint"]
     + [f"step2.boxes.tip_{k}" for k in ("space", "question", "parts", "overlap")]
     + [f"pick.{k}" for k in ("scans_folder", "save_folder", "session_folder", "combined_pdf")])
