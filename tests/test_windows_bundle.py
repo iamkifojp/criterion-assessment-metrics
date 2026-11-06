@@ -112,13 +112,18 @@ class WindowsBundleTests(unittest.TestCase):
                         "exam_grading/licences/NOTICE.txt",
                         "exam_grading/licences/AGPL-3.0.txt",
                         "exam_grading/LICENSE",
-                        "docs/CAM2_FEEDBACK_FOR_CAM.md"):
+                        "exam_grading/.gitattributes", "exam_grading/.gitignore",
+                        "docs/CAM2_FEEDBACK_FOR_CAM.md",
+                        "tests/test_a.py", ".gitattributes", ".gitignore",
+                        "AGENTS.md", "CLAUDE.md", "app.py",
+                        ".streamlit/config.toml", "README.md"):
                 (bundle / rel).parent.mkdir(parents=True, exist_ok=True)
                 (bundle / rel).write_text("x")
             builder.remove_dev_files(bundle)
             left = sorted(p.relative_to(bundle).as_posix()
                           for p in bundle.rglob("*") if p.is_file())
-            self.assertEqual(left, ["docs/USER_MANUAL.md", "exam_grading/LICENSE",
+            self.assertEqual(left, [".streamlit/config.toml", "README.md", "app.py",
+                                    "docs/USER_MANUAL.md", "exam_grading/LICENSE",
                                     "exam_grading/README.md",
                                     "exam_grading/engine/__init__.py",
                                     "exam_grading/launcher.py"])
