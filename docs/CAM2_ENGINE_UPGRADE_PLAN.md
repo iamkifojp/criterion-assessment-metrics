@@ -58,9 +58,9 @@ also pass on the Mac (473 with 13 skipped: the 8 waiting for Phase 4, and 5 that
 | ~~Retry the level click~~ Done 2026-11-06: explained, not a lost request (Phase 1's progress note) | The Mac |
 | ~~Merge the PR, set CAM2's version, cut the tag, build the Mac download~~ Done 2026-11-06: `v0.3.2-dev` at `4423090` | The Mac |
 | ~~Build the Windows download~~ Done 2026-11-06 | A Windows computer |
-| Check the Windows unblock advice: that unblocking the zip before unzipping is enough | **A Windows computer only** |
+| ~~Check the Windows unblock advice~~ Accepted as done 2026-11-06, on colleagues' use of the test builds. Not tried separately | |
 | ~~Make the `v0.3.2-dev` pre-release~~ Done 2026-11-06: both zips, the sample exams and the two source archives | |
-| Share the build with colleagues | Now |
+| ~~Share the build with colleagues~~ Done: colleagues are using the test builds, largely without problems | |
 
 **Also worth doing on the Mac:** Phase 4M's Gatekeeper check needs a download on a Mac that
 didn't build it, and it decides whether the free Mac route works at all.
@@ -791,10 +791,11 @@ when" above isn't met in a tagged version yet.
   one built here, byte for byte.
 - **Left open, by the teacher's choice:** the Appendix A trial, which the plan put before the
   tag. Anything it finds goes in a later tag.
-- **Left to do:**
-  - check on Windows that unblocking the zip before unzipping is enough;
-  - share the build with colleagues;
-  - the teacher's Appendix A trial.
+- **The test builds' checks, accepted as done (2026-11-06, the teacher's decision).**
+  Colleagues have used them on their own computers largely without problems, so the
+  Windows unblock advice and the rest of CAM2's Phase 5 run-through count as done, though
+  they weren't tried item by item. CAM2's `PLAN.md` and README say the same.
+- **Left to do:** the teacher's Appendix A trial.
 
 ### Phase 2 — CAM: correct Apply, bridge and storage, on the current pin · M
 
