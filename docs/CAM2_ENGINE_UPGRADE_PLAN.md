@@ -8,7 +8,9 @@ Q4's trial set the F6 wording in Phase 3. The smaller points
 Phase 1 is on CAM2's `main`, tagged `v0.3.2-dev` (`4423090`) and published as a pre-release
 with both downloads on 2026-11-06, and nothing in it is open: the teacher's Appendix A
 trial moved to after the whole upgrade (§6.1). Phases 2, 2W and 3 are on CAM's `main` (see their progress
-notes). Phases 4 to 6 aren't built yet. Phase 4 pins the Phase 1 tag.
+notes). Phase 4's code is on the `cam2-upgrade-phase4` branch, pinning the Phase 1 tag;
+its browser matrix and Windows build are still to do (see its progress note). Phases 5
+and 6 aren't built yet.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -42,6 +44,9 @@ When I ask to start, plan or build a new phase, or when you are about to move on
 
 **Why:** when I moved on to later phases with issues still open in earlier ones, the problems piled up and took a long review to untangle.
 ```
+
+**Phase 4 (2026-11-06):** its code is on the `cam2-upgrade-phase4` branch. The browser matrix
+and the Windows build are still to do.
 
 **Where things stand:** Phases 0, 2, 2W and 3 are on CAM's `main`, after a review of each, and
 all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). No new CAM release
@@ -1208,6 +1213,58 @@ the wording without settling everything.
   starts, CAM2 opens in host mode and sends to CAM, and the `Licences` folder is there.
 
 *Done when:* the whole matrix passes. Nothing is released yet.
+
+**Progress, 2026-11-06, on the Mac.** The code is on the `cam2-upgrade-phase4` branch. The
+browser matrix and the Windows build are still to do.
+
+- **Pulled:** CAM2 `v0.3.2-dev` (`4423090`) as `exam_grading/`. Its tree hash, `cbf9445`,
+  equals the tag's, and the tree before the pull equalled the old pin's, so nothing had been
+  edited in place.
+- **I1 tests:** the two now expect only typed final levels, and a new test shows a rubric
+  exam with no typed level brings Apply nothing. The 8 tests waiting for a version 2
+  session now run and pass.
+- **Adjusted report figures:** `read_session` keeps `report_total` and `report_percent`
+  only when CAM2 marks them `adjusted`, as CAM2 does, so typing the calculated figure
+  again isn't an adjustment. They're saved and validated with the exam result. Window 1's
+  marks panel and Window 3's total show "report shows 18/20 (typed in CAM2)" beside the
+  calculated figure, which stays what CAM shows and works with. The downloaded report pack
+  prints only decided grades, so it needed no change.
+- **Bundle:** `EXAM_DEV_PATHS` gains the four CAM2 paths, and
+  `docs/CAM2_FEEDBACK_FOR_CAM.md` stays out. `test_windows_bundle.py` covers all five.
+- **Notices (D15):** `tools/bundle_licences.py` and
+  `tools/bundle-requirements-windows.txt`.
+  - **87 libraries,** pinned exactly with their licences and installed with `--no-deps`, so
+    nothing unpinned arrives. `python tools/bundle_licences.py pin windows` regenerates the
+    list from pip's dry run for Windows, keeps licences already checked, and marks a new
+    one `?`, which the build refuses.
+  - **CAM2's versions win** for the libraries both use (Flask, PyMuPDF 2.0, openpyxl and
+    their dependencies), **except Pillow:** CAM's Streamlit 1.58 needs it below 13, so it
+    is 12.3, which CAM2's tests also pass on.
+  - **PyMuPDF's add-ons stay out,** as CAM2's build does: `pymupdf_layout` and
+    `pymupdf4llm` are empty placeholder packages, and onnxruntime (80 MB), networkx,
+    psutil, PyYAML, tabulate and flatbuffers are only for PyMuPDF's AI layout. PyMuPDF
+    renders and reads text without them (checked with them blocked).
+  - **The build checks** that what was installed equals the pins, and that every library has
+    a licence and a licence text, then writes `Licences`: `NOTICE.txt` (the AGPL overview,
+    where the source is, and the library table), `AGPL-3.0.txt`, `CAM-MIT.txt`,
+    `CAM2-MIT.txt`, and `THIRD-PARTY-NOTICES.txt` with the embedded Python's licence and
+    each library's own licence files. Streamlit ships none, so its Apache-2.0 text is
+    stored in `tools/licence-texts/`. pip is removed after the install.
+  - **Where they are:** READ ME FIRST, the README, and a new **About CAM and its licences**
+    section at the end of Settings, in English and Japanese, worded like CAM2's.
+- **Tests, in a sandbox on the Mac:** CAM 487 (5 skipped, all needing Node) and CAM2 354
+  (1 skipped, Node), on the dev venv's PyMuPDF 2.0, and again in a venv with exactly the
+  pinned versions (Streamlit 1.58, Pillow 12.3, PyMuPDF 2.0, no add-ons). A stage-only
+  build has the `Licences` folder and none of the left-out files.
+- **Still to do in Phase 4:**
+  - **The browser matrix above,** with the checks left from earlier phases, and Window 3's
+    wording now that only typed final levels arrive. The new report-figure caption in
+    Window 1 has run only in tests.
+  - **On a Windows computer:** a full build, which runs the pins and licence checks for real,
+    then boot it with its embedded Python, CAM2 in host mode, and the `Licences` folder.
+- **For the release (Phases 5 and 6):** attach `pymupdf-2.0.tar.gz` and
+  `mupdf-1.28.5-source.tar.gz` to CAM's release, as NOTICE.txt says, and mention the licence
+  in the release notes.
 
 ### Phase 4M — CAM: a Mac binary · M–L (D18)
 
