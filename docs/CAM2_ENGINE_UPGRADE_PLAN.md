@@ -9,7 +9,8 @@ Phase 1 is on CAM2's `main`, tagged `v0.3.2-dev` (`4423090`) and published as a 
 with both downloads on 2026-11-06, and nothing in it is open: the teacher's Appendix A
 trial moved to after the whole upgrade (§6.1). Phases 2, 2W and 3 are on CAM's `main` (see their progress
 notes). Phase 4's code is on the `cam2-upgrade-phase4` branch, pinning the Phase 1 tag;
-its browser matrix and Windows build are still to do (see its progress note). Phases 5
+its browser matrix passed on the Mac; the same run on Windows and the Windows build are still
+to do (see its progress note). Phases 5
 and 6 aren't built yet.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
@@ -45,8 +46,9 @@ When I ask to start, plan or build a new phase, or when you are about to move on
 **Why:** when I moved on to later phases with issues still open in earlier ones, the problems piled up and took a long review to untangle.
 ```
 
-**Phase 4 (2026-11-06):** its code is on the `cam2-upgrade-phase4` branch. The browser matrix
-and the Windows build are still to do.
+**Phase 4 (2026-11-06):** its code is on the `cam2-upgrade-phase4` branch (PR #8). The browser
+matrix passed on the Mac. Still to do: the same browser run on the Windows Surface, the Windows
+build, and the teacher's decision on the report-card gap (see Phase 4's browser note).
 
 **Where things stand:** Phases 0, 2, 2W and 3 are on CAM's `main`, after a review of each, and
 all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). No new CAM release
@@ -1256,12 +1258,51 @@ browser matrix and the Windows build are still to do.
   (1 skipped, Node), on the dev venv's PyMuPDF 2.0, and again in a venv with exactly the
   pinned versions (Streamlit 1.58, Pillow 12.3, PyMuPDF 2.0, no add-ons). A stage-only
   build has the `Licences` folder and none of the left-out files.
+- **Browser matrix, on the Mac (2026-11-06):** passed, in a sandbox copy of the tracked files
+  with every data path in temp, on the exact pinned libraries. The real database's timestamp
+  was the same before and after.
+  - **Sessions:** nine built with CAM2's engine (marks with a choice group, rubric with typed
+    levels for half the class, 12 levels on one criterion, marks ticked on two criteria, mixed
+    from both starting choices, weighted with a typed report percentage, an open "teacher
+    picks" group, and a version 1 session from the old pin, finished on the new engine), plus
+    a **16:9 slide deck through the real CAM2 screens**: started from CAM in host mode, slides
+    detected, boxes drawn, sliced, names matched from CAM's class list, graded, a report
+    total typed over, and sent.
+  - **Checked:** each Synced, with every total matching a hand calculation; session folders
+    byte-identical after every Sync (CAM2's own `cam2.lock` heartbeat aside); Apply for plain
+    marks and typed levels; decisions in Window 3's pop-up; ⏳ awaiting decision in Windows 2
+    and 3, never a 0; Window 3's wording with typed-only levels ("CAM2 final level: 6. Not in
+    the gradebook yet…"); the report-figure caption for a typed total, a weighted percentage
+    and one typed in CAM2's own screen; the version 1 session arriving with its typed level
+    only; exam comments in the term comment prompt, with no scores.
+  - **Left from earlier phases, now run:** a CAM2 exam's rows in a downloaded report-card pack
+    (decided grades and "awaiting decision"); linking two drafts **with the mouse** in the
+    workspace, which combined ticks and comments under one generated line and exported to
+    CAM; and **restoring drafts**: with the workspace's own state set aside, reopening from CAM
+    brought back every comment and tick from CAM's published copy, and a second export
+    duplicated nothing.
+  - **Not covered:** CAM2's native folder dialog (its "paste a path" box was used), and
+    generating a comment through an AI (Phase 6, step 7).
+- **Found in the browser run** (none caused by Phase 4):
+  - **Report-card pack, for the teacher to decide:** once a student has any grade on an exam,
+    the pack lists only the decided criteria and drops "awaiting decision" for the rest, so
+    a partly decided exam doesn't show what's still to come. The grade math is consistent.
+  - **A restored draft loses its partner link.** Links live only in the workspace's own state,
+    so on a fresh computer the combined comments come back but the two cards aren't grouped.
+    No text is lost.
+  - **The level buttons move after a click** in CAM2's grading screen, as already recorded;
+    the next CAM2 update fixes it.
+  - **Cosmetic:** the report-figure caption wraps onto three lines in Window 1's narrow column,
+    and CAM2's Step 1 thumbnails show slides inside portrait cards.
+  - **Test setups only:** CAM's automatic exam sync and "Force full re-scan" need
+    `db_custom_path` in the prefs, so a harness that sets only `CAM_DB_PATH` never syncs
+    exams. Teachers always have the path set.
 - **Still to do in Phase 4:**
-  - **The browser matrix above,** with the checks left from earlier phases, and Window 3's
-    wording now that only typed final levels arrive. The new report-figure caption in
-    Window 1 has run only in tests.
+  - **The same browser run on the Windows Surface** (the teacher's choice), through Claude
+    Code there, with the same sandbox rules.
   - **On a Windows computer:** a full build, which runs the pins and licence checks for real,
     then boot it with its embedded Python, CAM2 in host mode, and the `Licences` folder.
+  - **The teacher's decision** on the report-card gap above.
 - **For the release (Phases 5 and 6):** attach `pymupdf-2.0.tar.gz` and
   `mupdf-1.28.5-source.tar.gz` to CAM's release, as NOTICE.txt says, and mention the licence
   in the release notes.
