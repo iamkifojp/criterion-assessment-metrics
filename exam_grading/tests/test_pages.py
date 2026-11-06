@@ -17,7 +17,7 @@ from PIL import Image
 
 from engine import pages, slicer, storage, workflow
 from engine.errors import UserError
-from tests.helpers import A4_POINTS
+from tests.helpers import A4_POINTS, make_image, make_pdf, make_photo_pdf
 
 W, H = A4_POINTS
 SLOT = 28
@@ -354,6 +354,25 @@ class LatePaperTests(PagesTestCase):
         workflow.edit_pages(self.session, self.config, self.grades, "s004", 1, "earlier")
         self.assertEqual(self.papers()[2], [(1, 3), (2, 3)])
 
+
+
+class SlidePreviewTests(unittest.TestCase):
+    def test_a_deck_is_guessed_and_a_photo_of_the_same_shape_is_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            deck = make_pdf(os.path.join(tmp, "deck.pdf"), pages=2, size=(720, 405))
+            found = pages.preview_first_paper({"type": "folder", "path": tmp}, [deck])
+            self.assertEqual((found["paper"], found["landscape"]), ("Slide 16:9", True))
+            photo = make_image(os.path.join(tmp, "photo.jpg"), (1600, 1200))
+            found = pages.preview_first_paper({"type": "photos", "path": tmp, "pages_per_student": 1}, [photo])
+            self.assertIsNone(found["paper"])
+
+    def test_a_photo_saved_as_a_pdf_is_not_guessed_as_a_slide(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photo = make_photo_pdf(os.path.join(tmp, "photo.pdf"), (1600, 1200))
+            found = pages.preview_first_paper({"type": "folder", "path": tmp}, [photo])
+            self.assertIsNone(found["paper"])
+            found = workflow.inspect_combined_pdf(photo)
+            self.assertIsNone(found["paper"])
 
 if __name__ == "__main__":
     unittest.main()

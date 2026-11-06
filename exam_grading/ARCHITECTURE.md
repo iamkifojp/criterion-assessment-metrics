@@ -29,30 +29,29 @@ This describes how CAM2 is built. For what it should do and why, see
 | Module | Job |
 |---|---|
 | `errors.py` | `UserError(code, **params)`: the only way the engine reports problems to teachers. `code` is an i18n key (`error.<code>`). |
-| `model.py` | Shapes of `cam2_session.json` and `grades.json`, new-file builders, format/version check, `grades_mass()` for the wipe guard. |
+| `model.py` | Shapes of `cam2_session.json` and `grades.json`, new-file builders, format/version check, `grades_mass()` for the wipe guard, `upgrade_session()` for sessions saved by an older CAM2. |
 | `slicer.py` | Paper sizes and grids, range parsing, drag-to-cell snapping, paper detection, copying scans in, splitting a combined PDF, page-count checks, cropping (several boxes stitched into one image), previews, thumbnails, safe file names. |
 | `storage.py` | Session folders, `SafeJsonFile` (all save-safety rules), the advisory lock, recent sessions, preferences, app-data location, relative paths. |
 | `rubrics.py` | Teacher rubrics: level parsing (`3`, `5–6`, `５～６`), validation, Excel/CSV import, blank template. |
 | `roster.py` | Class lists: header and name-column guesses, name extraction, pasted names, file-name auto-matching. |
 | `tables.py` | Reads `.xlsx` and `.csv` (UTF-8 or Shift-JIS) into rows of text. |
-| `grading_summary.py` | Recording a grade (with validation), choice groups (best N, or the teacher's pick per student: `pick`, `set_choice`, a *pending* group counts nothing), totals, rubric averages, round-half-up, report overrides, class statistics, progress. In Rubric mode a question can be assessed on several criteria (`rubric_ids`); each (question, criterion) pair is a *slot* with its own level, stored in the grade entry's `levels` and read through `level_of()`, which also reads sessions saved with one `rubric_id`. Summaries key per-slot statistics as `q2/r3` (`slot_key`). |
+| `grading_summary.py` | Recording a grade (with validation), choice groups (best N, or the teacher's pick per student: `pick`, `set_choice`, a *pending* group counts nothing), totals, sections and their shares (`sections`, `rebalance_shares`, `weighting_on`), criterion marks, round-half-up, report overrides, class statistics, progress. Each question grades its own way (`question_mode`): marks if it has a `max`, rubric levels if it has none but has a criterion. Nothing here reads the exam-wide `mode`. A rubric question can be assessed on several criteria (`rubric_ids`); each (question, criterion) pair is a *slot* with its own level, stored in the grade entry's `levels` and read through `level_of()`, which also reads sessions saved with one `rubric_id`. Summaries key per-slot statistics as `q2/r3` (`slot_key`). |
 | `keywords.py` | Quick comments: the exam's list (`keywords` in the config, or five defaults in the app language), and `apply()`, which ticks keywords on one answer and rebuilds the generated first line of its comment. The line last written is kept as `keyword_text`, so it is replaced exactly and the teacher's own text below it is kept. |
 | `host.py` | Host mode (CAM opening one of its exams): reads and checks the handoff file, gives the session the host's class list keyed by `external_id` (ids stay put when a name changes), and stamps `host_ready_at` when the teacher sends the results. |
 | `i18n.py` | Looks up text in `i18n/en.json` / `i18n/ja.json`; translates `UserError`s. |
-| `pickers.py` | Native folder / PDF dialogs: Windows IFileOpenDialog (in a child process: `python -c <boot> <app folder>`, which puts CAM2's folder first on `sys.path`, or `CAM2.exe --pick` when packaged) with a PowerShell fallback, macOS `osascript`. Finds the Documents folder. |
+| `pickers.py` | Native folder / PDF dialogs: Windows IFileOpenDialog (in a child process: `python -c <boot> <app folder>`, which puts CAM2's folder first on `sys.path`, or the app's own `.exe --pick` when packaged) with a PowerShell fallback, macOS `osascript`. Finds the Documents folder. |
 | `pages.py` | Turning scans into one PDF per paper: a page is a `Ref` (file, page, turn). It joins several PDFs or page photos into one stack and groups it into papers. It also unfolds booklets scanned open: each side is cut in half with `show_pdf_page(clip=…)`, so quality is kept, and pages are put in reading order by `booklet_layout`. A page with a stored rotation is first baked upright with `remove_rotation`. Photos are turned upright from their phone orientation and reduced to about 200 dpi. Also makes the Step 1 preview of paper 1. |
-| `workflow.py` | Steps 1–3 as operations on an open session: check and import scans (`check_source`, `import_scans`), late papers (`add_papers`), page fixes (`edit_pages`), choose the real session folder, layout/mode/rubric/question set-up, `check_ready`, slicing (all papers, or `slice_students` for some), class list and matching, display names. |
+| `workflow.py` | Steps 1–3 as operations on an open session: check and import scans (`check_source`, `import_scans`), late papers (`add_papers`), page fixes (`edit_pages`), choose the real session folder, layout/mode/rubric/question set-up, sections, shares and report options, `check_ready`, slicing (all papers, or `slice_students` for some), class list and matching, display names. |
+| `reports.py` | One PDF per student. A cursor flows blocks down A4 pages with PyMuPDF. Text goes through `insert_htmlbox` (wrapping, and Japanese through MuPDF's built-in CJK font), answer images are re-encoded as JPEG, and fonts are subset before saving. The order is header, results, rubrics, overall comment, then the questions grouped by section. Tables are drawn cell by cell, because MuPDF's HTML ignores column widths. Each question is one row (label · answer · grade beside it, then the comment), or part of a grid of grades when its section's images are off. A rubric ticked by any question prints once, with a box beside it for the final level, marks and grades when Overall criterion results is on, and the final level's band shaded. It shows the *reported* total or percentage. What is blank does not print. `preview_pdf` makes one report without touching the reports folder. File names are `<Student>_<Exam>.pdf`, or `UNMATCHED_<scan>.pdf` for a paper not matched to the class list. Old reports are replaced on each export. |
+| `gradebook_xlsx.py` | Master Excel gradebook (openpyxl), with sheet names and headings in the report language. Values come from `grading_summary`, not Excel formulas, so they match CAM2's rounding. Section columns appear when two or more sections have marks, and with weighting on only percentages are given overall. Final-level columns need Overall criterion results on. Adjusted cells are yellow and ungraded cells red. An open file gives `report_file_open`. |
 
-| `reports.py` | One PDF per student. A cursor flows blocks down A4 pages with PyMuPDF. Text goes through `insert_htmlbox` (wrapping, and Japanese through MuPDF's built-in CJK font), answer images are re-encoded as JPEG, and fonts are subset before saving. Each question is one row (label · answer · grade beside it, then the comment); in Rubric mode the rubric's descriptors are printed once under the header rather than under each answer. It shows the *reported* total or final level. File names are `<Student>_<Exam>.pdf`, or `UNMATCHED_<scan>.pdf` for a paper not matched to the class list. Old reports are replaced on each export. |
-| `gradebook_xlsx.py` | Master Excel gradebook (openpyxl), with sheet names and headings in the report language. Values come from `grading_summary`, not Excel formulas, so they match CAM2's rounding. Adjusted cells are yellow and ungraded cells red. An open file gives `report_file_open`. |
-
-Phase 5 adds the package builders.
+The package builders are in `tools/` (see [Packaging](#packaging-phase-5)).
 
 ## Server and browser
 
 | File | Job |
 |---|---|
-| `launcher.py` | `--host <handoff.json>`: opened by CAM for one exam (a running CAM2 is handed it through `POST /api/host/handoff`). **Single instance:** if CAM2 is already running on this computer, it just opens the browser on it (`server.json` in app data records the port). Otherwise it serves on `127.0.0.1`, on the first free port from 5182. It stops 10 minutes after the last heartbeat, or on **Quit**; after the computer wakes from sleep the 10 minutes start again, so an open tab can check in first. Without a console (`pythonw`), output goes to `<app data>/logs/cam2.log`. |
+| `launcher.py` | `--host <handoff.json>`: opened by CAM for one exam (a running CAM2 is handed it through `POST /api/host/handoff`). **Single instance:** if this version of CAM2 is already running on this computer, it just opens the browser on it (`server.json` in app data records the port). Another version that is running is stopped through `POST /api/quit`. Otherwise it serves on `127.0.0.1`, on the first free port from 5182. It stops 10 minutes after the last heartbeat, or on **Quit**; after the computer wakes from sleep the 10 minutes start again, so an open tab can check in first. Without a console (`pythonw`), output goes to `<app data>/logs/cam2.log`. |
 | `appstate.py` | **What the server remembers:** the one open session (config, grades, save-failure flag) and background **jobs** for importing and slicing (one at a time; the browser polls their progress). `save_config()` keeps a change in memory even when the save fails, so the browser can show the red banner and retry. |
 | `app.py` | **JSON routes**, grouped by screen (see below). Errors come back as `{"error", "message", "params", "save_error"}`, with status 400, or 409 for save problems. It also stops the browser keeping old scripts after an upgrade (`Cache-Control: no-cache`). |
 | `templates/index.html`, `static/app.css` | **The page:** one HTML shell and one stylesheet. Light and dark themes, large click targets, and the Japanese system fonts listed first. |
@@ -65,28 +64,28 @@ Phase 5 adds the package builders.
 | `api.js` | `fetch` wrapper and job polling |
 | `i18n.js` | `t()` with text loaded from the server |
 | `ui.js` | the `h()` element builder, modals, toasts, progress overlay, picker-wait message |
-| `store.js` | the browser's state and `act()`, which runs a server call, updates the session and sends errors to a toast or the red banner; `criteriaOf()` (a question's criteria) and `gradeOf()` (one grade on one paper; Rubric-mode levels come from the server's summary, so old and new grade layouts read the same) |
+| `store.js` | the browser's state and `act()`, which runs a server call, updates the session and sends errors to a toast or the red banner; `criteriaOf()` (a question's criteria), `gradedWith()` (how it is graded, as `question_mode`) and `gradeOf()` (one grade on one paper; Rubric-mode levels come from the server's summary, so old and new grade layouts read the same) |
 | `main.js` | header, step bar, banners, routing, heartbeat |
 | `start.js` | start screen: recent sessions, open a folder, "open on another computer?", emergency restore |
 | `step1.js` | new-session form: the source (joined PDFs, one file per student, page photos), layout (pages or booklet) and live preview of paper 1. Also the thumbnail check, with the page-fix tools in each paper's viewer and **Add more papers** |
-| `step2.js` | marks or rubric, rubric builder, choice questions, slicing |
-| `boxes.js` | box drawing: grid maths that mirrors `slicer.py`, drag-to-snap, multi-box questions, the check strip, and the "new question or move the box?" prompt |
+| `step2.js` | where to start, rubric builder, choice questions, the editable question table with its mixed-paper check, slicing |
+| `boxes.js` | box drawing: grid maths that mirrors `slicer.py`, drag-to-snap, multi-box questions, the check strip, the "new question or move the box?" prompt, the question card, and section dividers (from the question list, or "Save Qn & start a new section" for the next question) |
 | `step3.js` | class-list upload with the column picker, paste, typed names, and the matcher combobox |
-| `step5.js` | review table, one column per question (and criterion): click any grade (or an amber "?") to open it in Step 4, which then offers "Back to review"; report-total or final-level overrides with ↺ reset; overall comments; class statistics; report language, export, and "Open the reports folder" |
-| `step4.js` | grading screen (paper order is the class order, or with **Shuffle papers** a seeded shuffle per question: `papers()`): one item per question, or per question and criterion in Rubric mode (tabs switch criterion on the same paper); question and paper navigation, paper strip, "Show ungraded only", the zoomable answer (wheel zooms, drag pans) or the whole page with the box outlined, the grade badge, and the grading card (mark buttons, a number box above 15 marks, or rubric bands with a button per level; Not answered; comment) |
+| `step5.js` | review table, with what the teacher decides beside the frozen name (calculated total, total on report, criteria and final levels, overall comment), then section columns and one column per marks question and per criterion on a rubric question: click any grade (or an amber "?") to open it in Step 4, which then offers "Back to review"; Overall criterion results and final levels; section weighting and shares; report-total or percentage overrides with ↺ reset; overall comments; class statistics; report options; the warning about blank final levels; See one report first; report language, export, the warning about what each export replaces, and "Open the reports folder" |
+| `step4.js` | grading screen (paper order is the class order, or with **Shuffle papers** a seeded shuffle per question: `papers()`): one item per marks question, and one per criterion on a rubric question (tabs switch criterion on the same paper); question and paper navigation, paper strip, "Show ungraded only", the zoomable answer (wheel zooms, drag pans) or the whole page with the box outlined, the grade badge, and the grading card (mark buttons, a number box above 15 marks, or rubric bands with a button per level; Not answered; comment). The question's name, "Go to Qn" and "Now grading Qn" share the `--next` colour, so moving to another question is hard to miss |
 
 ### Routes
 
 | Area | Routes |
 |---|---|
 | Host | `POST /api/host/handoff` (from `launcher.py --host`), `POST /api/host/ready` (`ready`: send the results to CAM, or take them back) |
-| Shell | `GET /`, `GET /api/ping`, `GET /api/i18n`, `POST /api/language`, `GET /api/state`, `POST /api/heartbeat`, `POST /api/quit` |
+| Shell | `GET /`, `GET /api/ping`, `GET /api/i18n`, `POST /api/language`, `POST /api/prefs`, `GET /api/state`, `POST /api/heartbeat`, `POST /api/quit` |
 | Sessions | `POST /api/session/{open,create,close,reopen,forget,restore-emergency}`, `POST /api/save`, `POST /api/step`, `GET /api/job/<id>` |
 | Step 1 | `POST /api/pick`, `POST /api/inspect`, `POST /api/preview-paper` (paper 1 as JPEG data URLs, no session needed), `GET /api/default-folder`, `POST /api/scans/replace`, `POST /api/scans/add` (a job: late papers), `POST /api/pages/edit` (`student`, `page`, `action`; returns `where` the page is now), `GET /api/thumb/<student>` |
 | Step 2 | `POST /api/setup/{layout,mode,rubrics,rubrics/check,rubrics/import,questions}`, `GET /api/setup/rubrics/template`, `POST /api/slice`, `POST /api/slice-question` (a job: one question for every paper), `GET /api/page/<student>/<page>`, `GET /api/preview-crop/<student>` |
 | Step 3 | `POST /api/roster/{upload,columns,paste,clear}`, `POST /api/students/<student>/match`, `GET /api/crop/<region>/<student>` |
 | Step 4 | `POST /api/grade` (value and/or comment and/or `keywords`; saves `grades.json` at once), `POST /api/setup/keywords` (the quick-comment list), `POST /api/position` (the question and paper on screen, for resuming) |
-| Step 5 | `POST /api/overall` (overall comment, report-only total or final levels; empty means "use the calculated value"), `POST /api/choice` (`student_id`, `group_id`, `questions`: the answers that count in a "teacher picks" choice), `POST /api/export` (a job: `what` is `all` or `excel`, plus `language`), `POST /api/open-folder` (shows `reports/` in Explorer or Finder) |
+| Step 5 | `POST /api/overall` (overall comment, report-only total or percentage, or final levels; empty means "use the calculated value" for a total or percentage and no level for a final level), `POST /api/weighting` (`on`), `POST /api/section-weight` (`section_id`, `value`; empty goes back to automatic), `POST /api/report-options`, `GET /api/report-preview/<student>?lang=` (one student's PDF, shown in the browser and not saved), `POST /api/choice` (`student_id`, `group_id`, `questions`: the answers that count in a "teacher picks" choice), `POST /api/export` (a job: `what` is `all` or `excel`, plus `language`), `POST /api/open-folder` (shows `reports/` in Explorer or Finder) |
 
 **The session view** sent to the browser includes the grades, progress
 counts and the class summary, so every screen draws from one object.
@@ -131,8 +130,15 @@ through `storage.resolve_path()`.
   - **Show ungraded only** is on when resuming a session that already has
     grades. The paper on screen stays visible after it is graded.
   - The whole-page view stays on as the teacher moves between papers.
-- **Marks or rubric is fixed once any paper has a grade** (`mode_locked`),
-  since marks and levels can't be converted into each other.
+- **A question with a grade can't gain or lose its marks**
+  (`question_marks_locked`), since marks and levels can't be converted into each
+  other. Every other question stays open, and choosing Marks or Rubric on the
+  first screen is only a starting point. The session view lists these questions
+  in `locked_questions`. A marks question's number can still be corrected. Nothing on screen reads that choice after Step 2.
+- **Going on to Steps 3 to 5 runs `check_ready` again** (`POST /api/step`), because
+  marks and criteria can change after slicing without slicing again.
+- **A question's maximum can't go below a grade already given**
+  (`question_max_below_grade`).
 
 ## The session folder
 
@@ -143,7 +149,7 @@ through `storage.resolve_path()`.
 ├── cam2.lock             "open on <computer>" (advisory)
 ├── scans/                copies of the scans, or one PDF per paper cut from a stack
 │   └── sides/            booklets only: each paper's sides as scanned, before unfolding
-├── crops/<id>/<student>.png   one image per question per student
+├── crops/<id>/<student>.png   one image per question per student (.jpg for a question on a slide size)
 ├── thumbs/               page-1 thumbnails for the Step 1 check
 ├── backups/              daily copies of the two JSON files (newest 14)
 └── reports/              Excel gradebook and student_pdfs/
@@ -166,6 +172,13 @@ through `storage.resolve_path()`.
 - **Paths inside the session are relative**, with forward slashes (for example
   `scans/Student_001.pdf`). `storage.resolve_path()` refuses anything that
   would leave the folder.
+- **Sections are optional.** With none, `grading_summary.sections()` gives one
+  section for the whole paper. The screens never leave a section empty, and drop
+  the sections when only one would remain (`tidySections` in `boxes.js`). A section's `weight` is its share of the paper,
+  `weight_typed` says the teacher typed it, and a section with no marks questions
+  has none.
+- **Older sessions are upgraded when opened.** `model.upgrade_session` runs once,
+  for a file below version 2, and the result is saved with the next change.
 - **The full JSON shapes** are documented at the top of `engine/model.py`.
 
 ### Grade values
@@ -219,7 +232,7 @@ instead of one big database.
 ## Grid geometry
 
 - **Grid sizes.** New sessions use one grid of ~5 mm cells (density
-  `"5mm"`: A4 42 × 60, B5 36 × 51, A3 60 × 84). Teachers drag boxes rather
+  `"5mm"`: A4 42 × 60, B5 36 × 51, A3 60 × 84, slides 51 × 29 and 51 × 38 turned). Teachers drag boxes rather
   than type cell names, so the grid only sets how finely a box can follow the
   paper. Older sessions keep CAM's `"normal"` (compact, ~1.4 cm) or `"fine"`
   (~1 cm) grid, because their saved ranges name those cells; any layout
@@ -261,38 +274,73 @@ python -m unittest discover -s tests -t .
 |---|---|
 | `test_slicer.py` | Grids (ported from CAM's `test_exam_grid.py`), detection, splitting, stitching, slicing |
 | `test_pages.py` | Booklet page order, joined PDFs, page photos, unfolding (including upside-down backs), preview, page fixes that shift a stack, sheet turns and swaps, the graded-paper lock, late papers |
-| `test_storage.py` | Every save-safety rule (ported from CAM's cloud-safety and concurrency tests), the lock, recent sessions, paths |
+| `test_storage.py` | Every save-safety rule (ported from CAM's cloud-safety and concurrency tests), upgrading older sessions, the lock, recent sessions, paths |
 | `test_rubrics.py` | Level parsing, overlaps, imports, template round trip, Shift-JIS |
 | `test_roster.py` | Spreadsheet reading, column guesses, pasted names, auto-matching (including macOS-decomposed names) |
-| `test_grading_summary.py` | Validation, round-half-up, choice groups (ported from CAM's `test_exam_sections.py`) with best N and teacher picks, rubric averages, overrides, class statistics |
+| `test_grading_summary.py` | Validation, round-half-up, choice groups (ported from CAM's `test_exam_sections.py`) with best N and teacher picks, how each question is graded, mixed papers, sections, weighting and shares, criterion marks, final levels, overrides, class statistics |
 | `test_keywords.py` | Quick-comment list defaults and clean-up, rebuilding the generated line while keeping typed text, language changes |
 | `test_i18n.py` | Key and placeholder parity, error coverage |
 | `test_pickers.py` | Picker launching on Windows and macOS (ported from CAM's `test_folder_dialog.py`), the packaged app's `--pick`, UTF-8 output |
-| `test_launcher.py` | The idle watchdog: stopping with no tab open, and starting the wait again after the computer sleeps |
-| `test_workflow.py` | Import from a folder and a combined PDF, re-import, set-up drafts vs. `check_ready`, layout changes, slicing a two-page question, matching names |
-| `test_app.py` | The server through Flask's test client: the whole Steps 1–3 flow, translated errors, a save failure kept in memory and then retried, the other-computer prompt, emergency restore, file-serving safety |
+| `test_launcher.py` | The idle watchdog: stopping with no tab open, and starting the wait again after the computer sleeps. The Mac double-click handing over to a child |
+| `test_host.py` | Host mode: reading the handoff, class-list ids that stay put, creating, sending and reopening an exam from CAM, and standalone sessions left untouched |
+| `test_workflow.py` | Import from a folder and a combined PDF, re-import, set-up drafts vs. `check_ready`, the per-question lock, sections, typed shares, report options, layout changes, slicing a two-page question, matching names |
+| `test_app.py` | The server through Flask's test client: the whole Steps 1–3 flow, translated errors, weighting, shares and report options, marks, criteria and sections saved from the question table without slicing again, grading a mixed paper, the checks before grading, `locked_questions`, a save failure kept in memory and then retried, the other-computer prompt, emergency restore, file-serving safety |
 
 `test_i18n.py` also checks that every `t("…")` key in `static/js/` exists in
 both languages.
 
-`test_reports.py` covers report content in English and Japanese (dates, totals, overrides, not answered, not graded, choice questions not counted, descriptors), file names (duplicates, unmatched papers, unsafe characters), replacing old reports, one failing report not stopping the rest, the gradebook's values and highlighting, Japanese sheet names, and a gradebook left open in Excel.
+`test_reports.py` covers report content in English and Japanese (dates, totals, overrides, not answered, not graded, choice questions not counted, descriptors), the layout (each grade on the right student's report, blanks not printing, only used criteria, the shaded band, every report option, a rubric too long for one page), file names (duplicates, unmatched papers, unsafe characters), replacing old reports, one failing report not stopping the rest, the gradebook's values and highlighting, its section and weighted columns, its section list, Japanese sheet names, and a gradebook left open in Excel.
 
 `test_ui_syntax.py` parses every browser module with Node.js, and is skipped
 if Node isn't installed. A syntax error in any one module stops the whole app
 loading, and no other test would notice.
 
-`tools/make_sample_scans.py` makes fake papers for trying the app by hand.
+`tools/make_sample_scans.py` makes fake papers for trying the app by hand. `tools/make_sample_exam.py` makes a whole made-up exam in English and Japanese with a test guide, for testing by hand; `test_sample_exam.py` checks the results its guide promises against the engine.
 
 `tests/helpers.py` builds test PDFs and images with coloured grid cells, so
 crop positions can be checked by colour. No real student data is used.
 
 ## Packaging (Phase 5)
 
+Each download is a PyInstaller build with its own Python and libraries, in one
+folder rather than one file. A single-file `.exe` would unpack itself to a temp
+folder on every start, which is slow and upsets antivirus programs. The server
+only listens on `127.0.0.1`.
+
 | | Windows | Mac |
 |---|---|---|
-| Python runtime | python.org's embeddable Python 3.14 | `python-build-standalone`, both Apple Silicon and Intel |
-| Builder | `tools/build_windows.py`, ported from CAM's `build_windows_bundle.py` | `tools/build_mac.py` |
-| Launcher | `Start CAM2 Exam Grading.bat` | `Start CAM2 Exam Grading.command`, which picks the runtime with `uname -m` and clears the quarantine flag after the one-time **Open Anyway** |
+| State | ✅ built by `tools/build_windows.py` | ✅ built by `tools/build_mac.py`, for Apple Silicon |
+| Start | `Start CAM2 Exam Grading.exe`, with `_internal/` beside it | `Start CAM2 Exam Grading.app`, with no Dock icon (`LSUIElement`) |
 
-Each package ships its libraries pre-installed. The server only listens on
-`127.0.0.1`.
+| File | Job |
+|---|---|
+| `tools/cam2.spec` | The PyInstaller recipe: entry point `launcher.py`, the data folders, what to leave out, no console window and, on a Mac, the `.app`. |
+| `tools/build_windows.py` | Makes a clean `build/venv`, runs PyInstaller, adds `READ ME FIRST.txt` and the quick guide, starts the packaged app to check it, and zips the folder to `dist/CAM2-exam-grading-Windows-v<version>.zip`. The version comes from `VERSION` in `app.py`. |
+| `tools/build_mac.py` | Does the same on a Mac, using the shared parts of `build_windows.py`, and zips to `dist/CAM2-exam-grading-Mac-AppleSilicon-v<version>.zip` with `ditto`. It checks the signature and starts the app from a copy unzipped again, because a careless zip breaks a `.app`. |
+| `tools/build_quick_guide.py` | Makes the quick guide PDF with PyMuPDF: one page of English, one of Japanese, with the starting steps for Windows or Mac and, on the Mac guide, screenshots from `tools/guide_images` of the first-run approval. It is built each time, not kept in the repository. |
+| `requirements-build.txt` | Exact versions of the libraries, what they bring with them and PyInstaller, for the builds. |
+| `licences/` | The AGPL text (for PyMuPDF), the overview notice and the other libraries' licence texts, the same for the Windows and Mac downloads. The build copies them into the zip's `Licences` folder, with `LICENSE` as `CAM2-MIT.txt`. Kept by hand: change it when a library in `requirements-build.txt` changes. |
+
+How the package differs from running from source:
+
+- **Bundled files:** `i18n/`, `static/` and `templates/` are found through
+  `__file__`, which PyInstaller points inside `_internal/` (or the `.app`), so
+  the code needs no `sys._MEIPASS`. The app writes nothing there: sessions go in
+  the chosen save folder, and everything else in the app-data folder.
+- **No console:** output goes to `<app data>/logs/cam2.log`. A crash at startup
+  shows a Windows error box with the traceback. On a Mac it shows nothing, and
+  only a crash after the log has opened reaches the log; the builders' start-up
+  check is what catches one.
+- **Pickers:** the `.exe` starts itself with `--pick` to open a Windows dialog.
+  The Mac uses `osascript`, as it does from source.
+- **A Mac double-click starts a child and ends.** macOS starts nothing when a
+  running app is double-clicked, so a teacher who closed the tab could not get
+  back. With the first process gone, each double-click starts afresh and opens
+  the browser on the server already running.
+- **PyMuPDF's AI add-on is left out.** PyMuPDF 2.0 requires `pymupdf_layout`,
+  `pymupdf4llm`, `onnxruntime`, `numpy` and others, and imports them if it finds
+  them. CAM2 uses none of them. In a package, the import crashes on a model
+  file PyInstaller doesn't collect, and they would add about 100 MB, so the
+  spec excludes them. PyMuPDF carries on without them. **If a new PyMuPDF adds
+  more of these, the package grows or crashes at startup**, which the builder's
+  start-up check catches.

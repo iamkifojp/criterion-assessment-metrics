@@ -103,7 +103,7 @@ def _frozen() -> bool:
 
 
 def _pick_windows_child(mode: str, title: str, initial: str | None) -> str | None:
-    # The packaged app has no Python to run "-m" with, so CAM2.exe itself is
+    # The packaged app has no Python to run "-m" with, so its own .exe is
     # started with --pick and launcher.py hands that straight to _main().
     entry = [PICK_FLAG] if _frozen() else ["-c", _CHILD_BOOT, APP_ROOT]
     command = [sys.executable, *entry, "--mode", mode, "--title", title]

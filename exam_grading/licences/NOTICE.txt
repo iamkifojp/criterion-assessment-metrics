@@ -1,0 +1,52 @@
+CAM2 Exam Grading - licence notice
+==================================
+
+CAM2's own code is under the MIT License (LICENSE in the source code, and
+CAM2-MIT.txt in the download).
+
+The download also includes PyMuPDF, which is available under the GNU Affero
+General Public License version 3 (AGPL) or a paid licence from Artifex. CAM2
+uses it under the AGPL, so the download as a whole is licensed under the AGPL.
+The full text is in AGPL-3.0.txt.
+
+CAM2's source code for every download is at:
+
+    https://github.com/iamkifojp/cam2-exam-grading
+
+Each download has a matching tag there, named after the version in the zip's
+file name. For example, CAM2-exam-grading-Windows-v0.3.0-dev.zip matches the
+tag v0.3.0-dev. The build scripts are included, in tools/.
+
+The source code of PyMuPDF 2.0 and of MuPDF 1.28.5, the library inside it, is
+attached to the same release as each download on that page's Releases list, as
+pymupdf-2.0.tar.gz and mupdf-1.28.5-source.tar.gz. The original copies are at:
+
+    https://pypi.org/project/pymupdf/2.0/
+    https://mupdf.com/downloads/archive/mupdf-1.28.5-source.tar.gz
+
+The Windows and Mac downloads carry the same licence files.
+
+CAM2 comes with no warranty, as these licences explain.
+
+
+Libraries in the download
+-------------------------
+
+    Library         Version     Licence
+    PyMuPDF         2.0         AGPL-3.0 (see AGPL-3.0.txt), with MuPDF 1.28.5
+    Pillow          13.0.0      MIT-CMU
+    openpyxl        3.1.5       MIT
+    et_xmlfile      2.0.0       MIT
+    Flask           3.1.3       BSD-3-Clause
+    Werkzeug        3.1.9       BSD-3-Clause
+    Jinja2          3.1.6       BSD-3-Clause
+    Click           8.5.0       BSD-3-Clause
+    itsdangerous    2.2.0       BSD-3-Clause
+    MarkupSafe      3.0.4       BSD-3-Clause
+    blinker         1.9.0       MIT
+    Python          3.14        PSF License, with the software it includes
+    PyInstaller     6.22.3      GPL-2.0-or-later, with an exception for programs
+                                built with it
+
+The licence text for each of these, except PyMuPDF, is in
+THIRD-PARTY-NOTICES.txt.

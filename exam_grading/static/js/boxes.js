@@ -4,12 +4,10 @@
 import { post, waitForJob } from "./api.js";
 import { t } from "./i18n.js";
 import { goTo } from "./main.js";
-import { nextSub } from "./step2.js";
-import { app, config, criteriaOf, handleError, render } from "./store.js";
-import { NAME_COLOR, QUESTION_COLORS, button, coach, confirmBox, debounce, formatTime, h, modal,
-  progressOverlay, toast } from "./ui.js";
+import { nextSub, openRubrics } from "./step2.js";
+import { app, config, criteriaOf, gradedWith, handleError, render } from "./store.js";
+import { NAME_COLOR, QUESTION_COLORS, button, coach, confirmBox, debounce, formatTime, h, modal, progressOverlay, toast, isSlide, paperLabel, PAPERS } from "./ui.js";
 
-const PAPERS = ["A4", "B5", "A3"];
 const GRID = "5mm"; // engine/slicer.DENSITY
 
 // --- Grid maths (mirrors engine/slicer.py) ---------------------------------------------
@@ -61,6 +59,7 @@ export function questionDraft() {
     app.draft.questions = {
       name_box: [...(c.name_box || [])],
       name_box_skipped: !!c.name_box_skipped,
+      sections: structuredClone(c.sections || []),
       questions: structuredClone(c.questions || []),
       choice_groups: structuredClone(c.choice_groups || []),
     };
@@ -97,9 +96,13 @@ function addQuestion(d) {
   while (used.has(`q${n}`)) n++;
   const c = config();
   const number = nextQuestionNumber(d);
+  // A question with marks counts towards only the criteria really ticked, so
+  // only a teacher who started from Rubric gets the one rubric ticked for them.
   const q = { id: `q${n}`, label: `Q${number}`, boxes: [], max: null,
-    rubric_ids: (c.rubrics || []).length === 1 ? [c.rubrics[0].id] : [] };
+    rubric_ids: c.mode === "rubric" && (c.rubrics || []).length === 1 ? [c.rubrics[0].id] : [] };
   const at = d.questions.findIndex((x) => autoNumber(x) > number);
+  const before = at < 0 ? d.questions[d.questions.length - 1] : d.questions[at - 1];
+  if (d.sections.length) q.section_id = before?.section_id || d.sections[0].id;
   if (at < 0) d.questions.push(q);
   else d.questions.splice(at, 0, q);
   return q;
@@ -135,6 +138,134 @@ export const saveQuestions = debounce(async () => {
     else toast(err.message, "error");
   }
 }, 500);
+
+// --- Sections --------------------------------------------------------------------------------
+//
+// Sections follow the order of the paper. A divider always sits directly above
+// a question, so a section is never empty, and with one section left the paper
+// goes back to having none.
+
+function tidySections(d) {
+  d.sections = d.sections.filter((s) => d.questions.some((q) => q.section_id === s.id));
+  if (d.sections.length < 2) {
+    d.sections = [];
+    d.questions.forEach((q) => { delete q.section_id; });
+  }
+}
+
+function splitsChoiceGroup(d) {
+  const section = new Map(d.questions.map((q) => [q.id, q.section_id]));
+  return d.choice_groups.some((g) => new Set(g.questions.map((id) => section.get(id))).size > 1);
+}
+
+// Change the sections, or undo the change if it would split a choice group.
+function changeSections(d, change) {
+  const before = { sections: d.sections, placed: d.questions.map((q) => [q, q.section_id]) };
+  change();
+  if (splitsChoiceGroup(d)) {
+    d.sections = before.sections;
+    before.placed.forEach(([q, id]) => { q.section_id = id; });
+    toast(t("error.choice_group_across_sections"), "error");
+    return;
+  }
+  tidySections(d);
+  saveQuestions();
+  render();
+}
+
+export function firstInSection(d, q) {
+  const i = d.questions.indexOf(q);
+  return i === 0 || d.questions[i - 1].section_id !== q.section_id;
+}
+
+// A divider above this question: it and the questions after it, up to the next
+// divider, become a new section.
+export function startSection(d, q) {
+  changeSections(d, () => {
+    const used = new Set([...d.sections, ...(config().sections || [])].map((s) => s.id));
+    const newId = () => {
+      let n = 1;
+      while (used.has(`sec${n}`)) n++;
+      used.add(`sec${n}`);
+      return `sec${n}`;
+    };
+    if (!d.sections.length) {
+      d.sections = [{ id: newId(), name: "" }];
+      d.questions.forEach((x) => { x.section_id = d.sections[0].id; });
+    }
+    const section = { id: newId(), name: "" };
+    const old = q.section_id;
+    d.sections = [...d.sections];
+    d.sections.splice(d.sections.findIndex((s) => s.id === old) + 1, 0, section);
+    d.questions.slice(d.questions.indexOf(q)).filter((x) => x.section_id === old)
+      .forEach((x) => { x.section_id = section.id; });
+  });
+}
+
+// A divider's questions join the section above. The first section has no
+// section above it, so its questions join the one below.
+function removeSection(d, section) {
+  changeSections(d, () => {
+    const i = d.sections.indexOf(section);
+    const into = d.sections[i === 0 ? 1 : i - 1];
+    d.questions.filter((q) => q.section_id === section.id).forEach((q) => { q.section_id = into.id; });
+  });
+}
+
+// The heading above a section's questions: its optional name, and a way to remove it.
+export function sectionHeading(d, section) {
+  const n = d.sections.indexOf(section) + 1;
+  return h("div", { class: "section-heading" },
+    h("input", { type: "text", id: `section-name-${section.id}`, class: "section-name", value: section.name || "",
+      maxlength: "60", placeholder: t("step2.sections.default_name", { n }),
+      "aria-label": t("step2.sections.name_label", { n }),
+      oninput: (e) => { section.name = e.target.value; saveQuestions(); } }),
+    h("button", { type: "button", class: "icon-btn", title: t("step2.sections.remove"),
+      "aria-label": t("step2.sections.remove"), onclick: () => removeSection(d, section) }, "✕"));
+}
+
+// --- How a question is graded ------------------------------------------------------------------
+
+export function isLocked(q) {
+  return (app.session.locked_questions || []).includes(q.id);
+}
+
+// What the marks and ticks filled in so far mean (grading_summary.question_mode).
+export function gradedText(c, q) {
+  const how = gradedWith(c, q);
+  if (how === "marks" && criteriaOf(c, q).length) {
+    return t("step2.graded.marks_on", { criteria: criteriaOf(c, q).map((r) => r.name).join(", ") });
+  }
+  return t(`step2.graded.${how || "none"}`);
+}
+
+// The marks box. A question with grades can't gain or lose its marks, because
+// marks and levels can't be converted. A marks question's number can still be
+// corrected; emptying the box puts the number back.
+export function marksInput(q, id, attrs, onChange) {
+  const locked = isLocked(q);
+  return h("input", Object.assign({ type: "number", id, min: "1", max: "100", class: "num", value: q.max ?? "",
+    disabled: locked && !q.max,
+    oninput: (e) => {
+      if (e.target.value === "" && locked) return;
+      q.max = e.target.value === "" ? null : parseInt(e.target.value, 10);
+      saveQuestions();
+      onChange();
+    },
+    onchange: (e) => { if (e.target.value === "") e.target.value = q.max ?? ""; } }, attrs));
+}
+
+export function setTick(c, q, rid, on) {
+  const chosen = new Set(criteriaOf(c, q).map((r) => r.id));
+  if (on) chosen.add(rid); else chosen.delete(rid);
+  q.rubric_ids = (c.rubrics || []).map((r) => r.id).filter((id) => chosen.has(id));
+  delete q.rubric_id;
+  saveQuestions();
+}
+
+export function lockNote(q) {
+  return t(q.max ? "step2.locked.marks" : "step2.locked.rubric");
+}
 
 // --- Adjusting one box from grading ----------------------------------------------------------
 
@@ -309,7 +440,7 @@ export function renderBoxes() {
       button(t("step2.boxes.use_new_grid"), () => changeLayout({ density: GRID }), "small")) : null,
     h("div", { class: "row" }, h("span", { class: "muted small" }, t("step1.paper")),
       h("div", { class: "seg" }, PAPERS.map((p) => h("button", { type: "button",
-        class: c.layout.paper === p ? "on" : "", onclick: () => changeLayout({ paper: p }) }, p)))),
+        class: c.layout.paper === p ? "on" : "", onclick: () => changeLayout({ paper: p, landscape: landscapeFor(c, p) }) }, paperLabel(p))))),
     h("label", { class: "check small" }, h("input", { type: "checkbox", checked: showLabels,
       onchange: (e) => { app.draft.showLabels = e.target.checked; render(); } }), t("step2.boxes.show_labels")),
     h("label", { class: "inline small" }, t("step2.boxes.draw_on"),
@@ -378,20 +509,34 @@ function attachDrag(overlay, page, grid) {
 
 // One tick box per criterion: an exam question can be assessed on several.
 function criteriaPicker(c, item) {
+  if (!(c.rubrics || []).length) {
+    return h("p", {}, h("button", { type: "button", class: "link-btn", onclick: () => openRubrics("boxes") },
+      t("step2.boxes.add_criteria")));
+  }
   const chosen = new Set(criteriaOf(c, item).map((r) => r.id));
-  const toggle = (id, on) => {
-    if (on) chosen.add(id); else chosen.delete(id);
-    item.rubric_ids = (c.rubrics || []).map((r) => r.id).filter((rid) => chosen.has(rid));
-    delete item.rubric_id;
-    saveQuestions();
-    render();
-  };
+  const toggle = (id, on) => { setTick(c, item, id, on); render(); };
   return h("fieldset", { class: "criteria-pick" },
     h("legend", { class: "label" }, t("step2.boxes.which_rubric", { label: item.label || "?" })),
     (c.rubrics || []).map((r) => h("label", { class: "check" },
-      h("input", { type: "checkbox", value: r.id, checked: chosen.has(r.id),
+      h("input", { type: "checkbox", value: r.id, class: "q-tick", checked: chosen.has(r.id),
         onchange: (e) => toggle(r.id, e.target.checked) }), r.name)),
     (c.rubrics || []).length > 1 ? h("p", { class: "muted small" }, t("step2.boxes.which_rubric_hint")) : null);
+}
+
+// Both fields on every card. Marks or Rubric only decides which comes first.
+function gradingFields(c, item) {
+  const note = h("p", { id: "q-graded", class: "muted small" }, gradedText(c, item));
+  const marks = h("label", {}, h("span", { class: "label" },
+    t(c.mode === "rubric" ? "step2.boxes.marks_optional" : "step2.boxes.how_many_marks", { label: item.label || "?" })),
+    marksInput(item, "q-max", { class: "num big-num" }, () => {
+      note.textContent = gradedText(c, item);
+      // In a one-rubric exam, marks can take away a tick that was only assumed.
+      const chosen = new Set(criteriaOf(c, item).map((r) => r.id));
+      document.querySelectorAll(".q-tick").forEach((box) => { box.checked = chosen.has(box.value); });
+    }));
+  const criteria = criteriaPicker(c, item);
+  return [c.mode === "rubric" ? criteria : marks, c.mode === "rubric" ? marks : criteria, note,
+    isLocked(item) ? h("p", { class: "warn-text small" }, lockNote(item)) : null];
 }
 
 function sidePanel(d, c, drawingOn) {
@@ -419,11 +564,7 @@ function sidePanel(d, c, drawingOn) {
       h("label", {}, h("span", { class: "label" }, t("step2.boxes.label")),
         h("input", { type: "text", id: "q-label", value: item.label, maxlength: "20",
           oninput: (e) => { item.label = e.target.value; saveQuestions(); } })),
-      c.mode === "rubric"
-        ? criteriaPicker(c, item)
-        : h("label", {}, h("span", { class: "label" }, t("step2.boxes.how_many_marks", { label: item.label || "?" })),
-          h("input", { type: "number", id: "q-max", min: "1", max: "100", class: "num big-num", value: item.max ?? "",
-            oninput: (e) => { item.max = e.target.value === "" ? null : parseInt(e.target.value, 10); saveQuestions(); } })));
+      ...gradingFields(c, item).filter(Boolean));
   }
 
   const boxes = isName ? d.name_box : item.boxes;
@@ -457,20 +598,24 @@ function sidePanel(d, c, drawingOn) {
     else actions.append(button(t("step2.boxes.skip_name"), () => { d.name_box_skipped = true; saveQuestions(); gotoNextQuestion(d); }, "ghost"));
   } else {
     const n = nextQuestionNumber(d);
+    const addNext = (newSection) => {
+      if (!item.boxes.length) { toast(t("step2.boxes.draw_first"), "error"); return; }
+      const q = addQuestion(d);
+      app.draft.current = q.id;
+      app.draft.addMode = false;
+      if (newSection) startSection(d, q);
+      saveQuestions();
+      render();
+    };
     actions.append(
-      button(t("step2.boxes.save_and_next", { label: item.label || "?", n }), () => {
-        if (!item.boxes.length) { toast(t("step2.boxes.draw_first"), "error"); return; }
-        const q = addQuestion(d);
-        app.draft.current = q.id;
-        app.draft.addMode = false;
-        saveQuestions();
-        render();
-      }, "primary"),
+      button(t("step2.boxes.save_and_next", { label: item.label || "?", n }), () => addNext(false), "primary"),
+      button(t("step2.boxes.save_and_section", { label: item.label || "?", n }), () => addNext(true)),
       button(t("step2.boxes.all_done"), async () => {
         const ready = d.questions.filter((q) => q.boxes.length);
         if (!ready.length) { toast(t("step2.boxes.draw_first"), "error"); return; }
         // Drop a trailing empty question the teacher never drew.
         d.questions = d.questions.filter((q, i) => q.boxes.length || i < d.questions.length - 1);
+        tidySections(d);
         await saveQuestions.now();
         nextSub("boxes");
       }));
@@ -485,20 +630,27 @@ function sidePanel(d, c, drawingOn) {
       h("li", {}, itemChip("name", t("step2.boxes.name_short"),
         d.name_box.length ? t("step2.boxes.box_count", { n: d.name_box.length })
           : d.name_box_skipped ? t("step2.boxes.skipped") : t("step2.boxes.no_box_yet"))),
-      d.questions.map((q) => h("li", {}, itemChip(q.id, q.label || "?",
-        [t("step2.boxes.box_count", { n: q.boxes.length }),
-          c.mode === "marks" && q.max ? t("step2.boxes.marks_count", { n: q.max }) : null].filter(Boolean).join(" · ")),
-      q.id === app.draft.current && d.questions.length > 1 ? moveButtons(d, q) : null,
-      q.id === app.draft.current && d.questions.length > 1 ? h("button", { type: "button", class: "icon-btn",
-        title: t("step2.boxes.delete_question"), "aria-label": t("step2.boxes.delete_question"),
-        onclick: async () => {
-          if (!(await confirmBox(t("step2.boxes.delete_question"), t("step2.boxes.delete_confirm", { label: q.label }), t("common.delete"), undefined, true))) return;
-          d.questions = d.questions.filter((x) => x.id !== q.id);
-          d.choice_groups.forEach((g) => { g.questions = g.questions.filter((x) => x !== q.id); });
-          app.draft.current = d.questions[d.questions.length - 1].id;
-          saveQuestions();
-          render();
-        } }, "🗑") : null)))));
+      d.questions.map((q) => [
+        d.sections.length && firstInSection(d, q)
+          ? h("li", {}, sectionHeading(d, d.sections.find((s) => s.id === q.section_id))) : null,
+        h("li", {}, itemChip(q.id, q.label || "?",
+          [t("step2.boxes.box_count", { n: q.boxes.length }),
+            q.max ? t("step2.boxes.marks_count", { n: q.max }) : criteriaOf(c, q).map((r) => r.name).join(", ")]
+            .filter(Boolean).join(" · ")),
+        q.id === app.draft.current && d.questions.length > 1 ? moveButtons(d, q) : null,
+        q.id === app.draft.current && d.questions.length > 1 ? h("button", { type: "button", class: "icon-btn",
+          title: t("step2.boxes.delete_question"), "aria-label": t("step2.boxes.delete_question"),
+          onclick: async () => {
+            if (!(await confirmBox(t("step2.boxes.delete_question"), t("step2.boxes.delete_confirm", { label: q.label }), t("common.delete"), undefined, true))) return;
+            d.questions = d.questions.filter((x) => x.id !== q.id);
+            d.choice_groups.forEach((g) => { g.questions = g.questions.filter((x) => x !== q.id); });
+            tidySections(d);
+            app.draft.current = d.questions[d.questions.length - 1].id;
+            saveQuestions();
+            render();
+          } }, "🗑") : null),
+        q.id === app.draft.current && !firstInSection(d, q)
+          ? h("li", {}, button(t("step2.sections.start"), () => startSection(d, q), "small ghost")) : null]))));
   return parts;
 }
 
@@ -514,6 +666,12 @@ function moveButtons(d, q) {
 // as CAM2 made them (Q1, Q2…) are renumbered to match; typed labels are kept.
 function moveQuestion(d, i, delta) {
   const auto = d.questions.every((q) => /^Q\d+$/.test(q.label));
+  const neighbour = d.questions[i + delta];
+  if (neighbour?.section_id !== d.questions[i].section_id) {     // the next thing along is a divider
+    const q = d.questions[i];
+    changeSections(d, () => { q.section_id = neighbour.section_id; });
+    return;
+  }
   const [q] = d.questions.splice(i, 1);
   d.questions.splice(i + delta, 0, q);
   if (auto) d.questions.forEach((x, n) => { x.label = `Q${n + 1}`; });
@@ -545,6 +703,13 @@ function checkStrip(boxes, c, drawingOn) {
     h("p", { class: "muted small" }, t("step2.boxes.check_hint")),
     pick.map((s) => h("figure", {}, h("img", { src: `/api/preview-crop/${s.id}?boxes=${q}`, alt: s.display_name, loading: "lazy" }),
       h("figcaption", {}, s.display_name))));
+}
+
+// Slides are landscape. Coming back from a slide size, go by the page on screen.
+function landscapeFor(c, paper) {
+  if (isSlide(paper)) return true;
+  const page = document.querySelector(".sheet img");
+  return isSlide(c.layout.paper) && page ? page.naturalWidth > page.naturalHeight : c.layout.landscape;
 }
 
 async function changeLayout(change) {

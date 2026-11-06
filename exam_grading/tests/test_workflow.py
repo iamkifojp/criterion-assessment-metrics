@@ -10,7 +10,7 @@ from unittest import mock
 
 from PIL import Image
 
-from engine import model, storage, workflow
+from engine import grading_summary, model, storage, workflow
 from engine.errors import UserError
 from engine.slicer import Layout
 from tests.helpers import center_color, make_pdf
@@ -138,7 +138,7 @@ class SetupTests(WorkflowTestCase):
         self.assertEqual(self.config["questions"][1]["rubric_ids"], [])      # Criterion A deleted
         with self.assertRaises(UserError) as ctx:
             workflow.check_ready(self.config)
-        self.assertEqual(ctx.exception.code, "question_has_no_rubric")
+        self.assertEqual(ctx.exception.code, "question_needs_marks_or_criterion")
 
     def test_check_ready_messages(self):
         cases = [
@@ -146,7 +146,8 @@ class SetupTests(WorkflowTestCase):
             ({"questions": [{"id": "q1", "label": "", "boxes": ["B2"], "max": 1}]}, "question_needs_label"),
             ({"questions": [{"id": "q1", "label": "Q1", "boxes": ["B2"], "max": 1},
                             {"id": "q2", "label": "q1", "boxes": ["B3"], "max": 1}]}, "duplicate_label"),
-            ({"questions": [{"id": "q1", "label": "Q1", "boxes": ["B2"], "max": None}]}, "question_needs_max"),
+            ({"questions": [{"id": "q1", "label": "Q1", "boxes": ["B2"], "max": None}]},
+             "question_needs_marks_or_criterion"),
         ]
         for payload, code in cases:
             workflow.set_questions(self.config, payload)
@@ -264,16 +265,60 @@ class SetupTests(WorkflowTestCase):
         self.assertEqual(self.config["layout"], {"paper": "B5", "density": "5mm", "landscape": False})
         self.assertEqual(self.config["name_box"], [])
 
-    def test_mode_is_fixed_after_grading(self):
+    def test_changing_the_starting_choice_changes_no_question(self):
+        workflow.set_questions(self.config, {"questions": [
+            {"id": "q1", "label": "Q1", "boxes": ["B2"], "max": 4}]})
+        before = [dict(q) for q in self.config["questions"]]
+        workflow.set_mode(self.config, "rubric")
+        self.assertEqual(self.config["questions"], before)
+        self.assertEqual(grading_summary.question_mode(self.config, self.config["questions"][0]), "marks")
+        workflow.check_ready(self.config)
+
+    def test_a_graded_question_cannot_gain_or_lose_marks(self):
+        rubric = {"name": "Criterion A", "bands": [{"levels": "0-8"}]}
+        workflow.set_rubrics(self.config, [rubric, dict(rubric, name="Criterion B")])
+        q1 = {"id": "q1", "label": "Q1", "boxes": ["B2"], "max": 4}
+        q2 = {"id": "q2", "label": "Q2", "boxes": ["B3"], "rubric_ids": ["r1"]}
+        q3 = {"id": "q3", "label": "Q3", "boxes": ["B4"], "max": 4}
+        q4 = {"id": "q4", "label": "Q4", "boxes": ["B5"], "rubric_ids": ["r1"]}
+        payload = {"questions": [q1, q2, q3, q4]}
+        workflow.set_questions(self.config, payload)
         grades = model.new_grades("x")
-        workflow.set_mode(self.config, "rubric", grades)             # nothing graded yet
-        workflow.set_mode(self.config, "marks", grades)
-        grades["grades"] = {"s001": {"q1": {"value": None, "comment": "only a comment"}}}
-        workflow.set_mode(self.config, "rubric", grades)             # comments don't count
-        grades["grades"]["s001"]["q1"]["value"] = 2
-        with self.assertRaises(UserError) as ctx:
-            workflow.set_mode(self.config, "marks", grades)
-        self.assertEqual(ctx.exception.code, "mode_locked")
+        grading_summary.set_grade(self.config, grades, "s001", "q1", 3)
+        grading_summary.set_grade(self.config, grades, "s001", "q2", 6)
+        grading_summary.set_grade(self.config, grades, "s001", "q3", comment="Only a comment.")
+        for question, change in ((q1, {"max": None}), (q2, {"max": 8})):
+            with self.assertRaises(UserError) as ctx:
+                workflow.set_questions(self.config, {"questions": [
+                    dict(q, **change) if q is question else q for q in payload["questions"]]}, grades)
+            self.assertEqual(ctx.exception.code, "question_marks_locked")
+        # Nothing changed, and every other question stays open: a comment is not a grade.
+        self.assertEqual(self.config["questions"][1]["max"], None)
+        workflow.set_questions(self.config, {"questions": [
+            dict(q1, max=10, rubric_ids=["r1"]), dict(q2, rubric_ids=["r1", "r2"]),
+            dict(q3, max=None, rubric_ids=["r2"]), dict(q4, max=8)]}, grades)
+        self.assertEqual([grading_summary.question_mode(self.config, q) for q in self.config["questions"]],
+                         ["marks", "rubric", "rubric", "marks"])
+
+    def test_going_back_to_fill_in_what_was_left_out_needs_no_slicing(self):
+        q1 = {"id": "q1", "label": "Q1", "boxes": ["B2"], "max": 4}
+        q2 = {"id": "q2", "label": "Q2", "boxes": ["B5"], "max": 3}
+        workflow.set_questions(self.config, {"questions": [q1, q2]})
+        workflow.slice_session(self.session, self.config)
+        grades = model.new_grades("x")
+        grading_summary.set_grade(self.config, grades, "s001", "q1", 3)
+        # Marks first, criteria later, even during grading
+        workflow.set_rubrics(self.config, [{"name": "Criterion A", "bands": [{"levels": "0-8"}]}])
+        workflow.set_questions(self.config, {"questions": [dict(q1, rubric_ids=["r1"]), dict(q2, rubric_ids=["r1"])]}, grades)
+        self.assertTrue(self.config["sliced"])
+        self.assertEqual([q["boxes"] for q in self.config["questions"]], [["page1!B2:B2"], ["page1!B5:B5"]])
+        self.assertEqual(grades["grades"]["s001"]["q1"]["value"], 3)
+        # Rubric first, marks later: Q2 had no grade, loses its marks, then gains them back
+        workflow.set_questions(self.config, {"questions": [dict(q1, rubric_ids=["r1"]), dict(q2, max=None, rubric_ids=["r1"])]}, grades)
+        self.assertEqual(grading_summary.question_mode(self.config, self.config["questions"][1]), "rubric")
+        workflow.set_questions(self.config, {"questions": [dict(q1, rubric_ids=["r1"]), dict(q2, max=6, rubric_ids=["r1"])]}, grades)
+        self.assertEqual(self.config["questions"][1]["rubric_ids"], ["r1"])
+        self.assertTrue(self.config["sliced"])
 
     def test_rubric_mode(self):
         workflow.set_mode(self.config, "rubric")
@@ -284,6 +329,112 @@ class SetupTests(WorkflowTestCase):
         workflow.check_ready(self.config)          # the only rubric is used automatically
         with self.assertRaises(UserError):
             workflow.set_mode(self.config, "stars")
+
+    def with_sections(self, *groups, **extra):
+        """Questions in sections: lists of (question id, max)."""
+        sections = [{"id": f"sec{i}", "name": f"Part {i}"} for i in range(1, len(groups) + 1)]
+        questions = [{"id": qid, "label": qid.upper(), "boxes": [f"B{qid[1:]}"], "max": top, "section_id": s["id"]}
+                     for s, group in zip(sections, groups) for qid, top in group]
+        return workflow.set_questions(self.config, dict({"sections": sections, "questions": questions}, **extra))
+
+    def test_sections_are_saved_and_follow_the_paper(self):
+        self.with_sections([("q1", 5)], [("q2", 5)])
+        self.assertEqual([s["name"] for s in self.config["sections"]], ["Part 1", "Part 2"])
+        self.assertEqual([s["weight"] for s in self.config["sections"]], [50, 50])
+        q1, q2 = self.config["questions"]
+        # A save that doesn't mention sections leaves them all alone
+        workflow.set_questions(self.config, {"questions": [dict(q1), dict(q2)]})
+        self.assertEqual(len(self.config["sections"]), 2)
+        self.assertEqual(self.config["questions"][1]["section_id"], "sec2")
+        # A question moved past a divider, a new one, and one naming a lost section
+        moved = {"id": "q1", "label": "Q1", "boxes": ["B2"], "max": 5, "section_id": "sec1"}
+        workflow.set_questions(self.config, {"questions": [dict(q2), moved, {"id": "q3", "label": "Q3", "section_id": "gone"}]})
+        self.assertEqual([q["section_id"] for q in self.config["questions"]], ["sec2", "sec2", "sec2"])
+        # Removing every divider
+        workflow.set_questions(self.config, {"sections": [], "questions": [{"id": "q1", "label": "Q1", "section_id": "sec1"}]})
+        self.assertEqual(self.config["sections"], [])
+        self.assertNotIn("section_id", self.config["questions"][0])
+
+    def test_new_sections_get_new_ids(self):
+        workflow.set_questions(self.config, {"sections": [{"name": "A"}, {"id": "sec1", "name": "B"}], "questions": []})
+        self.assertEqual([s["id"] for s in self.config["sections"]], ["sec2", "sec1"])
+        # An id the browser made up is kept, because its questions name it
+        workflow.set_questions(self.config, {"sections": [{"id": "sec2", "name": "B"}, {"id": "sec7"}, {"name": " C "}],
+                                             "questions": [{"id": "q1", "label": "Q1", "section_id": "sec7"}]})
+        self.assertEqual([(s["id"], s["name"]) for s in self.config["sections"]],
+                         [("sec2", "B"), ("sec7", ""), ("sec3", "C")])
+        self.assertEqual(self.config["questions"][0]["section_id"], "sec7")
+
+    def test_sections_can_change_without_touching_grades_or_slicing(self):
+        self.with_sections([("q1", 5), ("q2", 5)])
+        workflow.slice_session(self.session, self.config)
+        self.with_sections([("q1", 5)], [("q2", 5)])
+        self.assertTrue(self.config["sliced"])
+
+    def test_a_choice_group_across_two_sections_is_refused(self):
+        group = [{"questions": ["q1", "q2"], "answer": 1}]
+        with self.assertRaises(UserError) as ctx:
+            self.with_sections([("q1", 5)], [("q2", 5)], choice_groups=group)
+        self.assertEqual(ctx.exception.code, "choice_group_across_sections")
+        self.assertEqual(self.config["questions"], [])                     # nothing was saved
+        self.with_sections([("q1", 5), ("q2", 5)], [("q3", 5)], choice_groups=group)
+        workflow.check_ready(self.config)
+
+    def test_typing_shares(self):
+        self.with_sections([("q1", 5)], [("q2", 5)], [("q3", 5)])
+        self.assertEqual([s["weight"] for s in self.config["sections"]], [34, 33, 33])
+        workflow.set_weighted(self.config, True)
+        workflow.set_section_weight(self.config, "sec2", "20")
+        self.assertEqual([s["weight"] for s in self.config["sections"]], [40, 20, 40])
+        workflow.set_section_weight(self.config, "sec1", 50)
+        self.assertEqual([s["weight"] for s in self.config["sections"]], [50, 20, 30])
+        # Typing the last automatic one: it keeps what was typed and another takes the rest
+        workflow.set_section_weight(self.config, "sec3", 45)
+        self.assertEqual([s["weight"] for s in self.config["sections"]], [50, 5, 45])
+        self.assertEqual([s["weight_typed"] for s in self.config["sections"]], [True, False, True])
+        with self.assertRaises(UserError) as ctx:
+            workflow.set_section_weight(self.config, "sec3", 51)
+        self.assertEqual((ctx.exception.code, ctx.exception.params["max"]), ("section_weight_too_big", 50))
+        for bad in (-1, 101, "half", 12.5):
+            with self.assertRaises(UserError, msg=bad):
+                workflow.set_section_weight(self.config, "sec1", bad)
+        with self.assertRaises(UserError):
+            workflow.set_section_weight(self.config, "sec9", 10)
+        self.assertEqual(sum(s["weight"] for s in self.config["sections"]), 100)
+        workflow.set_section_weight(self.config, "sec1", None)                # back to automatic
+        self.assertEqual([s["weight"] for s in self.config["sections"]], [28, 27, 45])
+        # Typed shares survive weighting being turned off and on
+        workflow.set_weighted(self.config, False)
+        workflow.set_weighted(self.config, True)
+        self.assertEqual(self.config["sections"][2]["weight"], 45)
+
+    def test_a_section_without_marks_has_no_share(self):
+        workflow.set_rubrics(self.config, [{"name": "Criterion A", "bands": [{"levels": "0-8"}]}])
+        self.with_sections([("q1", 5)], [("q2", None)], [("q3", 5)])
+        self.assertEqual([s["weight"] for s in self.config["sections"]], [50, None, 50])
+        with self.assertRaises(UserError):
+            workflow.set_section_weight(self.config, "sec2", 10)
+        workflow.set_section_weight(self.config, "sec1", 70)
+        # Section 3 loses its marks: Section 1's typed share no longer has anyone to balance it
+        self.with_sections([("q1", 5)], [("q2", None)], [("q3", None)])
+        self.assertEqual([s["weight"] for s in self.config["sections"]], [100, None, None])
+
+    def test_report_options(self):
+        self.assertEqual(workflow.report_options(self.config), model.DEFAULT_REPORT_OPTIONS)
+        self.with_sections([("q1", 5)], [("q2", 5)])
+        workflow.set_report_options(self.config, {"section_results": 1, "no_images_for": ["sec1", "gone"]})
+        options = workflow.report_options(self.config)
+        self.assertEqual((options["section_results"], options["no_images_for"]), (True, ["sec1"]))
+        workflow.set_report_options(self.config, {"rubric_table": False})
+        options = workflow.report_options(self.config)
+        self.assertEqual((options["section_results"], options["rubric_table"], options["overall_marks"]),
+                         (True, False, True))
+        self.assertEqual(model.DEFAULT_REPORT_OPTIONS["no_images_for"], [])
+        # With no sections, the whole paper has one tick
+        self.with_sections([("q1", 5)])
+        workflow.set_questions(self.config, {"sections": [], "questions": []})
+        workflow.set_report_options(self.config, {"no_images_for": [grading_summary.WHOLE_PAPER]})
+        self.assertEqual(workflow.report_options(self.config)["no_images_for"], [grading_summary.WHOLE_PAPER])
 
     def test_slice_two_page_question_and_name_box(self):
         workflow.set_questions(self.config, {"name_box": ["page1!B2"], "questions": [

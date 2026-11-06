@@ -31,8 +31,12 @@ from typing import Callable, Iterable, List, NamedTuple, Optional, Sequence, Tup
 from PIL import Image, ImageDraw, ImageOps
 
 from .errors import UserError
+from .model import NAME_BOX_ID
 
 # --- Paper and grid ------------------------------------------------------------
+
+SLIDE_16_9 = "Slide 16:9"
+SLIDE_4_3 = "Slide 4:3"
 
 # Portrait (width, height) in millimetres. B5 here is ISO B5; the Japanese JIS
 # B5 (182×257) is accepted by detection as "B5" too. Because geometry is
@@ -41,6 +45,8 @@ PAPER_SIZES_MM = {
     "A4": (210.0, 297.0),
     "B5": (176.0, 250.0),
     "A3": (297.0, 420.0),
+    SLIDE_16_9: (142.875, 254.0),   # 10 in wide, as Google Slides makes them
+    SLIDE_4_3: (190.5, 254.0),
 }
 _DETECT_SIZES_MM = (
     ("A4", 210.0, 297.0),
@@ -50,6 +56,11 @@ _DETECT_SIZES_MM = (
 )
 DETECT_TOLERANCE_MM = 4.0
 
+# Decks come in many sizes but few shapes: PowerPoint's 16:9 is 13.333 x 7.5 in and
+# Google's is 10 x 5.625 in. Close enough to tell 4:3 from US Letter (1.29).
+_SLIDE_SHAPES = ((SLIDE_16_9, 16 / 9), (SLIDE_4_3, 4 / 3))
+SLIDE_SHAPE_TOLERANCE = 0.01
+
 # Portrait (cols, rows) per paper and density. "5mm" is the grid for new
 # sessions; "normal" and "fine" (CAM's "compact" and "fine") are only read
 # from older sessions.
@@ -57,6 +68,8 @@ GRIDS = {
     "A4": {"5mm": (42, 60), "normal": (15, 21), "fine": (21, 30)},
     "B5": {"5mm": (36, 51), "normal": (13, 18), "fine": (18, 25)},
     "A3": {"5mm": (60, 84), "normal": (21, 30), "fine": (30, 42)},
+    SLIDE_16_9: {"5mm": (29, 51), "normal": (10, 18), "fine": (14, 25)},
+    SLIDE_4_3: {"5mm": (38, 51), "normal": (14, 18), "fine": (19, 25)},
 }
 PAPERS = tuple(GRIDS)
 DENSITY = "5mm"
@@ -66,6 +79,10 @@ DENSITIES = (DENSITY,) + OLD_DENSITIES
 # Pages are rasterised at this DPI for cropping; crops of every student then
 # come out the same pixel size.
 RENDER_DPI = 200
+
+# A whole slide of photographs is about 5 MB as a PNG and 0.6 MB as a JPEG, and a
+# class's crops sit in a synced folder. Written pages stay PNG, for sharp handwriting.
+SLIDE_CROP_QUALITY = 85
 
 PDF_EXT = ".pdf"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
@@ -107,14 +124,48 @@ class Layout:
                 "landscape": self.landscape}
 
 
-def detect_paper_mm(width_mm: float, height_mm: float) -> Optional[Tuple[str, bool]]:
-    """Match a page size to (paper, landscape), or None if it is none of ours."""
+def detect_paper_mm(width_mm: float, height_mm: float, slides: bool = True
+                    ) -> Optional[Tuple[str, bool]]:
+    """Match a page size to (paper, landscape), or None if it is none of ours.
+
+    Paper sizes are checked first, then the shape of a landscape slide. Pass
+    ``slides=False`` for a page made from a picture: phone photos are 4:3 or 16:9
+    too, and are papers, not slides.
+    """
     short, long_ = sorted((float(width_mm), float(height_mm)))
     landscape = width_mm > height_mm
     for paper, w, h in _DETECT_SIZES_MM:
         if abs(short - w) <= DETECT_TOLERANCE_MM and abs(long_ - h) <= DETECT_TOLERANCE_MM:
             return paper, landscape
+    if slides and landscape:
+        for paper, shape in _SLIDE_SHAPES:
+            if abs(long_ / short / shape - 1) <= SLIDE_SHAPE_TOLERANCE:
+                return paper, True
     return None
+
+
+# A PDF page with no text and one picture over nearly all of it is a photo saved
+# as a PDF, as some phone apps and "Print to PDF" make, not an exported slide.
+PHOTO_PAGE_COVER = 0.9
+
+
+def is_photo_page(page) -> bool:
+    """True for a PDF page that is only a photo (see PHOTO_PAGE_COVER)."""
+    try:
+        if page.get_text("text").strip():
+            return False
+        area = abs(page.rect)
+        return area > 0 and any(abs(_fitz().Rect(info["bbox"]) & page.rect) >= PHOTO_PAGE_COVER * area
+                                for info in page.get_image_info())
+    except Exception:
+        return False
+
+
+def detect_pdf_page(page) -> Optional[Tuple[str, bool]]:
+    """(paper, landscape) for one PDF page. A photo is a paper, never a slide."""
+    rect = page.rect                    # points, rotation applied
+    return detect_paper_mm(rect.width * 25.4 / 72, rect.height * 25.4 / 72,
+                           slides=not is_photo_page(page))
 
 
 def detect_paper(path: str) -> Optional[Tuple[str, bool]]:
@@ -129,8 +180,7 @@ def detect_paper(path: str) -> Optional[Tuple[str, bool]]:
             with _fitz().open(path) as doc:
                 if doc.page_count < 1:
                     return None
-                rect = doc[0].rect          # points, rotation applied
-                return detect_paper_mm(rect.width * 25.4 / 72, rect.height * 25.4 / 72)
+                return detect_pdf_page(doc[0])
         if ext in IMAGE_EXTS:
             with Image.open(path) as im:
                 im = ImageOps.exif_transpose(im)
@@ -138,7 +188,7 @@ def detect_paper(path: str) -> Optional[Tuple[str, bool]]:
                 if not dpi or not dpi[0] or not dpi[1] or float(dpi[0]) < 50:
                     return None
                 return detect_paper_mm(im.width / float(dpi[0]) * 25.4,
-                                       im.height / float(dpi[1]) * 25.4)
+                                       im.height / float(dpi[1]) * 25.4, slides=False)
     except Exception:
         return None
     return None
@@ -489,6 +539,13 @@ def parse_boxes(ranges: Iterable[str], layout: Layout) -> List[Box]:
     return boxes
 
 
+def crop_file(region_id: str, student_id: str, layout: Layout) -> str:
+    """Where a crop goes inside ``crops/``. The paper size decides the format,
+    except that CAM reads name crops as PNG files, so those stay PNG."""
+    jpeg = layout.paper in (SLIDE_16_9, SLIDE_4_3) and region_id != NAME_BOX_ID
+    return f"{region_id}/{student_id}.{'jpg' if jpeg else 'png'}"
+
+
 def slice_all(scans: Sequence[Tuple[str, str]], regions: Sequence[Tuple[str, Sequence[Box]]],
               layout: Layout, crops_dir: str,
               progress: Optional[Callable[[int, int], None]] = None) -> dict:
@@ -496,8 +553,8 @@ def slice_all(scans: Sequence[Tuple[str, str]], regions: Sequence[Tuple[str, Seq
 
     ``scans`` is ``[(student_id, path)]`` and ``regions`` is
     ``[(region_id, [Box, ...])]`` (questions plus the name box). Crops land at
-    ``crops_dir/<region_id>/<student_id>.png``. A failure on one student never
-    stops the rest of the class; it is reported in ``errors``.
+    ``crops_dir/<region_id>/<student_id>.png`` (see :func:`crop_file`). A failure
+    on one student never stops the rest of the class; it is reported in ``errors``.
     """
     summary = {"students": len(scans), "regions": len(regions), "crops": 0, "errors": []}
     for region_id, _ in regions:
@@ -507,7 +564,11 @@ def slice_all(scans: Sequence[Tuple[str, str]], regions: Sequence[Tuple[str, Seq
         for region_id, boxes in regions:
             try:
                 image = crop_boxes(path, boxes, layout, pages)
-                image.save(os.path.join(crops_dir, region_id, f"{student_id}.png"), "PNG")
+                name = crop_file(region_id, student_id, layout)
+                if name.endswith(".jpg"):
+                    image.save(os.path.join(crops_dir, name), "JPEG", quality=SLIDE_CROP_QUALITY)
+                else:
+                    image.save(os.path.join(crops_dir, name), "PNG")
                 summary["crops"] += 1
             except Exception as exc:
                 summary["errors"].append({"student": student_id, "region": region_id,
