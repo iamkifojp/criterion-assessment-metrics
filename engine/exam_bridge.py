@@ -198,6 +198,14 @@ def read_session(folder: str, assignment: Optional[str] = None) -> ExamSession:
             result.max_total = max_total
             result.percent = marks.get("percent")
             result.weighted = bool(marks.get("weighted"))
+            if marks.get("adjusted"):
+                # The teacher typed over CAM2's figure for the report: a total,
+                # or the percentage when weighted. Kept beside the calculated
+                # one, which stays what CAM shows and works with.
+                if not result.weighted and marks.get("report_total") is not None:
+                    result.report_total = float(marks["report_total"])
+                if marks.get("report_percent") is not None:
+                    result.report_percent = float(marks["report_percent"])
         external = (roster.get(student.get("roster_id")) or {}).get("external_id") or ""
         papers.append(SessionPaper(student_id=sid, external_id=str(external),
                                    name=workflow.display_name(config, student),

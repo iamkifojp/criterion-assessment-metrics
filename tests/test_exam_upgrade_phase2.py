@@ -20,6 +20,7 @@ Run:  python -m unittest tests.test_exam_upgrade_phase2
 
 import hashlib
 import os
+import shutil
 import sys
 import unittest
 from collections import Counter
@@ -557,6 +558,75 @@ class BridgeOnVersion2Tests(_BridgeBase):
         result = exam_bridge.read_session(folder).papers[0].result
         self.assertEqual((result.total, result.max_total), (10, 50))
         self.assertEqual((result.percent, result.weighted), (50.0, True))
+
+    def _report_session(self, weighted, overall):
+        questions = _questions(("q1", "Q1", 10, None), ("q2", "Q2", 10, None))
+        if weighted:
+            questions = [dict(q, section_id=sid) for q, sid in zip(questions, ("a", "b"))]
+        folder = self.make_session(
+            "rep", mode="marks", students=STUDENTS[:1], roster=ROSTER[:1],
+            questions=questions, grades=[("s001", "q1", 8), ("s001", "q2", 7)],
+            overall={"s001": overall})
+        if weighted:
+            session, config, _grades = self.storage.open_session(folder)
+            config.update(weighted=True, sections=[
+                {"id": "a", "name": "A", "weight": 25, "weight_typed": True},
+                {"id": "b", "name": "B", "weight": 75, "weight_typed": False}])
+            session.config_file.save(config)
+        return exam_bridge.read_session(folder).papers[0].result
+
+    @needs_version_2
+    def test_a_report_total_typed_in_cam2_sits_beside_the_calculated_one(self):
+        result = self._report_session(False, {"report_total": 18})
+        self.assertEqual((result.total, result.max_total, result.percent), (15, 20, 75.0))
+        self.assertEqual((result.report_total, result.report_percent), (18.0, 90.0))
+        self.assertTrue(result.adjusted)
+        asg = SimpleNamespace(max_total=20)
+        self.assertEqual(app._exam_marks_text(asg, result),
+                         "15/20 · report shows 18/20 (typed in CAM2)")
+
+    @needs_version_2
+    def test_a_weighted_report_percentage_typed_in_cam2_sits_beside_cam2s(self):
+        result = self._report_session(True, {"report_percent": 80})
+        # 25% of 8/10 + 75% of 7/10 = 72.5%
+        self.assertEqual((result.total, result.percent, result.weighted), (15, 72.5, True))
+        self.assertEqual((result.report_total, result.report_percent), (None, 80.0))
+        self.assertEqual(app._exam_marks_text(SimpleNamespace(max_total=20), result),
+                         "weighted 72.5% · raw 15/20 · report shows 80.0% (typed in CAM2)")
+
+    @needs_version_2
+    def test_no_typed_report_figure_means_nothing_extra(self):
+        # Typing the calculated figure again isn't an adjustment, in CAM2 or here.
+        for weighted, overall in ((False, {}), (False, {"report_total": 15}),
+                                  (True, {"report_percent": 72.5})):
+            result = self._report_session(weighted, overall)
+            self.assertEqual((result.report_total, result.report_percent, result.adjusted),
+                             (None, None, False), overall)
+            self.assertNotIn("report shows", app._exam_marks_text(
+                SimpleNamespace(max_total=20), result))
+            shutil.rmtree(os.path.join(self.root, "rep"))
+
+    def test_report_figures_round_trip_and_older_records_have_none(self):
+        result = ExamResult(assignment=EXAM, mode="marks", total=15, max_total=20,
+                            percent=75.0, report_total=18.5, report_percent=92.5)
+        saved = exam_result_to_dict(result)
+        self.assertEqual((saved["report_total"], saved["report_percent"]), (18.5, 92.5))
+        loaded = exam_result_from_dict(saved)
+        self.assertEqual((loaded.report_total, loaded.report_percent, loaded.adjusted),
+                         (18.5, 92.5, True))
+        self.assertEqual(app._exam_marks_text(SimpleNamespace(max_total=20), loaded),
+                         "15/20 · report shows 18.5/20 (typed in CAM2)")
+        issues = []
+        _validate_exam_result(saved, "r", issues)
+        self.assertEqual(issues, [])
+        plain = exam_result_to_dict(ExamResult(assignment=EXAM, mode="marks", total=15))
+        self.assertNotIn("report_total", plain)
+        self.assertNotIn("report_percent", plain)
+        self.assertFalse(exam_result_from_dict(plain).adjusted)
+        for value in ({"report_total": "18"}, {"report_percent": "x"}):
+            issues = []
+            _validate_exam_result(dict({"assignment": EXAM}, **value), "r", issues)
+            self.assertTrue(issues, value)
 
     @needs_version_2
     def test_criterion_marks_carry_over_and_write_no_level(self):

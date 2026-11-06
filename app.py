@@ -7645,6 +7645,8 @@ def _render_exam_banding() -> None:
                 continue
             pct = (r.total / rmax * 100.0) if rmax else 0.0
             row[1].write(f"{r.total} / {rmax or '?'}")
+            if r.adjusted:
+                row[1].caption(_exam_report_text(asg, r))
             row[2].write(f"{r.percent:.1f}% weighted"
                          if r.weighted and r.percent is not None else f"{pct:.0f}%")
             # Blank until the teacher chooses: marks never suggest a grade (P3).
@@ -9103,11 +9105,27 @@ def _student_exam_records(student):
 
 def _exam_marks_text(asg, r) -> str:
     """A paper's marks. With weighting on, CAM2's result beside the raw total,
-    never converted (D12)."""
+    never converted (D12). A figure the teacher typed over in CAM2 for the
+    report follows, read-only."""
     raw = f"{r.total}/{r.max_total or asg.max_total or '?'}"
-    if r.weighted and r.percent is not None:
-        return f"weighted {r.percent:.1f}% · raw {raw}"
-    return raw
+    text = (f"weighted {r.percent:.1f}% · raw {raw}"
+            if r.weighted and r.percent is not None else raw)
+    report = _exam_report_text(asg, r)
+    return f"{text} · {report}" if report else text
+
+
+def _exam_report_text(asg, r) -> str:
+    """What CAM2's report prints when the teacher typed over the calculated
+    figure there, else "". CAM's own figures stay the calculated ones."""
+    if not r.adjusted:
+        return ""
+    if r.report_total is not None:
+        total = (int(r.report_total) if float(r.report_total).is_integer()
+                 else r.report_total)
+        figure = f"{total}/{r.max_total or asg.max_total or '?'}"
+    else:
+        figure = f"{r.report_percent:.1f}%"
+    return f"report shows {figure} (typed in CAM2)"
 
 
 def _criterion_marks_text(marks: dict, weighted: bool) -> str:
