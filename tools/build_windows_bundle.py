@@ -61,9 +61,13 @@ REQUIRED_EXAM_PATHS = {
 # folder covers the whole bundle, CAM2 included.
 EXAM_DEV_PATHS = ("tests", "tools", "doc", "PLAN.md", "AGENTS.md",
                   "Exam-Section-Plan.md", "Feedback-and-Upgrades.md",
-                  "requirements-build.txt", "licences")
+                  "requirements-build.txt", "licences",
+                  ".gitattributes", ".gitignore")
 # CAM's development documents that aren't named *_PLAN.md.
 CAM_DEV_DOCS = ("CAM2_FEEDBACK_FOR_CAM.md",)
+# CAM's own development files at the top level: its tests, git settings and
+# the instructions for coding assistants. Teachers never program in the bundle.
+CAM_DEV_PATHS = ("tests", ".gitattributes", ".gitignore", "AGENTS.md", "CLAUDE.md")
 
 
 def run(command: list[str | os.PathLike[str]], *, cwd: Path) -> None:
@@ -112,6 +116,12 @@ def remove_dev_files(bundle: Path) -> None:
     """Drop development-only content from a staged checkout."""
     shutil.rmtree(bundle / ".claude", ignore_errors=True)
     shutil.rmtree(bundle / "tools", ignore_errors=True)
+    for name in CAM_DEV_PATHS:
+        path = bundle / name
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.is_file():
+            path.unlink()
     for plan in (bundle / "docs").glob("*_PLAN.md"):
         plan.unlink()
     for name in CAM_DEV_DOCS:
