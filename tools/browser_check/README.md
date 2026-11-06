@@ -1,8 +1,8 @@
 # Phase 4 browser checks (CAM2 engine upgrade)
 
 How to run the browser checks from `docs/CAM2_ENGINE_UPGRADE_PLAN.md`, Phase 4, on a
-computer of your own. They passed on the Mac on 2026-11-06. The same run is to be
-repeated on the Windows Surface. Development only: `tools/` never goes into the bundle.
+computer of your own. They passed on the Mac and on the Windows Surface on 2026-11-06.
+Development only: `tools/` never goes into the bundle.
 
 **Read `CLAUDE.md` first.** Every step runs in a sandbox. Never launch CAM in the real
 checkout, whose `local_device_prefs.json` points at real data, and never touch the real
@@ -15,9 +15,9 @@ database.
    already merged, use `main`. In the CAM2 checkout, `git fetch --tags`.
 2. **Run the phase check** from `~/.claude/CLAUDE.md` on Phases 0 to 3 and Phase 4 so far,
    and report back before running anything.
-3. **Run the tests in a sandbox,** as the plan's "Testing safely" section says. On Windows,
-   Node is there, so the skip count should drop: CAM 487 with 0 skipped is expected if Node
-   is installed; CAM2 354.
+3. **Run the tests in a sandbox,** as the plan's "Testing safely" section says. Without
+   Node: CAM 487 with 5 skipped, CAM2 354 with 1 skipped (the Surface has no Node either).
+   With Node, the skip count drops.
 4. **Start the sandboxed CAM.** Add this to `.claude/launch.json` (don't commit it):
 
    ```json
@@ -32,10 +32,9 @@ database.
    On a Mac, use `"runtimeExecutable": "zsh"` and `["tools/browser_check/start_sandbox.sh"]`.
    Then open it in the in-app browser with `preview_start`.
 
-   **`start_sandbox.ps1` was written on the Mac and hasn't run yet** (the Mac's
-   `start_sandbox.sh` and the fixtures were tested on 2026-11-06). Before trusting it,
-   read it, and check its first output line and the sandbox prefs it writes. If it fails,
-   fix it, keeping the same safeguards.
+   **`start_sandbox.ps1` ran on the Windows Surface on 2026-11-06,** after one fix: it now
+   writes the sandbox prefs without a byte-order mark, which CAM can't read. Still check its
+   first output line and the sandbox prefs it writes before clicking anything.
 
    The script copies only tracked files to `%TEMP%\cam-browser-sb`, and makes a venv there
    with exactly `tools/bundle-requirements-windows.txt`. Making that venv is itself a check

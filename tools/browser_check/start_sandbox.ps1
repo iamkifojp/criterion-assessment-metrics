@@ -42,8 +42,13 @@ $Venv = Join-Path $Sandbox "venv"
 $Py = Join-Path $Venv "Scripts\python.exe"
 if (-not (Test-Path $Py)) {
     Invoke-Expression "$Python -m venv `"$Venv`""
+    if ($LASTEXITCODE -ne 0) { throw "venv creation failed" }
     & $Py -m pip install --quiet --disable-pip-version-check --no-deps `
         -r (Join-Path $Repo "tools\bundle-requirements-windows.txt")
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -Recurse -Force $Venv    # so the next start retries
+        throw "pip install of the pinned libraries failed"
+    }
 }
 
 # 4. Sandbox prefs: the data folder is the sandbox's, so Sync runs as on a
@@ -55,7 +60,10 @@ if (Test-Path $Prefs) {
         throw "REFUSING: sandbox prefs point outside the sandbox: $($p.db_custom_path)"
     }
 } else {
-    @{ db_custom_path = $Data; setup_done = $true } | ConvertTo-Json | Set-Content $Prefs -Encoding UTF8
+    # No BOM: Windows PowerShell 5.1's "-Encoding UTF8" adds one, and CAM's
+    # json.load(encoding="utf-8") then rejects the file and drops these prefs.
+    $json = @{ db_custom_path = $Data; setup_done = $true } | ConvertTo-Json
+    [IO.File]::WriteAllText($Prefs, $json, (New-Object Text.UTF8Encoding $false))
 }
 if (-not (Test-Path (Join-Path $Data "acm_database.json"))) {
     Copy-Item (Join-Path $SbRepo "acm_database.json") $Data    # the fictional sample

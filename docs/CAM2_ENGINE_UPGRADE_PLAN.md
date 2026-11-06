@@ -9,7 +9,7 @@ Phase 1 is on CAM2's `main`, tagged `v0.3.2-dev` (`4423090`) and published as a 
 with both downloads on 2026-11-06, and nothing in it is open: the teacher's Appendix A
 trial moved to after the whole upgrade (§6.1). Phases 2, 2W and 3 are on CAM's `main` (see their progress
 notes). Phase 4's code is on the `cam2-upgrade-phase4` branch, pinning the Phase 1 tag;
-its browser matrix passed on the Mac; the same run on Windows and the Windows build are still
+its browser matrix passed on the Mac and on the Windows Surface; the Windows build is still
 to do (see its progress note). Phases 5
 and 6 aren't built yet.
 
@@ -50,8 +50,8 @@ When I ask to start, plan or build a new phase, or when you are about to move on
 ```
 
 **Phase 4 (2026-11-06):** its code is on the `cam2-upgrade-phase4` branch (PR #8). The browser
-matrix passed on the Mac. Still to do: the same browser run on the Windows Surface
-(`tools/browser_check/README.md`) and the Windows build.
+matrix passed on the Mac and on the Windows Surface (2026-11-06). Still to do: the Windows
+build, and one click on a 📁 Browse button to see the Windows folder dialog.
 
 **Where things stand:** Phases 0, 2, 2W and 3 are on CAM's `main`, after a review of each, and
 all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). No new CAM release
@@ -1219,8 +1219,9 @@ the wording without settling everything.
 
 *Done when:* the whole matrix passes. Nothing is released yet.
 
-**Progress, 2026-11-06, on the Mac.** The code is on the `cam2-upgrade-phase4` branch. The
-browser matrix and the Windows build are still to do.
+**Progress, 2026-11-06, on the Mac and the Windows Surface.** The code is on the
+`cam2-upgrade-phase4` branch. The browser matrix passed on both; the Windows build is still
+to do.
 
 - **Pulled:** CAM2 `v0.3.2-dev` (`4423090`) as `exam_grading/`. Its tree hash, `cbf9445`,
   equals the tag's, and the tree before the pull equalled the old pin's, so nothing had been
@@ -1286,6 +1287,32 @@ browser matrix and the Windows build are still to do.
     duplicated nothing.
   - **Not covered:** CAM2's native folder dialog (its "paste a path" box was used), and
     generating a comment through an AI (Phase 6, step 7).
+- **Browser matrix, on the Windows Surface (2026-11-06):** passed, the same run as the Mac's,
+  through `tools/browser_check/start_sandbox.ps1` on Python 3.14.6 with exactly the pinned
+  libraries (so the Windows pins install). The real database's size and timestamp were the
+  same before and after, and nothing in the real data folder changed.
+  - **Tests in a sandbox copy first:** CAM 487 (5 skipped) and CAM2 354 (1 skipped). This
+    Surface has no Node, so the same tests skip as on the Mac.
+  - **Every row of the README's table matched** the Mac's figures: all nine sessions synced;
+    ⏳ awaiting decision in Windows 2 and 3, never a 0; Quiz 1, Choice open, Weighted final,
+    Unit test rubric, Essay, Lab practical, Mixed and V1 upgraded as listed; the term comment
+    prompt with three exam comments and no scores; a 16:9 slide deck through CAM2's real
+    screens (slides found, 24 pictures, names from CAM's class list, a typed report total
+    shown in CAM); the report-card pack; and the workspace drafts, linked with the mouse,
+    restored from CAM's published copy, and exported twice with no duplicates.
+  - **Session folders byte-identical** after every Sync and every Apply and decision, apart
+    from CAM2's `cam2.lock` while it had the slide deck open.
+  - **Fixed on the way:** `start_sandbox.ps1` wrote the sandbox prefs with a byte-order mark
+    (Windows PowerShell 5.1's `-Encoding UTF8`), which CAM's `json.load` rejects, so CAM
+    would have run with no data folder and never synced. It now writes UTF-8 without one,
+    and stops if the venv or the pinned install fails.
+  - **Not covered:** the 📁 Browse buttons' Windows folder dialog (a native window the
+    in-app browser can't see; paths were typed instead), and an AI-generated comment.
+  - **Seen, not caused by Phase 4:** CAM2's "Total on report" box keeps the calculated total
+    in it, so typing appends (13 then 15 gave 1315), and it accepted 1315 on a /20 paper with
+    no warning. One Streamlit log traceback on a static file ("Expected ASGI message
+    'http.response.start'"), with no effect on the page. The term-comment prompt called Sam
+    Chen "Chen", because the sample class sorts names in Japanese register order.
 - **Found in the browser run** (none caused by Phase 4):
   - **Report-card pack: correct as it is (the teacher's decision, 2026-11-06).** Once a student
     has a grade on an exam, the pack lists only the criteria decided. Teachers often assess
@@ -1302,8 +1329,9 @@ browser matrix and the Windows build are still to do.
     `db_custom_path` in the prefs, so a harness that sets only `CAM_DB_PATH` never syncs
     exams. Teachers always have the path set.
 - **Still to do in Phase 4:**
-  - **The same browser run on the Windows Surface** (the teacher's choice), through Claude
-    Code there, with the same sandbox rules.
+  - ~~**The same browser run on the Windows Surface**~~ Done 2026-11-06 (above). Left from
+    it: the teacher clicks a 📁 Browse button once in a sandboxed CAM to see the Windows
+    folder dialog open.
   - **On a Windows computer:** a full build, which runs the pins and licence checks for real,
     then boot it with its embedded Python, CAM2 in host mode, and the `Licences` folder.
 - **For the release (Phases 5 and 6):** attach `pymupdf-2.0.tar.gz` and
