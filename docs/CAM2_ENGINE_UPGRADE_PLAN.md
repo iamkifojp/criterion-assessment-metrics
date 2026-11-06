@@ -31,6 +31,9 @@ over any older memory there.
 2. **Add the phase check to the user-level `~/.claude/CLAUDE.md`,** if it isn't there, creating
    the file if needed and keeping what's already in it. Use the text below.
 3. **Then run that check on Phase 1,** and report back before building anything.
+4. **For Phase 4's browser checks on the Windows Surface** (2026-11-06), follow
+   [tools/browser_check/README.md](../tools/browser_check/README.md): it has the sandbox
+   start script, the fixtures, each check and the results the Mac run got.
 
 ```markdown
 ## Before starting a new phase, check the earlier phases are finished
@@ -47,8 +50,8 @@ When I ask to start, plan or build a new phase, or when you are about to move on
 ```
 
 **Phase 4 (2026-11-06):** its code is on the `cam2-upgrade-phase4` branch (PR #8). The browser
-matrix passed on the Mac. Still to do: the same browser run on the Windows Surface, the Windows
-build, and the teacher's decision on the report-card gap (see Phase 4's browser note).
+matrix passed on the Mac. Still to do: the same browser run on the Windows Surface
+(`tools/browser_check/README.md`) and the Windows build.
 
 **Where things stand:** Phases 0, 2, 2W and 3 are on CAM's `main`, after a review of each, and
 all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). No new CAM release
@@ -1284,9 +1287,10 @@ browser matrix and the Windows build are still to do.
   - **Not covered:** CAM2's native folder dialog (its "paste a path" box was used), and
     generating a comment through an AI (Phase 6, step 7).
 - **Found in the browser run** (none caused by Phase 4):
-  - **Report-card pack, for the teacher to decide:** once a student has any grade on an exam,
-    the pack lists only the decided criteria and drops "awaiting decision" for the rest, so
-    a partly decided exam doesn't show what's still to come. The grade math is consistent.
+  - **Report-card pack: correct as it is (the teacher's decision, 2026-11-06).** Once a student
+    has a grade on an exam, the pack lists only the criteria decided. Teachers often assess
+    one or two criteria per exam, sometimes one for the whole term, so the report should show
+    only what was assessed.
   - **A restored draft loses its partner link.** Links live only in the workspace's own state,
     so on a fresh computer the combined comments come back but the two cards aren't grouped.
     No text is lost.
@@ -1302,7 +1306,6 @@ browser matrix and the Windows build are still to do.
     Code there, with the same sandbox rules.
   - **On a Windows computer:** a full build, which runs the pins and licence checks for real,
     then boot it with its embedded Python, CAM2 in host mode, and the `Licences` folder.
-  - **The teacher's decision** on the report-card gap above.
 - **For the release (Phases 5 and 6):** attach `pymupdf-2.0.tar.gz` and
   `mupdf-1.28.5-source.tar.gz` to CAM's release, as NOTICE.txt says, and mention the licence
   in the release notes.
