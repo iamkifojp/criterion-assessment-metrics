@@ -6861,6 +6861,20 @@ def _render_term_backup_section(prefs: dict) -> None:
     _render_term_restore_confirm(payload, term, sig)
 
 
+# The licence line (D15), in the same words as the bundle's READ ME FIRST.
+ABOUT_LICENCES = (
+    "CAM is free software. The Windows download includes PyMuPDF, so as a whole "
+    "it is licensed under the GNU AGPL version 3. CAM's own code, and CAM2's, are "
+    "under the MIT License. The licences are in the download's **Licences** folder, "
+    "and the source code is at "
+    "<https://github.com/iamkifojp/criterion-assessment-metrics>.\n\n"
+    "CAMは無料のソフトウェアです。Windows版のダウンロードにはPyMuPDFが含まれているため、"
+    "全体としてGNU AGPLバージョン3のもとで提供しています。CAMとCAM2自体のコードは"
+    "MITライセンスです。ライセンスはダウンロードの「Licences」フォルダーにあります。"
+    "ソースコードは <https://github.com/iamkifojp/criterion-assessment-metrics> "
+    "で公開しています。")
+
+
 @st.dialog("⚙ Settings — device & data", width="large")
 def settings_dialog() -> None:
     """Per-device UI prefs + custom (cloud) database path.
@@ -7132,6 +7146,9 @@ def settings_dialog() -> None:
         st.session_state["save_status"] = ("ok", "Database wiped — fresh start.")
         st.session_state["dlg_settings"] = False
         st.rerun()
+
+    with st.expander("About CAM and its licences / ライセンス"):
+        st.markdown(ABOUT_LICENCES)
 
     if st.button("Close", key="set_close"):
         st.session_state["dlg_settings"] = False

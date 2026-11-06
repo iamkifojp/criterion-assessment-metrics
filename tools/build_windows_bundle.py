@@ -19,6 +19,9 @@ import tempfile
 import urllib.request
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bundle_licences  # noqa: E402
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CACHE_DIR = REPO_ROOT / "tools" / ".cache"
@@ -42,6 +45,10 @@ REQUIRED_BUNDLE_FILES = {
     "acm_database.json",
     "app.py",
 }
+# The Licences folder (D15). THIRD-PARTY-NOTICES.txt needs the runtime.
+LICENCE_PATHS = {Path("Licences") / name for name in bundle_licences.LICENCE_FILES}
+THIRD_PARTY_PATH = Path("Licences") / bundle_licences.THIRD_PARTY
+PINS = Path("tools") / "bundle-requirements-windows.txt"
 # CAM2 Exam Grading, vendored at exam_grading/ and started by CAM
 # (engine/exam_bridge.py). Nested, so checked as paths.
 REQUIRED_EXAM_PATHS = {
@@ -49,8 +56,14 @@ REQUIRED_EXAM_PATHS = {
     Path("exam_grading/app.py"),
     Path("exam_grading/engine/__init__.py"),
 }
-# CAM2's development material: its tests, sample-scan tool, plan and reviews.
-EXAM_DEV_PATHS = ("tests", "tools", "doc", "PLAN.md", "AGENTS.md")
+# CAM2's development material: its tests, build and sample tools, plans,
+# reviews and build pins. Its `licences` folder goes too: CAM's own Licences
+# folder covers the whole bundle, CAM2 included.
+EXAM_DEV_PATHS = ("tests", "tools", "doc", "PLAN.md", "AGENTS.md",
+                  "Exam-Section-Plan.md", "Feedback-and-Upgrades.md",
+                  "requirements-build.txt", "licences")
+# CAM's development documents that aren't named *_PLAN.md.
+CAM_DEV_DOCS = ("CAM2_FEEDBACK_FOR_CAM.md",)
 
 
 def run(command: list[str | os.PathLike[str]], *, cwd: Path) -> None:
@@ -79,17 +92,19 @@ def download(url: str, destination: Path) -> Path:
     return destination
 
 
-def stage_head(destination: Path) -> None:
-    """Export committed files only and remove development-only content."""
+def stage_head(destination: Path, source: Path) -> None:
+    """Export committed files only into ``source``, then copy them to
+    ``destination`` without development-only content. ``source`` keeps the
+    build's own inputs (pins, licence texts) as committed."""
     archive = subprocess.run(
         ["git", "archive", "--format=zip", "HEAD"],
         cwd=REPO_ROOT,
         check=True,
         stdout=subprocess.PIPE,
     ).stdout
-    with zipfile.ZipFile(io.BytesIO(archive)) as source:
-        source.extractall(destination)
-
+    with zipfile.ZipFile(io.BytesIO(archive)) as files:
+        files.extractall(source)
+    shutil.copytree(source, destination, dirs_exist_ok=True)
     remove_dev_files(destination)
 
 
@@ -99,6 +114,8 @@ def remove_dev_files(bundle: Path) -> None:
     shutil.rmtree(bundle / "tools", ignore_errors=True)
     for plan in (bundle / "docs").glob("*_PLAN.md"):
         plan.unlink()
+    for name in CAM_DEV_DOCS:
+        (bundle / "docs" / name).unlink(missing_ok=True)
     for name in EXAM_DEV_PATHS:
         path = bundle / "exam_grading" / name
         if path.is_dir():
@@ -133,7 +150,9 @@ def enable_site_packages(runtime: Path) -> None:
     pth.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def install_runtime(bundle: Path, python_version: str) -> None:
+def install_runtime(bundle: Path, python_version: str, pins: Path) -> None:
+    """Embedded Python with exactly the pinned libraries (``--no-deps``, so
+    nothing unpinned arrives), then without pip, which CAM doesn't need."""
     runtime = bundle / "runtime"
     runtime.mkdir()
     archive_name = f"python-{python_version}-embeddable-amd64.zip"
@@ -155,11 +174,34 @@ def install_runtime(bundle: Path, python_version: str) -> None:
             "install",
             "--disable-pip-version-check",
             "--no-warn-script-location",
+            "--no-deps",
             "-r",
-            bundle / "requirements.txt",
+            pins,
         ],
         cwd=bundle,
     )
+    run([python, "-m", "pip", "uninstall", "--yes", "--quiet", "pip"], cwd=bundle)
+
+
+def site_packages(bundle: Path) -> Path:
+    return bundle / "runtime" / "Lib" / "site-packages"
+
+
+def write_bundle_licences(bundle: Path, source: Path, python_version: str,
+                          *, with_runtime: bool) -> None:
+    """The Licences folder, after checking the runtime matches the pins, so
+    the notice is true of what ships (D15)."""
+    pins = bundle_licences.read_pins(source / PINS)
+    found = python_licence = None
+    if with_runtime:
+        found = bundle_licences.installed(site_packages(bundle), root=source)
+        problems = bundle_licences.check(pins, found)
+        if problems:
+            raise RuntimeError("Bundle libraries don't match their notices:\n  "
+                               + "\n  ".join(problems))
+        python_licence = (bundle / "runtime" / "LICENSE.txt").read_text(encoding="utf-8")
+    bundle_licences.write_licences(bundle / "Licences", pins, python_version,
+                                   found, python_licence, root=source)
 
 
 def write_launchers(bundle: Path) -> None:
@@ -280,6 +322,18 @@ folder when the updated app first opens.
 If several computers use the same data folder, update all of them. An older
 CAM can open a database saved by a newer one, but saving from it loses what
 it does not know about.
+
+CAM is free software. This download includes PyMuPDF, so as a whole it is
+licensed under the GNU AGPL version 3. CAM's own code, and CAM2's, are under
+the MIT License. The licences are in the "Licences" folder, and the source
+code is at:
+    https://github.com/iamkifojp/criterion-assessment-metrics
+
+CAMは無料のソフトウェアです。このダウンロードにはPyMuPDFが含まれているため、全体と
+してGNU AGPLバージョン3のもとで提供しています。CAMとCAM2自体のコードはMITライセン
+スです。ライセンスは「Licences」フォルダーにあります。ソースコードは次の場所で公開
+しています：
+    https://github.com/iamkifojp/criterion-assessment-metrics
 """
     (bundle / "READ ME FIRST.txt").write_text(text, encoding="utf-8-sig")
 
@@ -354,8 +408,11 @@ def audit_zip(archive: Path, *, require_runtime: bool) -> None:
         raise RuntimeError(f"Sensitive or unexpected data files found in zip: {joined}")
     missing = REQUIRED_BUNDLE_FILES - {os.fspath(path) for path in files}
     missing |= {path.as_posix() for path in REQUIRED_EXAM_PATHS - files}
-    if require_runtime and Path("runtime/python.exe") not in files:
-        missing.add("runtime/python.exe")
+    missing |= {path.as_posix() for path in LICENCE_PATHS - files}
+    if require_runtime:
+        for path in (Path("runtime/python.exe"), THIRD_PARTY_PATH):
+            if path not in files:
+                missing.add(path.as_posix())
     if missing:
         raise RuntimeError(f"Required bundle files missing: {', '.join(sorted(missing))}")
 
@@ -391,11 +448,14 @@ def main() -> int:
         raise SystemExit("The complete portable bundle must be built on Windows.")
     with tempfile.TemporaryDirectory(prefix="cam-windows-bundle-") as temp:
         bundle = Path(temp) / "CAM-portable"
+        source = Path(temp) / "source"
         bundle.mkdir()
         print("Staging committed files from git archive HEAD...")
-        stage_head(bundle)
+        stage_head(bundle, source)
         if not args.stage_only:
-            install_runtime(bundle, args.python_version)
+            install_runtime(bundle, args.python_version, source / PINS)
+        write_bundle_licences(bundle, source, args.python_version,
+                              with_runtime=not args.stage_only)
         write_launchers(bundle)
         write_readme(bundle)
         copy_quick_guide(bundle, args.quick_guide)

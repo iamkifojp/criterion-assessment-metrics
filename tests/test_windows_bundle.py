@@ -43,7 +43,12 @@ class WindowsBundleTests(unittest.TestCase):
             self.assertIn("MsgBox", vbs)
             self.assertIn("--server.port 8600", bat)
             self.assertIn("--server.headless true", bat)
-            self.assertIn("Extract All", (bundle / "READ ME FIRST.txt").read_text(encoding="utf-8-sig"))
+            readme = (bundle / "READ ME FIRST.txt").read_text(encoding="utf-8-sig")
+            self.assertIn("Extract All", readme)
+            # The licence line, in English and Japanese (D15).
+            self.assertIn("GNU AGPL version 3", readme)
+            self.assertIn("GNU AGPLバージョン3", readme)
+            self.assertIn('"Licences" folder', readme)
 
     def test_audit_rejects_sensitive_file_at_any_depth(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -81,9 +86,15 @@ class WindowsBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "exam_grading/launcher.py"):
                 builder.audit_zip(archive, require_runtime=True)
 
-            for path in builder.REQUIRED_EXAM_PATHS:
+            for path in builder.REQUIRED_EXAM_PATHS | builder.LICENCE_PATHS:
                 (bundle / path).parent.mkdir(parents=True, exist_ok=True)
                 (bundle / path).write_bytes(b"sample")
+            archive = builder.make_zip(bundle, root, "test")
+            with self.assertRaisesRegex(RuntimeError, "THIRD-PARTY-NOTICES"):
+                builder.audit_zip(archive, require_runtime=True)
+            builder.audit_zip(archive, require_runtime=False)
+
+            (bundle / builder.THIRD_PARTY_PATH).write_bytes(b"sample")
             archive = builder.make_zip(bundle, root, "test")
             builder.audit_zip(archive, require_runtime=True)
 
@@ -94,13 +105,21 @@ class WindowsBundleTests(unittest.TestCase):
                         "exam_grading/tests/test_a.py", "exam_grading/tools/scans.py",
                         "exam_grading/doc/review.md", "exam_grading/PLAN.md",
                         "exam_grading/AGENTS.md", "exam_grading/launcher.py",
-                        "exam_grading/engine/__init__.py", "exam_grading/README.md"):
+                        "exam_grading/engine/__init__.py", "exam_grading/README.md",
+                        "exam_grading/Exam-Section-Plan.md",
+                        "exam_grading/Feedback-and-Upgrades.md",
+                        "exam_grading/requirements-build.txt",
+                        "exam_grading/licences/NOTICE.txt",
+                        "exam_grading/licences/AGPL-3.0.txt",
+                        "exam_grading/LICENSE",
+                        "docs/CAM2_FEEDBACK_FOR_CAM.md"):
                 (bundle / rel).parent.mkdir(parents=True, exist_ok=True)
                 (bundle / rel).write_text("x")
             builder.remove_dev_files(bundle)
             left = sorted(p.relative_to(bundle).as_posix()
                           for p in bundle.rglob("*") if p.is_file())
-            self.assertEqual(left, ["docs/USER_MANUAL.md", "exam_grading/README.md",
+            self.assertEqual(left, ["docs/USER_MANUAL.md", "exam_grading/LICENSE",
+                                    "exam_grading/README.md",
                                     "exam_grading/engine/__init__.py",
                                     "exam_grading/launcher.py"])
 

@@ -122,4 +122,16 @@ live in a local or cloud folder you point CAM at via
 
 ## License
 
-Released under the [MIT License](LICENSE).
+CAM's own code is released under the [MIT License](LICENSE), and so is CAM2
+Exam Grading, which CAM includes in `exam_grading/`.
+
+The Windows download also includes PyMuPDF, which CAM uses under the GNU AGPL
+version 3, so the download as a whole is licensed under the
+[AGPL](exam_grading/licences/AGPL-3.0.txt). Its `Licences` folder lists every
+library in it with its version and licence, and holds their licence texts. The
+exact libraries are pinned in
+[tools/bundle-requirements-windows.txt](tools/bundle-requirements-windows.txt).
+
+CAMは無料のソフトウェアです。CAMとCAM2自体のコードはMITライセンスです。Windows版の
+ダウンロードにはPyMuPDFが含まれているため、全体としてGNU AGPLバージョン3のもとで提供
+しています。ライセンスはダウンロードの「Licences」フォルダーにあります。
