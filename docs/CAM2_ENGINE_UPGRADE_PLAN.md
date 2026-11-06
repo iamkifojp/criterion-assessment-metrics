@@ -76,9 +76,16 @@ didn't build it, and it decides whether the free Mac route works at all.
   check it before, as none has used a digital grading system in Japanese.
 - **The level buttons that move after a grade** are fixed in the next CAM2 update, so
   they reach CAM with the second pull.
-- **Still not run, and not decided:** a CAM2 exam's row in a downloaded report (Phases 2
-  and 3), and restoring and linking drafts in the browser (Phase 2W). Phase 4's browser
-  checks can cover them.
+- **Browser checks wait until Phase 4's code is in (decided 2026-11-06).** The teacher
+  won't run CAM2 again until this upgrade is done, so the checks not yet run, a CAM2 exam's
+  row in a downloaded report (Phases 2 and 3) and restoring and linking drafts in the
+  browser, with the mouse (Phase 2W), join Phase 4's sandbox browser run, after its code.
+- **Older CAM2 comments over the new limits stay as they are (decided 2026-11-06).** Only
+  colleagues testing CAM2 have any, and they can shorten them. Nothing in CAM changes:
+  the workspace's comments have no limit, and the term comment takes drafts and
+  assignments whole (`engine/exam_feedback.py`).
+- **Google's 16:10 slide size goes in the next CAM2 update (decided 2026-11-06),** with
+  the level buttons (§6.1).
 
 **Decisions made since v6 that later phases rely on:**
 
@@ -1183,13 +1190,20 @@ the wording without settling everything.
 - Read CAM2's adjusted report figures in `read_session`, and show them beside the calculated
   ones (see Phase 3's progress note).
 - `python tools/run_all_tests.py` passes, including with PyMuPDF 2.0.
+- **PyMuPDF for the bundle is 2.0,** as CAM2's tag pins and its release's source archive
+  matches. 2.1 also installs `pymupdf_layout`, `pymupdf4llm`, onnxruntime, numpy and
+  networkx, which nothing in CAM or CAM2 uses, so moving to it is a separate decision
+  with its own licence check.
 - Sandbox end to end with `exam_grading/tools/make_sample_exam.py` and a real browser:
   marks; rubric with and without final levels; levels on one criterion across many
   questions; marks ticked on a criterion; a 16:9 slide deck; mixed from both starting
   choices; weighted;
   choice groups; and a v1 session upgraded mid-grading. Each must Sync, be decided in
   Window 3 or carried by Apply, and show in Windows 2 and 3, leaving session folders
-  byte-identical after Sync. Its comments must reach the term comment prompt.
+  byte-identical after Sync. Its comments must reach the term comment prompt. **Also run
+  the checks left from earlier phases:** a CAM2 exam's row in a downloaded report, and
+  restoring and linking drafts in the workspace with the mouse. This run comes after
+  Phase 4's code, since the teacher runs CAM2 only once the upgrade is done.
 - **On a Windows computer:** build the bundle and boot it with its embedded Python. CAM
   starts, CAM2 opens in host mode and sends to CAM, and the `Licences` folder is there.
 
@@ -1328,6 +1342,8 @@ upgrade.
 | **F9 to F15** | Nothing. Comparing exams over time stays in CAM (F14) |
 | **The Appendix A trial** (moved from Phase 1, 2026-11-06) | Nothing. The teacher tries the Apps Script route on a small real assignment once this upgrade is released. Anything it needs goes in a later CAM2 tag |
 | **Level buttons that move after a grade** (CAM2's `PLAN.md`) | Nothing. The fix goes in the next CAM2 update and reaches CAM with the second pull |
+| **Google's 16:10 slide size** (Phase 1's progress note, decided 2026-11-06) | Nothing. CAM2 detects it and gets a button in the next update, and it reaches CAM with the second pull. Until then a 16:10 deck can use Slide 16:9 |
+| **Older comments over the new limits** (Phase 1's progress note, decided 2026-11-06) | Nothing. Left as is: only colleagues testing CAM2 have any |
 
 **The second pull:** change CAM2, tag it, and `git subtree pull`. Add the F2 note fields to
 `test_exam_bridge.py` with it. Release notes repeat the "update every computer first"
