@@ -51,7 +51,7 @@ When I ask to start, plan or build a new phase, or when you are about to move on
 
 **Phase 4 (2026-11-06):** its code is on the `cam2-upgrade-phase4` branch (PR #8). The browser
 matrix passed on the Mac and on the Windows Surface (2026-11-06). Still to do: the Windows
-build, and one click on a 📁 Browse button to see the Windows folder dialog.
+build.
 
 **Where things stand:** Phases 0, 2, 2W and 3 are on CAM's `main`, after a review of each, and
 all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). No new CAM release
@@ -1306,8 +1306,11 @@ to do.
     (Windows PowerShell 5.1's `-Encoding UTF8`), which CAM's `json.load` rejects, so CAM
     would have run with no data folder and never synced. It now writes UTF-8 without one,
     and stops if the venv or the pinned install fails.
-  - **Not covered:** the 📁 Browse buttons' Windows folder dialog (a native window the
-    in-app browser can't see; paths were typed instead), and an AI-generated comment.
+  - **📁 Browse, checked by the teacher:** the in-app browser can't see a native window, so
+    paths were typed in the run. Afterwards the teacher clicked 📁 Browse in Add / Edit class
+    in the sandboxed CAM: the Windows "Choose this class's master directory" dialog opened at
+    the sandbox's `scans\master` folder.
+  - **Not covered:** an AI-generated comment (Phase 6, step 7).
   - **Seen, not caused by Phase 4:** CAM2's "Total on report" box keeps the calculated total
     in it, so typing appends (13 then 15 gave 1315), and it accepted 1315 on a /20 paper with
     no warning. One Streamlit log traceback on a static file ("Expected ASGI message
@@ -1329,9 +1332,8 @@ to do.
     `db_custom_path` in the prefs, so a harness that sets only `CAM_DB_PATH` never syncs
     exams. Teachers always have the path set.
 - **Still to do in Phase 4:**
-  - ~~**The same browser run on the Windows Surface**~~ Done 2026-11-06 (above). Left from
-    it: the teacher clicks a 📁 Browse button once in a sandboxed CAM to see the Windows
-    folder dialog open.
+  - ~~**The same browser run on the Windows Surface**~~ Done 2026-11-06 (above),
+    including the 📁 Browse folder dialog, checked by the teacher.
   - **On a Windows computer:** a full build, which runs the pins and licence checks for real,
     then boot it with its embedded Python, CAM2 in host mode, and the `Licences` folder.
 - **For the release (Phases 5 and 6):** attach `pymupdf-2.0.tar.gz` and
