@@ -15,6 +15,7 @@ import base64
 import io
 import os
 import threading
+from copy import deepcopy
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
@@ -26,7 +27,7 @@ from engine.pickers import documents_folder, open_in_file_manager, pick_folder, 
 from engine.slicer import Layout
 
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
-VERSION = "0.3.2-dev"
+VERSION = "0.3.2-dev-cam.1"
 
 
 def create_app(state: AppState | None = None, shutdown=None) -> Flask:
@@ -665,17 +666,20 @@ def create_app(state: AppState | None = None, shutdown=None) -> Flask:
         sid = str(data.get("student_id"))
         workflow.find_student(state.config, sid)
         with state.lock:
+            current = state.grades.get("overall", {}).get(sid, {})
+            edited = {"overall": {sid: deepcopy(current)}}
             if "comment" in data:
-                grading_summary.set_overall_comment(state.grades, sid, data.get("comment"))
+                grading_summary.set_overall_comment(edited, sid, data.get("comment"))
             if "report_total" in data:
                 value = data.get("report_total")
-                grading_summary.set_report_total(state.grades, sid, None if value in ("", None) else value)
+                grading_summary.set_report_total(state.config, edited, sid, None if value == "" else value)
             if "report_percent" in data:
                 value = data.get("report_percent")
-                grading_summary.set_report_percent(state.grades, sid, None if value in ("", None) else value)
+                grading_summary.set_report_percent(edited, sid, None if value == "" else value)
             for rid, level in (data.get("final_levels") or {}).items():
-                grading_summary.set_final_level(state.config, state.grades, sid, rid,
+                grading_summary.set_final_level(state.config, edited, sid, rid,
                                                 None if level in ("", None) else level)
+            state.grades.setdefault("overall", {})[sid] = edited["overall"][sid]
             state.save_grades()
         return ok()
 

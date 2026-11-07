@@ -488,7 +488,7 @@ def student_summary(config: dict, grades_data: dict, student_id: str) -> dict:
     return result
 
 
-def _override_number(value):
+def _override_number(value, maximum):
     """A number a teacher typed over a calculated one (None = no override)."""
     if value is not None:
         if isinstance(value, str):
@@ -496,23 +496,27 @@ def _override_number(value):
                 value = float(value.strip())
             except ValueError:
                 raise UserError("report_total_invalid", value=value)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise UserError("report_total_invalid", value=value)
+        if not 0 <= value <= maximum:
+            raise UserError("report_value_out_of_range", max=maximum)
         if isinstance(value, float) and value.is_integer():
             value = int(value)
     return value
 
 
-def set_report_total(grades_data: dict, student_id: str, value) -> dict:
+def set_report_total(config: dict, grades_data: dict, student_id: str, value) -> dict:
     """Total printed on this student's report (None = use the calculated one)."""
-    grades_data.setdefault("overall", {}).setdefault(student_id, {})["report_total"] = _override_number(value)
+    total = _override_number(value, marks_maximum(config))
+    grades_data.setdefault("overall", {}).setdefault(student_id, {})["report_total"] = total
     return grades_data
 
 
 def set_report_percent(grades_data: dict, student_id: str, value) -> dict:
     """With weighting on, the percentage printed on this student's report takes
     the place of the total (None = use the calculated one)."""
-    grades_data.setdefault("overall", {}).setdefault(student_id, {})["report_percent"] = _override_number(value)
+    percent = _override_number(value, 100)
+    grades_data.setdefault("overall", {}).setdefault(student_id, {})["report_percent"] = percent
     return grades_data
 
 

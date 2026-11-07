@@ -181,17 +181,17 @@ class MarksTests(unittest.TestCase):
         config, grades = marks_exam()
         for qid in ("q1", "q2", "q3", "q4"):
             gs.set_grade(config, grades, "s1", qid, 5)
-        gs.set_report_total(grades, "s1", 22)
+        gs.set_report_total(config, grades, "s1", 22)
         marks = gs.student_summary(config, grades, "s1")["marks"]
         self.assertEqual((marks["total"], marks["report_total"], marks["adjusted"]),
                          (20, 22, True))
-        gs.set_report_total(grades, "s1", None)
+        gs.set_report_total(config, grades, "s1", None)
         self.assertFalse(gs.student_summary(config, grades, "s1")["marks"]["adjusted"])
-        gs.set_report_total(grades, "s1", " 21 ")                   # typed in a text box
+        gs.set_report_total(config, grades, "s1", " 21 ")           # typed in a text box
         self.assertEqual(gs.student_summary(config, grades, "s1")["marks"]["report_total"], 21)
-        for bad in ("abc", -1, True):
+        for bad in ("abc", -1, True, "nan", 34):
             with self.assertRaises(UserError, msg=bad):
-                gs.set_report_total(grades, "s1", bad)
+                gs.set_report_total(config, grades, "s1", bad)
 
 
 class RubricTests(unittest.TestCase):
@@ -548,7 +548,7 @@ class WeightingTests(unittest.TestCase):
     def test_report_percent_replaces_the_total_override(self):
         config, grades = paper(([("a", 25, [])], 50), ([("b", 40, [])], 50), weighted=True)
         give(config, grades, a=22, b=30)
-        gs.set_report_total(grades, "s1", 60)                       # no effect with weighting on
+        gs.set_report_total(config, grades, "s1", 60)               # no effect with weighting on
         marks = gs.student_summary(config, grades, "s1")["marks"]
         self.assertEqual((marks["report_percent"], marks["adjusted"]), (81.5, False))
         gs.set_report_percent(grades, "s1", "85")

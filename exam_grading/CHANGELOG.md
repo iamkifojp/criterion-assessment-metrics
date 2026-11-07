@@ -4,6 +4,18 @@ All notable changes to CAM2 are listed here, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are
 year-month-day.
 
+## [0.3.2-dev-cam.1] - 2026-11-08
+
+- **Editing report values.** The calculated number appears as a hint in the
+  override field, and focusing an existing override selects it for replacement.
+  Report totals must be within the paper's marks and weighted report percentages
+  must be between 0 and 100. The warning leaves the last saved value intact.
+  Session files still use version 2. Existing overrides can be cleared or
+  replaced from Step 5.
+- **Checked on fictional data.** All 354 tests passed. A Windows Edge check
+  covered typing over the hint, replacing a saved override, clearing it, and
+  rejecting an out-of-range total and percentage.
+
 ## [0.3.2-dev] - 2026-11-06
 
 A test build with slide pages and limits on comment length. Sessions stay at

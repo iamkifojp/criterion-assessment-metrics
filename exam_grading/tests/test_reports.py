@@ -72,7 +72,7 @@ class MarksReportTests(ReportTestCase):
         g("s001", "q2", 2)
         g("s001", "q3", 3)                         # choice: q3 counts, q2 doesn't
         g("s002", "q1", model.NOT_ANSWERED)
-        gs.set_report_total(self.grades, "s001", 8)
+        gs.set_report_total(self.config, self.grades, "s001", 8)
         gs.set_overall_comment(self.grades, "s001", "A strong paper. 次も頑張りましょう。")
 
     def test_report_content(self):
