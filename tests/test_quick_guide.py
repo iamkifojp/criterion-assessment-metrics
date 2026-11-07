@@ -8,12 +8,13 @@ from tools import build_quick_guide as guide
 
 
 class QuickGuideTests(unittest.TestCase):
-    def test_production_guide_has_seven_task_pages_and_local_images(self):
+    def test_production_guide_has_eight_task_pages_and_local_images(self):
         document, pages = guide.render_markdown(guide.DEFAULT_SOURCE)
 
-        self.assertEqual(pages, 7)
-        self.assertEqual(document.count('<section class="task">'), 7)
-        self.assertIn("Task 7 of 7", document)
+        self.assertEqual(pages, 8)
+        self.assertEqual(document.count('<section class="task">'), 8)
+        self.assertIn("Task 8 of 8", document)
+        self.assertIn("Get started on a Mac", document)
         self.assertNotIn('src="quick_guide_images/', document)
 
         for target in guide.DEFAULT_SOURCE.parent.joinpath(
