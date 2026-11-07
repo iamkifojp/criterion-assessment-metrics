@@ -147,11 +147,12 @@ still loads the file (it would drop these keys on its next save).
 | `counted` | [label] | Questions that count after CAM2's choice groups (best N or teacher picks). |
 | `complete` | `false` | Present only when a question is ungraded or a teacher-picks choice is open. |
 | `levels` | {label: {rubric id: level \| `"not_answered"`}} | Each rubric question's level per criterion. Evidence for the teacher, never a grade. Keys must be strings. |
-| `final_levels` | {rubric id: int} | Final level per rubric. The current CAM2 pin gives the teacher's, else its round-half-up suggestion; newer CAM2 gives only a typed one. Keys must be strings. Not range-checked to 0–8, since a CAM2 rubric may run to 100. Window 1 maps each rubric to a CAM criterion (C.8) and scales a rubric whose maximum is not 8. |
+| `final_levels` | {rubric id: int} | Final levels explicitly typed in CAM2. Keys must be strings. The level uses the rubric's scale. Window 1 maps the rubric to a CAM criterion (C.8) and scales a typed level to 0–8 when needed. |
 | `question_comments` | {label: str} | The comment written on each question. |
 | `percent` | number | CAM2's overall percentage of the marks, weighted when `weighted` is set. CAM never bands from it. Absent when the paper has no marks. |
 | `weighted` | `true` | CAM2's weighting applies to this paper's marks. Present only when it does. |
 | `criterion_marks` | {rubric id: {`total`, `max`, `percent`}} | Each criterion's marks as CAM2 reports them. Never a grade. Reaches CAM from CAM2 session version 2. |
+| `report_total`, `report_percent` | number | Adjusted figures typed for the CAM2 report. CAM shows them alongside the corresponding calculated figures. |
 
 With no marks questions `total` and `max_total` are 0. Labels are CAM2 question
 labels (unique within an exam); rubric ids are CAM2's (`r1`, …), with names in

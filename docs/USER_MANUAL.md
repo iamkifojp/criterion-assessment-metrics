@@ -109,8 +109,8 @@ exams are graded in CAM2 instead (see [Grading exam papers](#grading-exam-papers
 
 ## Grading exam papers
 
-Scanned paper exams are graded in **CAM2 Exam Grading**, which comes with CAM
-and opens in its own browser tab. CAM2 does the scans, the question boxes and
+**CAM2 Exam Grading** handles scanned papers and PDFs exported from slides.
+It comes with CAM and opens in its own browser tab. CAM2 handles the question boxes and
 the grading; CAM brings the results into the gradebook. This section walks the
 whole loop.
 
@@ -151,7 +151,13 @@ points are:
   Then click **✓ Grading finished — send to CAM**.
 
 Every grade is saved the moment you give it. You can close CAM2 and come back
-with **🛠 Exam setup / Grade**; it reopens at the same question and paper.
+with **🛠 Exam setup / Grade**. It reopens at the same question and paper.
+
+**Before opening existing exams after the upgrade, update every computer**
+that shares the data folder, including any standalone CAM2 used with it.
+Opening an older exam upgrades its session. If CAM2 reports
+`file_from_newer_version`, update the app on that computer before reopening
+the exam. Keep a backup of the gradebook and the class `exams/` folders.
 
 ### 3 · Bring the results into the gradebook (Window 1)
 
@@ -162,24 +168,32 @@ last read, so an exam sent in the meantime is brought in the next time CAM
 looks. The results appear in Window 1's **📝 Exam grading** panel and in each
 student's marks list in Window 3, with every question's mark (or Not answered),
 which choice answers counted and the comment. If you change grades in CAM2
-afterwards, click **Send again**; grades you already applied in CAM are kept.
+afterwards, click **Send again**. Sync refreshes the evidence and keeps your
+gradebook decisions.
 
 The top of the panel says where the exam stands, for example
 *📨 Sent from CAM2 Nov 01 10:42 · in CAM since Nov 01 10:42*, or *Not sent from
 CAM2 yet*. **🔄 Check CAM2 now** reads the exam folder again straight away.
 
-- **Marks exam.** The panel shows each student's raw total (`31/45`) and a 0–8
-  grade, suggested in proportion to the total. Pick the criterion it counts
-  toward, adjust any grade, and click **Apply grades to gradebook**.
-- **Rubric exam.** Each CAM2 rubric is mapped to a CAM criterion (a rubric
-  named "Criterion B" or "基準B" is mapped to B for you; the choice is
-  remembered per exam). Each student's final level per rubric, as worked out in
-  CAM2, is shown to confirm or adjust. A rubric whose top level is not 8 (for
-  example 0–4) is scaled to 0–8. **Apply grades to gradebook** writes one grade per mapped criterion.
+- **Plain marks exam.** Choose a criterion in Window 1, use the raw total and
+  weighted percentage (if set) as evidence, and enter the 0–8 grade yourself.
+  Click **Apply grades to gradebook** to save your choices. The grade field
+  starts blank for each student without a saved grade.
+- **Rubrics or marks linked to criteria.** Map each CAM2 rubric to a CAM
+  criterion in Window 1. Several rubrics can map to the same criterion.
+  Select a student in Window 2 and open the exam in Window 3 to see the
+  question levels, marks and comments grouped by criterion. Choose one 0–8
+  grade for each criterion you assessed.
+- **Final levels typed in CAM2.** Window 1 previews which grades Apply can fill
+  or update. CAM scales a typed final level to 0–8 if the rubric uses a
+  different scale. If two typed levels map to the same criterion, decide in
+  Window 3. Use **No grade** in Window 3 to remove an existing grade.
 
-A paper that is not finished in CAM2 (an ungraded question, or a choice still
-waiting for you to pick) shows as **not finished** and is left out of the class
-average until you finish it and send again.
+A paper with an ungraded question or an open choice group shows as
+**not finished**. Finish it in CAM2 and send again before deciding the grade.
+A received exam awaiting your decision is excluded from the grade calculation.
+If you typed a different total or percentage for the CAM2 report, CAM shows it
+beside the calculated result.
 
 **Matching a leftover paper (🧩).** A paper you did not match to a student in
 CAM2 is never turned into a new student. It waits in a pool, and every student
@@ -207,6 +221,19 @@ Exams graded in the old grading workspace keep their results and grades in CAM.
 The old exam screens are gone, and an old exam export CSV left in a class
 folder is ignored (and refused by **Upload & stage files**). Grade new exams
 in CAM2.
+
+### Exam feedback in term comments
+
+Window 3 includes each exam's overall and question comments when it builds a
+term comment prompt. The exam feedback block contains comments only. If there
+is too much material, CAM keeps the overall comments and tells you how many
+whole question comments it left out. Review the prompt before sending it to
+your chosen AI service.
+
+Use **Draft — comments only** for draft work in the grading workspace.
+Changing a tick or a deadline preserves typed comments. Linking partners
+combines their ticks and comments and shares the first graded member's grade
+when the work is graded.
 
 ---
 

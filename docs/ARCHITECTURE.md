@@ -672,13 +672,16 @@ since) with a **🔄 Check CAM2 now** button (`sync_exam`). CAM2 cannot see
 whether CAM has read a send: that would need CAM to write into the session
 folder, which it never does.
 
-**Grading onto criteria (Window 1).** A marks exam is banded from its total onto
-one criterion (`_apply_exam_bands`, proportional suggestion, teacher's pick).
-A rubric exam maps each CAM2 rubric to a CAM criterion (defaulted from the
-rubric's name, remembered in `exam_sessions`), and each student's final level
-per rubric becomes that criterion's score (`_apply_exam_rubric_levels`); a
-rubric whose top level is not 8 is scaled to 0–8. A paper not finished in CAM2
-(`complete` false) is held back from both. Per-exam CAM2 state (folder, mode,
+**Grading onto criteria.** For a plain marks exam, the teacher chooses grades
+in Window 1 (`_apply_exam_bands`). The dropdowns show saved grades or start
+blank. The bridge preserves raw and weighted marks and keeps any teacher
+adjustment to the report figures separately. For rubric or mixed exams and
+marks linked to criteria, Window 1 maps rubrics to CAM criteria and Window 3
+groups the evidence for one teacher decision per criterion. Window 1's Apply
+carries over unambiguous final levels typed in CAM2
+(`_apply_exam_rubric_levels`), scaling them to 0–8 when needed. Sync refreshes
+the evidence. Apply previews updates and respects teacher-entered grades.
+Unfinished papers are held back. Per-exam CAM2 state (folder, mode,
 rubrics, rubric → criterion map, paper ids) lives in the persisted
 `exam_sessions` map (DATA_DICTIONARY C.8), not on `Assignment`, so an older CAM
 still loads the database. Window 2's 🧩 tiles and Window 1's name-crop check use

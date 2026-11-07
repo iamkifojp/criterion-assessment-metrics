@@ -8,10 +8,12 @@ Q4's trial set the F6 wording in Phase 3. The smaller points
 Phase 1 is on CAM2's `main`, tagged `v0.3.2-dev` (`4423090`) and published as a pre-release
 with both downloads on 2026-11-06, and nothing in it is open: the teacher's Appendix A
 trial moved to after the whole upgrade (§6.1). Phases 2, 2W and 3 are on CAM's `main` (see their progress
-notes). Phase 4's code is on the `cam2-upgrade-phase4` branch, pinning the Phase 1 tag;
-its browser matrix passed on the Mac and on the Windows Surface, and the Windows build was
-built and booted there (see its progress note). Phases 5
-and 6 aren't built yet.
+notes). Phase 4 merged in PR #8, pinning the Phase 1 tag. Its browser matrix
+passed on the Mac and on the Windows Surface. The Windows bundle was built and
+booted there, and PR #9 excluded the remaining developer files.
+Phase 4M targets an Apple Silicon app ZIP with the Open Anyway workflow.
+Phase 5's exam guidance and draft release notes are in progress. Phase 6 is
+the separate real-data rollout.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -19,21 +21,16 @@ added D17. v5 added the Apps Script route (Appendix A).
 
 ## Picking up on another computer
 
-Written 2026-11-06, for the next session on the Mac. A session's chat and memory stay on the
-computer they ran on, so this is what the next session needs. Trust this plan and the repos
-over any older memory there.
+Updated 2026-11-07 for the next session on the Mac. Open the CAM repository
+in Codex and check `git status` before updating. With a clean checkout, switch
+to `main` and run `git pull --ff-only`. The pinned CAM2 engine is already in
+`exam_grading/`, so the runtime probe only needs the CAM checkout.
 
-**Do these first:**
+Read [Phase 4M](#phase-4m--cam-apple-silicon-app-zip-d18) and start with its
+runtime probe. For later testing of CAM itself, use the sandbox instructions
+below and the [browser check fixtures](../tools/browser_check/README.md).
 
-1. **Update both repos.** Run `git status` first, and don't overwrite local changes. Then
-   `git switch main` and `git pull --ff-only` in the CAM and CAM2 checkouts. This only updates
-   code. Don't launch anything yet.
-2. **Add the phase check to the user-level `~/.claude/CLAUDE.md`,** if it isn't there, creating
-   the file if needed and keeping what's already in it. Use the text below.
-3. **Then run that check on Phase 1,** and report back before building anything.
-4. **For Phase 4's browser checks on the Windows Surface** (2026-11-06), follow
-   [tools/browser_check/README.md](../tools/browser_check/README.md): it has the sandbox
-   start script, the fixtures, each check and the results the Mac run got.
+The phase check agreed for development is recorded here:
 
 ```markdown
 ## Before starting a new phase, check the earlier phases are finished
@@ -49,15 +46,16 @@ When I ask to start, plan or build a new phase, or when you are about to move on
 **Why:** when I moved on to later phases with issues still open in earlier ones, the problems piled up and took a long review to untangle.
 ```
 
-**Phase 4 (2026-11-06):** its code is on the `cam2-upgrade-phase4` branch (PR #8). The browser
-matrix passed on the Mac and on the Windows Surface, and the Windows build was built and
-booted on the Surface (2026-11-06). All of Phase 4's checks are done.
+**Phase 4 (2026-11-06):** merged into `main` in PR #8. The browser matrix passed
+on Mac and on the Windows Surface, where the Windows build was built and
+booted. PR #9 removed the remaining developer-only files from the bundle.
 
-**Where things stand:** Phases 0, 2, 2W and 3 are on CAM's `main`, after a review of each, and
-all tests pass on Windows (CAM 473 with 8 skipped until Phase 4, CAM2 216). No new CAM release
-(D18). Phase 1 is tagged and out as CAM2's `v0.3.2-dev` pre-release (updated 2026-11-06),
-so Phase 4 can start once the rest of Phase 1 is finished or knowingly left open. CAM's tests
-also pass on the Mac (473 with 13 skipped: the 8 waiting for Phase 4, and 5 that need Node).
+**Where things stand, 2026-11-07:** Phases 0 through 4, including 2W, are
+complete for this upgrade. On Windows, the sandbox check of CAM `main` at
+`2f71e53` passed 487 CAM and 354 vendored-engine tests in the development
+environment. The Windows stage-only ZIP audit also passed. The full Windows
+bundle needs a new smoke test from the final release commit. The latest CAM
+release is still `v2026.11.01`.
 
 **Still open in Phase 1:**
 
@@ -72,8 +70,9 @@ also pass on the Mac (473 with 13 skipped: the 8 waiting for Phase 4, and 5 that
 | ~~Make the `v0.3.2-dev` pre-release~~ Done 2026-11-06: both zips, the sample exams and the two source archives | |
 | ~~Share the build with colleagues~~ Done: colleagues are using the test builds, largely without problems | |
 
-**Also worth doing on the Mac:** Phase 4M's Gatekeeper check needs a download on a Mac that
-didn't build it, and it decides whether the free Mac route works at all.
+**Next on the Mac:** Build the Phase 4M runtime probe and check that a
+browser-downloaded copy can start its bundled Python and child process
+after the app's Open Anyway approval.
 
 **The teacher's decisions on what was still open (2026-11-06):**
 
@@ -576,10 +575,10 @@ Numbering continues from the convergence plan. D10–D15 were locked by the teac
   remains the alternative if the AGPL ever becomes unsuitable.
 - **D18 · No new release until the upgrade is finished.** Decided by the teacher on
   2026-11-05. There is no separate licence-only release, so the Licences folder promised
-  on the `v2026.11.01` release page arrives with the upgrade. That release is then
-  published with Mac and Windows binaries of **both CAM and CAM2**.
-  - CAM2 already builds both. CAM's bundle is Windows only today
-    (`tools/build_windows_bundle.py`), so the teacher's choice of a Mac CAM adds Phase 4M.
+  on the `v2026.11.01` release page arrives with the upgrade. The CAM release
+  includes a Windows portable ZIP and an Apple Silicon app ZIP.
+  - Standalone CAM2 already has Windows and Mac downloads for the pinned tag.
+    CAM's builder is currently Windows-only, so Phase 4M covers CAM's Mac bundle.
   - The July releases were deleted on 2026-11-05 and their tags kept, so `v2026.11.01` is
     the only CAM release until then.
 
@@ -1361,28 +1360,61 @@ built and booted on the Surface.
   `mupdf-1.28.5-source.tar.gz` to CAM's release, as NOTICE.txt says, and mention the licence
   in the release notes.
 
-### Phase 4M — CAM: a Mac binary · M–L (D18)
+### Phase 4M — CAM: Apple Silicon app ZIP (D18)
 
-Scoped from reading the code. None of it has been built or tried. Apple Silicon only, as
-CAM2 decided, since there's no Intel Mac to build and test on.
+**Packaging decision, 2026-11-07.** Use the free distribution workflow already
+used by standalone CAM2. Ship one ad hoc signed `CAM.app` in a ZIP. Download,
+extract and try to open the app in Finder, then approve it under **System
+Settings → Privacy & Security → Open Anyway**. This app-specific approval is
+the release path. Developer ID and notarisation are outside the release scope.
+Managed Macs may restrict the approval.
+[Apple's Open Anyway instructions](https://support.apple.com/en-gb/102445)
 
-- **Check Gatekeeper first; this is the main risk.** CAM2 needs "Open Anyway" once
-  because PyInstaller packs it into one signed app. CAM can't copy that: it starts the
-  workspace and CAM2 as separate Python processes through `sys.executable`
-  (`app.py:2833`, `exam_bridge.py:280`), so it needs a real Python inside the download,
-  as Windows has, along with hundreds of compiled libraries. If a downloaded copy makes
-  the Mac object to each of those, the free route won't work. Try it early with a small
-  unsigned download on a Mac that didn't build it. If it fails, the choices are Apple's
-  paid signing and notarising (US$99 a year, the teacher's decision), or staying on
-  running from source.
-- **A new `tools/build_mac_bundle.py`**, sharing what it can with the Windows tool. Python
-  has no embeddable Mac download, so this needs a relocatable build such as
-  python-build-standalone, and `requirements.txt` installed into it. The `._pth` path
-  rules become an explicit `sys.path` set-up in the launcher, keeping `exam_grading` off
-  the path as today.
-- **A Mac launcher**, replacing `Start CAM.vbs` and the troubleshooting `.bat`: start
-  Streamlit headless on port 8600, wait for its health check, open the browser, and write
-  `logs/cam.log`, plus a READ ME FIRST with Mac steps, modelled on CAM2's.
+CAM launches the vendored CAM2 code and the grading workspace with
+`sys.executable`. The app includes their Python runtime and libraries. A
+separate standalone CAM2 installation is optional. macOS controls access to
+[protected folders](https://support.apple.com/guide/security/controlling-app-access-to-files-secddd1d86a6/web)
+when the app runs.
+
+- **Test the runtime before building the full app.** On an Apple Silicon Mac
+  with native Python 3.12 or newer and the Xcode Command Line Tools, run
+  `python3 tools/build_mac_gatekeeper_probe.py`. It checks the pinned runtime
+  archive's SHA-256, ad hoc signs the probe app and verifies that the extracted
+  ZIP can launch Python and a child process. The resulting
+  `dist/CAM-macOS-Runtime-Probe.zip` contains only the probe and its runtime.
+  1. Download the ZIP through a browser on a second Apple Silicon Mac and
+     extract it with Finder. Check that the ZIP has a quarantine attribute
+     with `xattr -p com.apple.quarantine CAM-macOS-Runtime-Probe.zip`.
+  2. Try opening **CAM Runtime Probe** and use **Open Anyway** if prompted.
+     Record the macOS version, prompts and whether this launch writes a
+     `PASS` line to `~/Library/Logs/CAM-runtime-probe.log`.
+  3. A pass covers Python and a child process. Repeat the downloaded-app test
+     with the full app, its native wheels such as PyMuPDF and PyArrow, and
+     both grading helpers before release. If macOS blocks the runtime or a
+     helper, record the exact message and revisit the bundle layout.
+- **Build CAM from a tag.** Reuse the Windows builder's committed-file staging
+  and sensitive-file checks. Pin the Mac runtime and its wheel set, preserve
+  runtime symlinks, and follow Apple's
+  [bundle layout for embedded runtimes](https://developer.apple.com/documentation/xcode/embedding-nonstandard-code-structures-in-a-bundle).
+  Start Streamlit on loopback, open the browser after its health check, and
+  keep CAM2's engine off CAM's import path. Launch helpers as the signed-in user.
+- **Move writable state outside the app.** CAM and the workspace currently
+  write preferences, caches, tokens and a startup log beside their code.
+  Put packaged per-user state and logs in Application Support or Library
+  caches. Keep the gradebook and exam sessions in the teacher's chosen data
+  folder. Prevent Python bytecode writes inside the signed bundle. Replacing
+  the app leaves teacher data in its separate folder.
+  Preserve the credential discovery order for source and Windows installs and
+  document where teachers can supply credentials on Mac.
+- **Separate bundled and standalone CAM2.** Both currently use CAM2's default
+  app-data directory and `server.json`. Have the CAM launcher set a separate
+  `CAM2_APP_DATA` for the bundled engine, so CAM discovers and hands exams to
+  the intended process. Test with standalone CAM2 already running and in the
+  reverse order. Use different fictional sessions to test coexistence.
+- **Package and verify.** Sign locally from the inner code outward using
+  ad hoc signing. Use `ditto` to ZIP the app, then verify signatures and
+  symlinks after extracting a clean copy. Include a checksum and first-launch
+  instructions with the release.
 - **Screens that are Windows only today:**
   - `pick_folder` returns nothing off Windows, and the five 📁 Browse buttons are hidden
     (`app.py:6684`, `6773`, `7728`, `9986`, `10247`). A teacher would have to type every
@@ -1396,22 +1428,27 @@ CAM2 decided, since there's no Intel Mac to build and test on.
 - **Licences per platform.** Mac libraries differ, so pin exact versions and keep notices
   for each platform, with Phase 4's build check on both. The Mac runtime needs its own
   entry.
-- **Audit and tests.** The same credential and data checks as the Windows zip, including a
-  check of the final zip, and a check that links and signatures survive unzipping, as
-  CAM2's Mac build does.
-- **Sandbox end to end from an unzipped copy:** temp prefs and `db_custom_path`, on a Mac
-  account with no developer Python. CAM starts, Browse works, the workspace opens a local
-  folder with a subfolder per student and needs no Google sign-in (F5's route), and
-  CAM2 opens in host mode and sends to CAM. **This Mac's prefs point at real data, so the
-  test must not run under them.**
+- **Audit and test the downloaded ZIP.** On a second Apple Silicon Mac
+  with no developer Python, test a fresh launch and an app replacement using an
+  isolated account, temp preferences and fictional data. Check that Browse,
+  local workspace grading, CAM2 handoff, Send to CAM and Sync work. Check the
+  permissions requested for Documents and the chosen cloud folder and verify
+  that replacing the app preserves the test preferences, gradebook and sessions
+  across an upgrade.
 - **A cross-computer check:** one fictional data folder synced between the Mac bundle and
   the Windows bundle, in both directions.
 - Phase 5's guides gain the Mac steps and screenshots.
 
-*Done when:* a downloaded zip runs on a Mac that didn't build it, with the same exam
-matrix as Phase 4. Nothing is released yet.
+*Done when:* the downloaded app starts after the documented approval and
+passes the upgrade checks and the Phase 4 exam matrix on a Mac that didn't build it.
 
 ### Phase 5 — Documents and release notes · S–M
+
+The exam guidance and unreleased changelog entry have been drafted. Finish
+platform-specific instructions after the launchers and paths are verified.
+Then build both ZIPs from one tagged commit, run the packaged
+smoke tests with fictional data, and prepare `SHA256SUMS.txt` and the matching
+source archives. Phase 6 has its own permission steps.
 
 - Rewrite the exam parts of `USER_MANUAL.md` and `QUICK_GUIDE.md` (and its PDF),
   `ARCHITECTURE.md` §4 and `DATA_DICTIONARY.md`, and the `app.py:7560` docstring.

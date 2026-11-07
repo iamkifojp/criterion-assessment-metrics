@@ -60,10 +60,10 @@ CAM lays the whole job out in three windows, read left to right in the order you
 ## Grade an exam
 
 1. In Window 1, create the item with **➕ Add assignment / exam** and mark it as an **Exam**, then click it and choose **🛠 Exam setup / Grade**. CAM2 Exam Grading opens with your class list already in it.
-2. Bring in the scans (one PDF of the whole class from the photocopier is fine), draw a box around each answer on the first paper, and choose **Marks** or **Rubric**.
+2. Bring in paper scans or PDFs exported from slides. Draw a box around each answer on the first paper and choose **Marks** or **Rubric**.
 3. Match each paper to a student, then grade one question at a time across the class, with quick comments where they help.
 4. In **Review & export**, check the totals and click **✓ Grading finished — send to CAM**. You can also make the student PDF reports there.
-5. A few seconds later the exam appears in Window 1's **📝 Exam grading** panel: CAM suggests a 0–8 grade from each total (or shows the rubric levels), you decide, then **Apply grades to gradebook**.
+5. In Window 1's **📝 Exam grading** panel, choose and apply grades for a plain marks exam. If the exam has rubrics or marks linked to criteria, check the mapping in Window 1, then decide each student's grade in Window 3. Window 1 can also apply final levels you typed in CAM2.
 
 ![Scans are cut into questions, graded in CAM2 and sent back to CAM](quick_guide_images/grade-exam.svg)
 
@@ -73,7 +73,7 @@ CAM lays the whole job out in three windows, read left to right in the order you
 - **Hide student names** and **Shuffle papers** (in the grading step) show papers as `01`, `02`, … in a new order for every question, so no impression of any one student builds up.
 - Changed a grade after sending? Click **Send again** in CAM2; grades you already applied in CAM are kept.
 
-> The exam, scans included, is saved in the class folder, so you can carry on grading on any computer that syncs it.
+> Update every computer that shares the class folder before opening an existing exam. CAM2 upgrades older sessions when opened, and older versions cannot read the upgraded sessions.
 
 ## Reports and exports
 

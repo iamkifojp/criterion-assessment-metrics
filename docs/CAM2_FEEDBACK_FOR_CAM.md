@@ -1,12 +1,16 @@
 # CAM2 feedback that affects CAM
 
-**Status:** 2026-11-05. Nothing here is built. More feedback from colleagues is still to come, so expect a second CAM2 update after the one in [CAM2_ENGINE_UPGRADE_PLAN.md](CAM2_ENGINE_UPGRADE_PLAN.md).
+**Status, 2026-11-07.** CAM's main branch includes CAM2 `v0.3.2-dev`
+(`4423090`), comment length limits, the workspace comment fix and the exam
+feedback block in term prompts. Packaging for the CAM release is in progress
+in the [engine upgrade plan](CAM2_ENGINE_UPGRADE_PLAN.md). The baseline below
+records the assessment before implementation.
 
 **The full entries are in CAM2's [Feedback-and-Upgrades.md](https://github.com/iamkifojp/cam2-exam-grading/blob/main/Feedback-and-Upgrades.md).** This note lists only what each one means for CAM, so that the details stay in one place. The F numbers are that document's. Suggesters stay anonymous.
 
 Line numbers refer to CAM `main` at `002ab0c`.
 
-## Where the two repos stand
+## Baseline on 2026-11-05
 
 | | Commit | Notes |
 |---|---|---|
@@ -16,7 +20,7 @@ Line numbers refer to CAM `main` at `002ab0c`.
 
 **Phase 1 isn't finished.** CAM2 still has no slide-shaped pages (D17, I14), so the new tag that D14 pins hasn't been cut.
 
-## For this upgrade
+## Included in the upgrade
 
 | Entry | What CAM needs | Where it is recorded |
 |---|---|---|
@@ -32,9 +36,10 @@ Line numbers refer to CAM `main` at `002ab0c`.
 
 Draft comments are always included (`app.py:6354`), so exams currently get less than drafts do.
 
-## To fix in the same release
+## Workspace fix included in the upgrade
 
-**F4: the grading workspace overwrites typed comments.** This is in CAM's own code, so the CAM2 pull won't fix it, and no other work depends on it. It can be fixed at any time, and it reaches teachers with the upgrade release, since D18 holds all releases until then. Planned as Phase 2W of the [upgrade plan](CAM2_ENGINE_UPGRADE_PLAN.md).
+**F4: the grading workspace overwrote typed comments.** Phase 2W fixed this
+in CAM's workspace. The original failure and fix are recorded below.
 
 `autoComment` rebuilds the whole comment from the ticks, so typed text is lost in three places in `cam_grading_workspace/app.py`:
 

@@ -6,6 +6,31 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## Unreleased — CAM2 engine upgrade
+
+- **Update every computer before opening existing exams.** Back up the gradebook
+  and the class exam folders first. Opening an old exam upgrades its CAM2
+  session. If an older installation reports `file_from_newer_version`, update
+  it before reopening the exam.
+- **Grade scans or slide PDFs in CAM2.** Export the slides to PDF first. For
+  drafts, choose **Draft — comments only** and use the grading workspace.
+- **Decide each criterion grade yourself.** CAM shows raw marks, weighted
+  percentages, and rubric levels as evidence. Plain marks exams have blank
+  grade fields in Window 1. For criteria-based exams, decide each grade in
+  Window 3 or use Window 1 to apply a final level you explicitly typed in CAM2.
+  A paper waiting for your decision is excluded from grade calculations.
+- **Keep workspace feedback.** Ticks and deadline changes preserve typed
+  comments. Linked partners share the first graded member's grade and combine
+  their comments and ticks. Reloading preserves the keyword list. If an
+  earlier version already lost keywords, add them again.
+- **Use exam feedback in term comments.** Exam comments have a separate section
+  in the prompt sent to your chosen AI service. CAM keeps overall comments
+  and reports how many whole question comments it omits if the prompt is long.
+  New CAM2 comments are limited to 300 characters per question and 600
+  characters overall. Previously saved comments are preserved.
+- **Licences.** The portable download includes PyMuPDF and is distributed
+  under AGPL-3.0. See the `Licences` folder for notices and source links.
+
 ## 2026-11-01 — v2026.11.01 Windows portable release
 
 **What this changes** — the first release since v2026.07.14.1, published as

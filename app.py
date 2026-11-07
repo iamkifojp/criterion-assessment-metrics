@@ -7571,8 +7571,8 @@ def _render_exam_banding() -> None:
 
     A CAM2 marks exam arrives with raw marks (e.g. 31/45) that cannot enter
     the 0-8 gradebook directly. This panel reflects every student's raw score
-    and lets the teacher assign each a 0-8 band (pre-filled with the
-    proportional suggestion, or the band already on record). Applying writes
+    and lets the teacher assign each a 0-8 band. The field is blank until a
+    grade has been decided. Applying writes
     ordinary CriterionScores under the chosen criterion, so the exam then
     behaves like any other assessed task downstream.
     """

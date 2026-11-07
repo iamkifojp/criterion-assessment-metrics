@@ -3,7 +3,11 @@
 **Status:** v1.1, 2026-11-01. All decisions (D1–D13, §3) are locked by the teacher.
 v1.1 adds D13 (the teacher picks each folder's type) and Phase 1W (identifying
 re-uploaded files by name, which drafts need too).
-Nothing is built yet. Phase 0 comes first.
+The [CAM2 engine upgrade](CAM2_ENGINE_UPGRADE_PLAN.md) added slide-shaped PDFs
+to CAM2 and changed how CAM records one teacher decision per criterion
+(D10–D13). Its D16 keeps drafts in the grading workspace. D17 defers the Drive
+integration below. Use PDFs exported from slides for this release. Appendix A
+of the upgrade plan describes the Apps Script route for a later classroom trial.
 **Repos:** CAM = `C:\Project\criterion-assessment-metrics-public`;
 CAM2 = `C:\Project\cam2-exam-grading`, vendored in CAM at `exam_grading/`.
 Never edit `exam_grading/` in place: change CAM2, then
