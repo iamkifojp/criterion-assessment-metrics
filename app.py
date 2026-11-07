@@ -138,14 +138,20 @@ TERM_BACKUP_VERSION = 1
 TERM_BACKUP_KIND = "cam_term_backup"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_STATE_DIR = os.environ.get("CAM_APP_STATE") or BASE_DIR
+APP_CACHE_DIR = os.environ.get("CAM_APP_CACHE") or BASE_DIR
 
 # The Flask grading sub-app (formerly GCG) now lives inside CAM. The bridge
 # spawns it on its own port so it never blocks the Streamlit server.
 GRADING_WORKSPACE_DIR = os.path.join(BASE_DIR, "cam_grading_workspace")
-GRADING_PORT = 5001
+GRADING_WORKSPACE_STATE = (os.path.join(APP_STATE_DIR, "cam_grading_workspace")
+                           if APP_STATE_DIR != BASE_DIR else GRADING_WORKSPACE_DIR)
+GRADING_PORT = int(os.environ.get("CAM_WORKSPACE_PORT", "5001"))
+NATIVE_FOLDER_PICKER = os.name == "nt" or sys.platform == "darwin"
 # CAM2 host-mode handoffs (convergence Stage 3) hold the class list, so they
 # stay on this computer, never in the cloud class folder.
-CAM2_HANDOFF_DIR = os.path.join(tempfile.gettempdir(), "cam_exam_handoffs")
+CAM2_HANDOFF_DIR = os.path.join(APP_CACHE_DIR if APP_CACHE_DIR != BASE_DIR else tempfile.gettempdir(),
+                              "cam_exam_handoffs")
 
 def cam2_session_dir(class_name: str, exam_name: str) -> str:
     """The CAM2 session folder of an exam (``<class>/exams/<folder>/``), from
@@ -169,10 +175,10 @@ def cam2_name_crop(class_name: str, exam_name: str, student_key: str) -> str:
 
 # Window-2 unmatched-work thumbnails (Phase 4). Rendered first-page/image PNGs
 # are disk-cached here, keyed by source path + mtime + width, so re-opening the
-# matching dialog is instant. Gitignored (thumb_cache/) and deliberately beside
-# app.py — NEVER inside the (possibly OneDrive-synced) db folder. Safe to
+# matching dialog is instant. Gitignored (thumb_cache/) and kept in
+# the device cache — outside the (possibly OneDrive-synced) db folder. Safe to
 # delete; it repopulates on next open.
-THUMB_CACHE_DIR = os.path.join(BASE_DIR, "thumb_cache")
+THUMB_CACHE_DIR = os.path.join(APP_CACHE_DIR, "thumb_cache")
 THUMB_GRID_WIDTH = 400        # grid-tile render width (px)
 THUMB_ENLARGE_WIDTH = 1600    # click-to-enlarge render width (px)
 # File extensions rendered directly by Pillow (everything else falls to fitz for
@@ -190,7 +196,7 @@ GENDER_PRONOUNS = {"Male": "he/him", "Female": "she/her", "Non-Binary": "they/th
 # a laptop can keep their own column widths / scroll heights while pointing the
 # main acm_database.json at the same OneDrive / Google Drive folder.
 PREFS_FILENAME = "local_device_prefs.json"
-PREFS_PATH = os.path.join(BASE_DIR, PREFS_FILENAME)
+PREFS_PATH = os.path.join(APP_STATE_DIR, PREFS_FILENAME)
 DEFAULT_PREFS = {
     "db_custom_path": "",   # blank -> acm_database.json beside app.py
     # Phase-3 device-local bindings. Keys are normalized absolute DB paths;
@@ -290,13 +296,13 @@ def resolve_db_path(custom: str) -> str:
     Smart interpretation: a value ending in ``.json`` is used verbatim as the
     file path; any other non-empty value is treated as a directory and
     ``acm_database.json`` is placed inside it (the OneDrive/Drive folder case).
-    Blank falls back to a file beside this script. Pure — takes the pref value
+    Blank falls back to the device state directory. Pure — takes the pref value
     directly so callers (e.g. the Phase-2 settings panel) can resolve a
     *candidate* path without mutating the active pref first.
     """
     custom = (custom or "").strip()
     if not custom:
-        return os.path.join(BASE_DIR, DEFAULT_DB_FILENAME)
+        return os.path.join(APP_STATE_DIR, DEFAULT_DB_FILENAME)
     if custom.lower().endswith(".json"):
         return custom
     return os.path.join(custom, DEFAULT_DB_FILENAME)
@@ -375,6 +381,11 @@ def _cloud_search_roots() -> list:
     for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
         add(os.environ.get(var, ""))
     home = os.path.expanduser("~")
+    if sys.platform == "darwin":
+        cloud_storage = os.path.join(home, "Library", "CloudStorage")
+        for service in ("OneDrive", "GoogleDrive", "Dropbox"):
+            for folder in glob.glob(os.path.join(cloud_storage, service + "*")):
+                add(folder)
     # Google Drive for Desktop: the virtualised "My Drive" under the profile,
     # a legacy "Google Drive" folder, and the DriveFS letter mounts (G:\My Drive
     # etc. — Drive defaults to G: but the letter is user-configurable).
@@ -2580,7 +2591,7 @@ def _drive_list_subfolders(folder_id: str) -> list:
     """[(name, id)] subfolders of a Drive folder, via the grading workspace's
     saved OAuth token. Raises RuntimeError with a teacher-readable message when
     credentials or the Google packages are unavailable."""
-    token = os.path.join(GRADING_WORKSPACE_DIR, "token.json")
+    token = os.path.join(GRADING_WORKSPACE_STATE, "token.json")
     if not os.path.exists(token):
         raise RuntimeError(
             "No Google token found — click 🔗 Connect Google Drive in the "
@@ -2829,14 +2840,14 @@ def _ensure_workspace_running() -> bool:
         # readable trace we can surface, instead of silently returning True and
         # letting the caller open a browser tab that just says "connection
         # refused".
-        log_path = os.path.join(GRADING_WORKSPACE_DIR, "workspace_startup.log")
+        log_path = os.path.join(GRADING_WORKSPACE_STATE, "workspace_startup.log")
         try:
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            log = open(log_path, "w", encoding="utf-8", errors="replace")
-            proc = subprocess.Popen(
-                [sys.executable, app_path, "--port", str(GRADING_PORT)],
-                cwd=GRADING_WORKSPACE_DIR, creationflags=flags,
-                stdout=log, stderr=subprocess.STDOUT)
+            with open(log_path, "w", encoding="utf-8", errors="replace") as log:
+                proc = subprocess.Popen(
+                    [sys.executable, app_path, "--port", str(GRADING_PORT)],
+                    cwd=GRADING_WORKSPACE_DIR, creationflags=flags,
+                    stdout=log, stderr=subprocess.STDOUT)
             # Bind it to CAM's lifetime so closing CAM doesn't leave an orphan.
             _bind_workspace_to_cam(proc)
         except Exception as exc:
@@ -2860,7 +2871,7 @@ def _ensure_workspace_running() -> bool:
         st.session_state["save_status"] = (
             "error",
             f"Grading workspace did not start on port {GRADING_PORT}{detail} "
-            f"(see cam_grading_workspace/workspace_startup.log)")
+            f"(see {log_path})")
         return False
     return True
 
@@ -6805,12 +6816,13 @@ def _render_term_backup_section(prefs: dict) -> None:
     folder_row = st.columns([5, 1], vertical_alignment="bottom")
     folder = folder_row[0].text_input(
         "Backup folder",
-        placeholder=r"e.g. C:\Users\you\CAM-term-backups   or a USB drive",
+        placeholder=("e.g. /Volumes/Backup/CAM-term-backups"
+                     if sys.platform == "darwin" else r"e.g. C:\Users\you\CAM-term-backups   or a USB drive"),
         key="tb_folder", autocomplete="off",
         help="Where ⬇ Back up term writes its files. Per-device (like every "
              "path setting); point it anywhere — even a USB stick or a non-cloud "
              "folder — for an off-site copy.")
-    if os.name == "nt" and folder_row[1].button(
+    if NATIVE_FOLDER_PICKER and folder_row[1].button(
             "📁 Browse…", key="tb_folder_browse", width="stretch"):
         chosen = pick_folder("Choose a CAM term backup folder", folder or None)
         if chosen:
@@ -6906,14 +6918,15 @@ def settings_dialog() -> None:
             "Custom Database Path (folder or .json file)",
             key="settings_db_custom_path",
             autocomplete="off",
-            placeholder=r"e.g. C:\Users\you\OneDrive\CAM   or   .../acm_database.json",
+            placeholder=("e.g. /Users/you/Documents/CAM Data"
+                     if sys.platform == "darwin" else r"e.g. C:\Users\you\OneDrive\CAM   or   .../acm_database.json"),
             help="Point this at a OneDrive/Google Drive folder for cross-device "
                  "continuity. A folder gets acm_database.json placed inside it, "
                  "plus one subfolder per class holding that class's grading "
                  "exports, exam scans, caches and term summaries. 🔄 Sync "
                  "(Window 1) scans those class subfolders for new files.",
         )
-    if os.name == "nt" and custom_row[1].button(
+    if NATIVE_FOLDER_PICKER and custom_row[1].button(
             "📁 Browse…", key="settings_db_browse", width="stretch"):
         initial = custom if custom and os.path.isdir(custom) else None
         chosen = pick_folder("Choose your CAM data folder", initial)
@@ -8041,8 +8054,9 @@ def show_analytics_dialog(name: str) -> None:
         newp = relink_row[0].text_input(
             "Re-link folder (existing local path)", key=f"relink_{name}",
             autocomplete="off",
-            placeholder=r"e.g. C:\Users\you\OneDrive\Y7 Art\Artist Looking")
-        if os.name == "nt" and relink_row[1].button(
+            placeholder=("e.g. /Users/you/Documents/Y7 Art/Artist Looking"
+                     if sys.platform == "darwin" else r"e.g. C:\Users\you\OneDrive\Y7 Art\Artist Looking"))
+        if NATIVE_FOLDER_PICKER and relink_row[1].button(
                 "📁 Browse…", key=f"relinkbrowse_{name}", width="stretch"):
             chosen = pick_folder(f"Re-link the folder for {name}", newp or None)
             if chosen:
@@ -10535,12 +10549,13 @@ def _class_dialog_body(edit: bool) -> None:
         "Master directory (optional — local path or Drive Folder ID)",
         value=ac.get("master_dir", ""),
         key=f"clsdlg_master_{k}", autocomplete="off",
-        placeholder=r"e.g. C:\Users\you\OneDrive\Y7 Art   or   1AbCdEfGhIjK...",
+        placeholder=("e.g. /Users/you/Documents/Y7 Art or a Drive folder ID"
+                     if sys.platform == "darwin" else r"e.g. C:\Users\you\OneDrive\Y7 Art   or   1AbCdEfGhIjK..."),
         help="The class's assignment home — its subfolders are scanned into "
              "Window 1's assignment list automatically when you save a new or "
              "changed directory (and again on every 🔄 Sync, or via 👁 Watch "
              "in Edit mode).")
-    if os.name == "nt" and master_row[1].button(
+    if NATIVE_FOLDER_PICKER and master_row[1].button(
             "📁 Browse…", key=f"clsdlg_master_browse_{k}", width="stretch"):
         initial = master if master and os.path.isdir(master) else None
         chosen = pick_folder("Choose this class's master directory", initial)
@@ -10800,8 +10815,9 @@ def _render_first_boot_setup() -> None:
     manual = manual_row[0].text_input(
         "Database folder or .json path",
         key="boot_manual_path", autocomplete="off",
-        placeholder=r"e.g. D:\CAM   or   \\server\share\CAM\acm_database.json")
-    if os.name == "nt" and manual_row[1].button(
+        placeholder=("e.g. /Users/you/Documents/CAM Data/acm_database.json"
+                     if sys.platform == "darwin" else r"e.g. D:\CAM   or   \\server\share\CAM\acm_database.json"))
+    if NATIVE_FOLDER_PICKER and manual_row[1].button(
             "📁 Browse…", key="boot_manual_browse", width="stretch"):
         initial = manual if manual and os.path.isdir(manual) else None
         chosen = pick_folder("Choose your CAM data folder", initial)
@@ -10822,7 +10838,7 @@ def _render_first_boot_setup() -> None:
     st.markdown("---")
     st.markdown("### 3 · Start fresh")
     fresh_folder = (os.path.join(documents_folder(), "CAM Data")
-                    if os.name == "nt" else "")
+                    if NATIVE_FOLDER_PICKER else "")
     fresh_caption = (f"Begin with CAM's built-in sample gradebook in "
                      f"`{fresh_folder}`. You can choose a different folder "
                      "above or change it later in ⚙ Settings."

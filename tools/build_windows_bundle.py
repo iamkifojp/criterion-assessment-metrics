@@ -96,12 +96,12 @@ def download(url: str, destination: Path) -> Path:
     return destination
 
 
-def stage_head(destination: Path, source: Path) -> None:
+def stage_head(destination: Path, source: Path, *, ref: str = "HEAD") -> None:
     """Export committed files only into ``source``, then copy them to
     ``destination`` without development-only content. ``source`` keeps the
     build's own inputs (pins, licence texts) as committed."""
     archive = subprocess.run(
-        ["git", "archive", "--format=zip", "HEAD"],
+        ["git", "archive", "--format=zip", ref],
         cwd=REPO_ROOT,
         check=True,
         stdout=subprocess.PIPE,

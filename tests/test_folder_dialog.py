@@ -1,4 +1,4 @@
-"""Unit tests for the dependency-free Windows folder helper."""
+"""Unit tests for the dependency-free native folder helper."""
 
 import os
 import subprocess
@@ -17,8 +17,9 @@ class FolderDialogTests(unittest.TestCase):
                 self.assertEqual(folder_dialog.documents_folder(),
                                  os.path.abspath(relative))
 
-    def test_picker_is_hidden_off_windows(self):
-        with mock.patch.object(folder_dialog.os, "name", "posix"):
+    def test_picker_is_hidden_on_linux(self):
+        with mock.patch.object(folder_dialog.sys, "platform", "linux"), \
+             mock.patch.object(folder_dialog.os, "name", "posix"):
             with mock.patch.object(folder_dialog.subprocess, "run") as run:
                 self.assertIsNone(folder_dialog.pick_folder("Choose"))
                 run.assert_not_called()
@@ -26,7 +27,8 @@ class FolderDialogTests(unittest.TestCase):
     def test_picker_returns_child_stdout(self):
         completed = subprocess.CompletedProcess([], 0, stdout="C:\\CAM Data\n",
                                                 stderr="")
-        with mock.patch.object(folder_dialog.os, "name", "nt"):
+        with mock.patch.object(folder_dialog.sys, "platform", "win32"), \
+             mock.patch.object(folder_dialog.os, "name", "nt"):
             with mock.patch.object(folder_dialog.subprocess, "run",
                                    return_value=completed) as run:
                 self.assertEqual(folder_dialog.pick_folder("Choose", r"C:\CAM"),
@@ -37,9 +39,28 @@ class FolderDialogTests(unittest.TestCase):
 
     def test_picker_cancel_returns_none(self):
         completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        with mock.patch.object(folder_dialog.os, "name", "nt"), \
+        with mock.patch.object(folder_dialog.sys, "platform", "win32"), \
+             mock.patch.object(folder_dialog.os, "name", "nt"), \
              mock.patch.object(folder_dialog.subprocess, "run",
                                return_value=completed):
+            self.assertIsNone(folder_dialog.pick_folder("Choose"))
+
+
+    def test_mac_picker_passes_title_and_folder_as_arguments(self):
+        completed = subprocess.CompletedProcess([], 0, stdout="/tmp/架空の採点資料/\n", stderr="")
+        with tempfile.TemporaryDirectory(prefix="CAM data ") as root, \
+             mock.patch.object(folder_dialog.sys, "platform", "darwin"), \
+             mock.patch.object(folder_dialog.subprocess, "run", return_value=completed) as run:
+            title = 'Choose "CAM data"'
+            self.assertEqual(folder_dialog.pick_folder(title, root), "/tmp/架空の採点資料")
+            command = run.call_args.args[0]
+            self.assertEqual(command[:2], ["/usr/bin/osascript", "-e"])
+            self.assertEqual(command[3:], [title, root])
+
+    def test_mac_picker_handles_cancel(self):
+        cancelled = subprocess.CompletedProcess([], 1, stdout="", stderr="User canceled")
+        with mock.patch.object(folder_dialog.sys, "platform", "darwin"), \
+             mock.patch.object(folder_dialog.subprocess, "run", return_value=cancelled):
             self.assertIsNone(folder_dialog.pick_folder("Choose"))
 
 

@@ -71,6 +71,28 @@ file for startup problems. See the
 [v2026.11.01 release notes](docs/RELEASE_NOTES_v2026.11.01.md) for highlights,
 upgrade guidance, and verification details.
 
+## Download for Apple Silicon Macs
+
+The Mac package, when available on the release page, is
+`CAM-Mac-AppleSilicon-vYYYY.MM.DD.zip`. It requires an Apple chip and macOS 14
+(Sonoma) or newer, and includes Python, the grading workspace, and CAM2 Exam
+Grading.
+
+1. Download the Mac ZIP from the release and extract it in Finder.
+2. Move **CAM.app** into **Applications** and try opening it. If macOS blocks
+   the first launch, go to **System Settings → Privacy & Security → Open Anyway**
+   and follow the prompts. See [Apple's first-launch instructions](https://support.apple.com/en-gb/102445).
+3. CAM opens in your browser. Select your existing CAM data folder or start with
+   the fictional sample class in `~/Documents/CAM Data`. To stop CAM and its
+   grading helpers, choose **CAM → Quit CAM** from the Mac menu bar.
+
+Replace **CAM.app** when upgrading. Keep your chosen gradebook folder separately.
+CAM keeps settings and its startup log under `~/Library/Application Support/CAM`.
+For optional Google Drive grading, put `credentials.json` or the Google
+`client_secret*.json` file in that folder's `cam_grading_workspace` subfolder.
+The workspace also looks in the CAM Application Support folder and then in the
+cloud data folder you configured.
+
 ## Run from source
 
 Developers and users on macOS or Linux can run CAM from source:
@@ -125,13 +147,14 @@ live in a local or cloud folder you point CAM at via
 CAM's own code is released under the [MIT License](LICENSE), and so is CAM2
 Exam Grading, which CAM includes in `exam_grading/`.
 
-The Windows download also includes PyMuPDF, which CAM uses under the GNU AGPL
-version 3, so the download as a whole is licensed under the
-[AGPL](exam_grading/licences/AGPL-3.0.txt). Its `Licences` folder lists every
-library in it with its version and licence, and holds their licence texts. The
-exact libraries are pinned in
-[tools/bundle-requirements-windows.txt](tools/bundle-requirements-windows.txt).
+Both platform bundles include PyMuPDF and are distributed under the
+[GNU AGPL version 3](exam_grading/licences/AGPL-3.0.txt). Each `Licences`
+folder lists the bundled libraries, versions and licence texts. On Mac,
+choose **Show Package Contents** on CAM.app to find it at
+`Contents/Resources/CAM/Licences`. See the exact pins for
+[Windows](tools/bundle-requirements-windows.txt) and
+[macOS](tools/bundle-requirements-macos.txt).
 
-CAMは無料のソフトウェアです。CAMとCAM2自体のコードはMITライセンスです。Windows版の
+CAMは無料のソフトウェアです。CAMとCAM2自体のコードはMITライセンスです。Windows版とMac版の
 ダウンロードにはPyMuPDFが含まれているため、全体としてGNU AGPLバージョン3のもとで提供
 しています。ライセンスはダウンロードの「Licences」フォルダーにあります。

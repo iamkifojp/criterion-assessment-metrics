@@ -1,4 +1,4 @@
-"""Native Windows folder selection and known-folder helpers.
+"""Native folder selection and known-folder helpers.
 
 The picker runs out of process so its COM single-threaded apartment never
 interacts with Streamlit's script thread.  This module intentionally has no
@@ -18,6 +18,8 @@ import threading
 
 def pick_folder(title: str, initial: str | None = None) -> str | None:
     """Open the native folder picker in a child process and return its result."""
+    if sys.platform == "darwin":
+        return _pick_folder_macos(title, initial)
     if os.name != "nt":
         return None
     command = [sys.executable, "-m", "engine.folder_dialog", "--title", title]
@@ -35,6 +37,34 @@ def pick_folder(title: str, initial: str | None = None) -> str | None:
         return None
     chosen = result.stdout.strip()
     return chosen or None
+
+
+def _pick_folder_macos(title: str, initial: str | None) -> str | None:
+    # Use the same AppleScript picker as CAM2, passing paths as arguments.
+    script = (
+        "on run argv\n"
+        "    activate\n"
+        "    if (count of argv) > 1 then\n"
+        "        set chosen to choose folder with prompt (item 1 of argv) "
+        "default location (POSIX file (item 2 of argv))\n"
+        "    else\n"
+        "        set chosen to choose folder with prompt (item 1 of argv)\n"
+        "    end if\n"
+        "    return POSIX path of chosen\n"
+        "end run"
+    )
+    command = ["/usr/bin/osascript", "-e", script, title]
+    if initial and os.path.isdir(initial):
+        command.append(initial)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True,
+                                encoding="utf-8", check=False)
+    except (OSError, UnicodeError):
+        return None
+    if result.returncode != 0:
+        return None
+    chosen = result.stdout.strip()
+    return (chosen.rstrip("/") or "/") if chosen else None
 
 
 class _GUID(ctypes.Structure):

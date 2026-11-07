@@ -36,6 +36,7 @@ import importlib.metadata as metadata
 import json
 from dataclasses import dataclass
 from pathlib import Path
+import platform as host_platform
 import re
 import subprocess
 import sys
@@ -48,7 +49,7 @@ AGPL_TEXT = REPO_ROOT / "exam_grading" / "licences" / "AGPL-3.0.txt"
 # CAM2's own exact versions. CAM2 runs inside CAM's bundle, so the libraries
 # both use stay at the versions CAM2 was tested and released with.
 CAM2_PINS = REPO_ROOT / "exam_grading" / "requirements-build.txt"
-PLATFORMS = {"windows": "win_amd64"}
+PLATFORMS = {"windows": "win_amd64", "macos": None}
 PYTHON_TARGET = "3.14"
 CAM_SOURCE = "https://github.com/iamkifojp/criterion-assessment-metrics"
 CAM2_SOURCE = "https://github.com/iamkifojp/cam2-exam-grading"
@@ -101,7 +102,7 @@ def read_pins(path: Path) -> dict:
 def write_pins(path: Path, pins, platform: str) -> None:
     header = (
         f"# Exact libraries for CAM's {platform} bundle, with their licences\n"
-        "# (tools/build_windows_bundle.py installs exactly these, --no-deps).\n"
+        "# The bundle builder installs exactly these with --no-deps.\n"
         "# Teachers never see this. Regenerate with\n"
         f"#   python tools/bundle_licences.py pin {platform}\n"
         "# after changing requirements.txt, then check any licence shown as ?.\n"
@@ -146,6 +147,13 @@ def resolve(platform: str, requirements: Path = REPO_ROOT / "requirements.txt") 
     CAM needs."""
     from packaging.requirements import Requirement
 
+    target = PLATFORMS[platform]
+    if platform == "macos" and (sys.platform != "darwin" or
+                                host_platform.machine() != "arm64" or
+                                sys.version_info[:2] != (3, 14)):
+        raise ValueError("Resolve Mac pins with native Python 3.14 on Apple Silicon.")
+    target_args = (["--platform", target] if target else
+                   ["-c", pins_path("windows")])
     with tempfile.TemporaryDirectory(prefix="cam-pins-") as temp:
         report = Path(temp) / "report.json"
         constraints = Path(temp) / "cam2-constraints.txt"
@@ -153,7 +161,7 @@ def resolve(platform: str, requirements: Path = REPO_ROOT / "requirements.txt") 
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "--dry-run", "--quiet",
              "--ignore-installed", "--report", report, "--target", Path(temp) / "t",
-             "--platform", PLATFORMS[platform], "--python-version", PYTHON_TARGET,
+             *target_args, "--python-version", PYTHON_TARGET,
              "--implementation", "cp", "--only-binary=:all:", "-r", requirements,
              "-c", constraints],
             check=True, cwd=REPO_ROOT)
@@ -182,6 +190,8 @@ def pin(platform: str) -> list:
     Returns the names whose licence still needs checking."""
     path = pins_path(platform)
     old = read_pins(path) if path.is_file() else {}
+    if platform == "macos":
+        old = read_pins(pins_path("windows")) | old
     pins = []
     for p in resolve(platform):
         kept = old.get(canonical(p.name))

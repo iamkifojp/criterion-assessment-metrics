@@ -11,8 +11,9 @@ trial moved to after the whole upgrade (§6.1). Phases 2, 2W and 3 are on CAM's 
 notes). Phase 4 merged in PR #8, pinning the Phase 1 tag. Its browser matrix
 passed on the Mac and on the Windows Surface. The Windows bundle was built and
 booted there, and PR #9 excluded the remaining developer files.
-Phase 4M targets an Apple Silicon app ZIP with the Open Anyway workflow.
-Phase 5's exam guidance and draft release notes are in progress. Phase 6 is
+Phase 4M's signed Apple Silicon development ZIP passed local smoke tests.
+The Mac–Windows OneDrive check is next. Phase 5's exam guidance and draft
+release notes are in progress. Phase 6 is
 the separate real-data rollout.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
@@ -21,14 +22,24 @@ added D17. v5 added the Apps Script route (Appendix A).
 
 ## Picking up on another computer
 
-Updated 2026-11-07 for the next session on the Mac. Open the CAM repository
-in Codex and check `git status` before updating. With a clean checkout, switch
-to `main` and run `git pull --ff-only`. The pinned CAM2 engine is already in
-`exam_grading/`, so the runtime probe only needs the CAM checkout.
+Updated 2026-11-07 for the next session on the Windows Surface. Open the CAM
+repository in Codex and check `git status` before updating. With a clean
+checkout, switch to `main` and run `git pull --ff-only`. The pinned CAM2
+engine is already in `exam_grading/`.
 
-Read [Phase 4M](#phase-4m--cam-apple-silicon-app-zip-d18) and start with its
-runtime probe. For later testing of CAM itself, use the sandbox instructions
-below and the [browser check fixtures](../tools/browser_check/README.md).
+1. Ask Codex to build and smoke-test the Windows ZIP from the updated checkout
+   with fictional data. Use the [browser check fixtures](../tools/browser_check/README.md)
+   and confirm the extracted ZIP starts CAM and both grading helpers.
+2. Use a separate OneDrive folder with a fictional gradebook and exam. Open it
+   in the development builds on the Mac and Surface. Save a test change on the
+   Mac, let OneDrive finish syncing and confirm the change on the Surface.
+   Then save a different test change on the Surface, let it sync and confirm
+   both changes on the Mac. Use isolated preferences on both computers and
+   record any macOS folder access prompts.
+3. After that check, finish the release guidance in [Phase 5](#phase-5--documents-and-release-notes--sm).
+   Build and smoke-test both release ZIPs from the same tag. Prepare the release
+   checksums and matching source archives, then share the published Mac ZIP
+   with colleagues for their independent first-launch check.
 
 The phase check agreed for development is recorded here:
 
@@ -70,9 +81,8 @@ release is still `v2026.11.01`.
 | ~~Make the `v0.3.2-dev` pre-release~~ Done 2026-11-06: both zips, the sample exams and the two source archives | |
 | ~~Share the build with colleagues~~ Done: colleagues are using the test builds, largely without problems | |
 
-**Next on the Mac:** Build the Phase 4M runtime probe and check that a
-browser-downloaded copy can start its bundled Python and child process
-after the app's Open Anyway approval.
+**Phase 4M on this Mac:** The app ZIP and local checks are recorded below.
+The teacher deferred independent Mac testing until colleagues have the release.
 
 **The teacher's decisions on what was still open (2026-11-06):**
 
@@ -1376,61 +1386,53 @@ separate standalone CAM2 installation is optional. macOS controls access to
 [protected folders](https://support.apple.com/guide/security/controlling-app-access-to-files-secddd1d86a6/web)
 when the app runs.
 
-- **Test the runtime before building the full app.** On an Apple Silicon Mac
-  with native Python 3.12 or newer and the Xcode Command Line Tools, run
-  `python3 tools/build_mac_gatekeeper_probe.py`. It checks the pinned runtime
-  archive's SHA-256, ad hoc signs the probe app and verifies that the extracted
-  ZIP can launch Python and a child process. The resulting
-  `dist/CAM-macOS-Runtime-Probe.zip` contains only the probe and its runtime.
-  1. Download the ZIP through a browser on a second Apple Silicon Mac and
-     extract it with Finder. Check that the ZIP has a quarantine attribute
-     with `xattr -p com.apple.quarantine CAM-macOS-Runtime-Probe.zip`.
-  2. Try opening **CAM Runtime Probe** and use **Open Anyway** if prompted.
-     Record the macOS version, prompts and whether this launch writes a
-     `PASS` line to `~/Library/Logs/CAM-runtime-probe.log`.
-  3. A pass covers Python and a child process. Repeat the downloaded-app test
-     with the full app, its native wheels such as PyMuPDF and PyArrow, and
-     both grading helpers before release. If macOS blocks the runtime or a
-     helper, record the exact message and revisit the bundle layout.
-- **Build CAM from a tag.** Reuse the Windows builder's committed-file staging
-  and sensitive-file checks. Pin the Mac runtime and its wheel set, preserve
-  runtime symlinks, and follow Apple's
+- **Runtime probe.** `python3 tools/build_mac_gatekeeper_probe.py` checks the
+  pinned archive's SHA-256, ad hoc signs the probe and verifies that the
+  extracted `dist/CAM-macOS-Runtime-Probe.zip` starts Python and a child
+  process. The local result is recorded below.
+- **Independent Mac check deferred by the teacher, 2026-11-07.** There is no
+  second Mac available before release. Colleagues will try the released app.
+  Ask them to download the ZIP through a browser, confirm
+  `xattr -p com.apple.quarantine <zip>` reports an attribute, extract in Finder
+  and follow **Open Anyway**. Record the macOS version, any prompts and
+  whether CAM and both grading helpers start.
+- **Build CAM from a tag.** Run `python3 tools/build_mac_bundle.py --tag vYYYY.MM.DD`
+  with native Python 3.12+ and the Xcode Command Line Tools on Apple Silicon.
+  Use `--dev` instead for a ZIP built from committed HEAD. The builder reuses
+  the Windows staging and data checks, installs the 87 pinned wheels and
+  signs the relocated runtime and the app from the inside out. It uses symlinks
+  to preserve Python's import paths with Apple's
   [bundle layout for embedded runtimes](https://developer.apple.com/documentation/xcode/embedding-nonstandard-code-structures-in-a-bundle).
-  Start Streamlit on loopback, open the browser after its health check, and
-  keep CAM2's engine off CAM's import path. Launch helpers as the signed-in user.
-- **Move writable state outside the app.** CAM and the workspace currently
-  write preferences, caches, tokens and a startup log beside their code.
-  Put packaged per-user state and logs in Application Support or Library
-  caches. Keep the gradebook and exam sessions in the teacher's chosen data
-  folder. Prevent Python bytecode writes inside the signed bundle. Replacing
-  the app leaves teacher data in its separate folder.
-  Preserve the credential discovery order for source and Windows installs and
-  document where teachers can supply credentials on Mac.
-- **Separate bundled and standalone CAM2.** Both currently use CAM2's default
-  app-data directory and `server.json`. Have the CAM launcher set a separate
-  `CAM2_APP_DATA` for the bundled engine, so CAM discovers and hands exams to
-  the intended process. Test with standalone CAM2 already running and in the
-  reverse order. Use different fictional sessions to test coexistence.
+  The launcher opens the browser after Streamlit's loopback health check.
+  CAM and both helpers run as the signed-in user.
+- **Writable state.** The Mac app stores preferences, logs and the workspace
+  token in `~/Library/Application Support/CAM`, and caches in
+  `~/Library/Caches/CAM`. Gradebooks and exam sessions live in the teacher's
+  chosen data folder. Python bytecode writes are disabled in the bundle.
+  The README gives the Mac credential locations. Source and Windows use
+  their existing lookup order.
+- **Bundled and standalone CAM2.** The launcher assigns its bundled engine a
+  separate `CAM2_APP_DATA` under CAM's Application Support folder, so it has
+  its own `server.json` and port.
 - **Package and verify.** Sign locally from the inner code outward using
   ad hoc signing. Use `ditto` to ZIP the app, then verify signatures and
   symlinks after extracting a clean copy. Include a checksum and first-launch
   instructions with the release.
-- **Screens that are Windows only today:**
-  - `pick_folder` returns nothing off Windows, and the five 📁 Browse buttons are hidden
-    (`app.py:6684`, `6773`, `7728`, `9986`, `10247`). A teacher would have to type every
-    path, so add a Mac folder picker, for example through `osascript`.
-  - "Start fresh" offers no default folder off Windows (`app.py:10267`).
-  - Placeholder paths show only Windows examples.
-- **Stop the workspace when CAM stops.** The Windows job object at `app.py:2744` doesn't
-  run on a Mac, so a crash could leave the workspace running.
+- **Mac folder selection.** The five Browse buttons use the native Mac
+  picker. The path fields show Mac examples and **Start fresh** offers
+  `~/Documents/CAM Data`.
+- **Stop the workspace when CAM stops.** The Mac launcher supervises Streamlit
+  and its grading helpers as a process group. Quit CAM closes them, and the
+  supervisor also cleans up if the native launcher or Streamlit exits.
 - **Check on a Mac:** file locking already has a Mac path (`persistence.py:1392`), but the
   bundle hasn't run it against OneDrive's Mac folder (`~/Library/CloudStorage`).
 - **Licences per platform.** Mac libraries differ, so pin exact versions and keep notices
   for each platform, with Phase 4's build check on both. The Mac runtime needs its own
   entry.
-- **Audit and test the downloaded ZIP.** On a second Apple Silicon Mac
-  with no developer Python, test a fresh launch and an app replacement using an
-  isolated account, temp preferences and fictional data. Check that Browse,
+- **Audit and test the ZIP locally before release.** Use a fresh extraction,
+  an isolated home and fictional data. Test launch and app replacement using
+  the embedded Python. Colleagues can repeat the launch on their Macs after
+  release. Check that Browse,
   local workspace grading, CAM2 handoff, Send to CAM and Sync work. Check the
   permissions requested for Documents and the chosen cloud folder and verify
   that replacing the app preserves the test preferences, gradebook and sessions
@@ -1439,8 +1441,47 @@ when the app runs.
   the Windows bundle, in both directions.
 - Phase 5's guides gain the Mac steps and screenshots.
 
-*Done when:* the downloaded app starts after the documented approval and
-passes the upgrade checks and the Phase 4 exam matrix on a Mac that didn't build it.
+*Done for release when:* the extracted signed app starts locally and
+passes the upgrade checks and the Phase 4 exam matrix with fictional data.
+Colleagues verify the browser download and first-launch approval after release.
+
+**Progress, 2026-11-07.** Built `dist/CAM-macOS-Runtime-Probe.zip` from CAM
+`353dc92` on Apple Silicon (macOS 27.0.1, build 26A434). The pinned runtime
+archive matched its SHA-256. The extracted app passed strict signature
+verification and started bundled Python 3.14.6 and a child process, both
+loading OpenSSL. The ZIP contains the probe and its runtime.
+
+- **Probe ZIP SHA-256** `7207f2ac19ef703ef290bacbf902621ff1d35349f5b30230575e363b17c8974a`.
+- **Earlier phases rechecked.** CAM's vendored engine tree matches
+  `v0.3.2-dev`, and there were no open PRs in either repository. On a
+  temporary copy of `353dc92` with fictional data and Node.js, all 487 CAM
+  and 354 vendored CAM2 tests passed with no skips.
+
+**Full app ZIP.** The local development build is
+`dist/CAM-Mac-AppleSilicon-dev-a7a69bd.zip`. Its SHA-256 is
+`e068d041b737464c5f1829a39e3b9b7640ba20c5fada745f7a7004e0210f4d74`.
+On macOS 27.0.1, a clean extraction passed strict signature and symlink
+verification and exercised embedded Python, PyMuPDF, PyArrow and Pillow.
+
+- The packaged app synced all nine fictional exam fixtures. Quiz marks and
+  an adjusted report total matched the fixture. The workspace opened the
+  fictional draft and saved and exported a typed comment.
+- Bundled CAM2 imported and sliced a 16:9 slide exam, matched eight papers to
+  the host roster, and sent eight grades and an adjusted report total back to
+  CAM. The installed standalone CAM2 ran independently in both launch orders.
+- A clean install created its sample gradebook in isolated Documents.
+  Replacing the app preserved preferences, the gradebook and the exam
+  session byte for byte. Forcing the app to exit stopped Streamlit and both
+  helpers, and bundled CAM2 cleared its server record. The app signature
+  still verified after the test. The Mac Browse control was visible and
+  its AppleScript compiled with macOS Standard Additions.
+- Both test suites passed using the bundled interpreter with Node.js, with
+  489 CAM and 354 CAM2 tests and no skips. The Windows staging audit passed.
+- The known Streamlit static-file traceback still appeared in the log. The
+  browser loaded and the grading flows passed.
+- The real OneDrive and two-way Mac–Windows sync checks still need to run
+  with a fictional shared data folder. Independent Mac first-launch checks
+  are deferred to colleagues after release.
 
 ### Phase 5 — Documents and release notes · S–M
 
@@ -1492,7 +1533,8 @@ session.
 
 1. Run `tools/exam_exposure_report.py` again, with permission. Phase 0's count of zero is
    from 2026-11-05, and any real exam opened since changes it.
-2. Update every computer, and the standalone CAM2 on each, to the same tag.
+2. Update every computer to the same CAM release. Where standalone CAM2 is
+   used, update it to the CAM2 tag pinned in that CAM release.
 3. Back up: `acm_database.json.bak-cam2-upgrade-YYYYMMDD-HHMMSS` beside the database,
    and a dated copy of each class's `exams/` folder **before any exam is opened**.
    Never prune existing `.bak-*` files.

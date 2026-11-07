@@ -49,7 +49,7 @@ def functions_from(path, names, namespace):
 def workspace(tmp):
     ns = dict(os=os, re=re, io=io, csv=csv, json=json, glob=glob,
               hashlib=hashlib, datetime=datetime, STATE_LOCK=threading.Lock(),
-              BASE_DIR=tmp, SETTINGS={"cloud_dir": tmp}, STATE={"class_name": "Art"},
+              STATE_DIR=tmp, SETTINGS={"cloud_dir": tmp}, STATE={"class_name": "Art"},
               match_submission=match_submission, unmatched_identity=unmatched_identity,
               has_shortened_school_ids=has_shortened_school_ids,
               MYP_CRITERIA=["A", "B", "C", "D"], jsonify=lambda data: data,
@@ -251,7 +251,7 @@ class WorkspaceTests(unittest.TestCase):
         cloud = Path(self.tmp.name) / "cloud"
         for folder in (project, workspace, cloud):
             folder.mkdir(parents=True, exist_ok=True)
-        self.ns.update(BASE_DIR=str(workspace), SETTINGS={"cloud_dir": str(cloud)})
+        self.ns.update(STATE_DIR=str(workspace), SETTINGS={"cloud_dir": str(cloud)})
         paths = [workspace / "credentials.json", project / "client_secret-test.json",
                  cloud / "credentials.json"]
         for path in paths:

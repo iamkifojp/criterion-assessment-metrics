@@ -63,19 +63,23 @@ from googleapiclient.errors import HttpError
 # Configuration
 # -----------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_STATE = os.environ.get("CAM_APP_STATE")
+APP_CACHE = os.environ.get("CAM_APP_CACHE")
+STATE_DIR = os.path.join(APP_STATE, "cam_grading_workspace") if APP_STATE else BASE_DIR
+CACHE_DIR = os.path.join(APP_CACHE, "cam_grading_workspace") if APP_CACHE else BASE_DIR
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
-TOKEN_FILE = os.path.join(BASE_DIR, "token.json")
+TOKEN_FILE = os.path.join(STATE_DIR, "token.json")
 
 # On-disk cache for PDFs the focused viewer downloads from Drive. Keyed by
 # file id + modifiedTime so a re-upload (new modifiedTime) busts the entry.
 # Gitignored (pdf_cache/); safe to delete — it repopulates on next open.
-PDF_CACHE_DIR = os.path.join(BASE_DIR, "pdf_cache")
+PDF_CACHE_DIR = os.path.join(CACHE_DIR, "pdf_cache")
 
 # On-disk cache for LocalProvider thumbnails (PDF first-page / image renders),
 # keyed by source path + mtime + width. Kept OUTSIDE the served local folder so
 # a rendered thumbnail is never itself served as student work. Gitignored
 # (thumb_cache/); safe to delete — it repopulates on next open.
-THUMB_CACHE_DIR = os.path.join(BASE_DIR, "thumb_cache")
+THUMB_CACHE_DIR = os.path.join(CACHE_DIR, "thumb_cache")
 # Grid thumbnail width (fast whole-class paint) and the hover-enlarge / clamp
 # ceiling (the frontend requests ?sz=1600 on mouseenter, exactly like images).
 THUMB_GRID_WIDTH = 400
@@ -193,7 +197,7 @@ STATE_LOCK = threading.Lock()
 # app remember every class's Drive folder ID and act as a data feeder: exports
 # and the live state cache are written into per-class subfolders of the cloud
 # directory so a downstream dashboard can pick them up.
-SETTINGS_FILE = os.path.join(BASE_DIR, "gcg_settings.json")
+SETTINGS_FILE = os.path.join(STATE_DIR, "gcg_settings.json")
 SETTINGS = {
     "cloud_dir": "",       # local path to OneDrive/Google Drive sync folder ("" = off)
     "classes": {},         # {"Class 7A": "<driveFolderId>", ...}
@@ -337,7 +341,7 @@ def save_settings():
 # database, so one machine can grade blind while another shows names. This is
 # the home for the "Anonymous grading" toggle. save_prefs MERGES (read → update
 # → write), so it preserves any key another tool wrote and never clobbers.
-PREFS_FILE = os.path.join(BASE_DIR, "local_device_prefs.json")
+PREFS_FILE = os.path.join(STATE_DIR, "local_device_prefs.json")
 
 
 def load_prefs():
@@ -375,7 +379,7 @@ def class_output_dir(create=False):
     """Directory where this class's exports + state cache belong.
 
     Returns [cloud_dir]/[class_name]/ when both a cloud directory and an active
-    class are set; otherwise falls back to the app root (BASE_DIR) so the app
+    class are set; otherwise falls back to the device state directory so the app
     keeps working with no cloud configured.
     """
     cloud = SETTINGS.get("cloud_dir", "").strip()
@@ -387,9 +391,9 @@ def class_output_dir(create=False):
                 os.makedirs(d, exist_ok=True)
             except Exception as e:
                 print("Warning: could not create class subfolder:", e)
-                return BASE_DIR
+                return STATE_DIR
         return d
-    return BASE_DIR
+    return STATE_DIR
 
 
 def _write_export_beacon(class_name, assignment, csv_path):
@@ -591,7 +595,7 @@ def find_client_secret():
         found += sorted(glob.glob(os.path.join(folder, "client_secret*.json")))
         return found
 
-    candidates = _probe(BASE_DIR) + _probe(os.path.dirname(BASE_DIR))
+    candidates = _probe(STATE_DIR) + _probe(os.path.dirname(STATE_DIR))
     cloud = SETTINGS.get("cloud_dir", "").strip()
     if cloud and os.path.isdir(cloud):
         candidates += _probe(cloud)
@@ -2751,7 +2755,7 @@ def api_save_state():
             "ok": True,
             "directory": out_dir,
             "cache_file": cache_file_path(),
-            "routed_to_cloud": out_dir != BASE_DIR,
+            "routed_to_cloud": out_dir != STATE_DIR,
         })
 
 
@@ -2971,8 +2975,8 @@ def api_export():
     safe_name = re.sub(r'[\\/*?:"<>|]', "_", folder_name).strip() or "Grades"
     # When a cloud directory + active class are configured, write the CSV
     # straight into [cloud_dir]/[class_name]/ (the dashboard feed) instead of
-    # streaming a browser download. out_dir falls back to BASE_DIR otherwise.
-    routed = out_dir != BASE_DIR
+    # streaming a browser download. out_dir falls back to STATE_DIR otherwise.
+    routed = out_dir != STATE_DIR
     # No deadline (e.g. deliberately left blank so nobody is flagged Late):
     # reuse the date of this assignment's existing export instead of today's,
     # so re-exporting on a later day overwrites that file rather than minting

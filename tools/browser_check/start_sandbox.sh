@@ -3,7 +3,7 @@
 #
 #   zsh tools/browser_check/start_sandbox.sh [sandbox folder]
 #
-# The same as start_sandbox.ps1: tracked files only, the bundle's exact
+# The same as start_sandbox.ps1: tracked files only, the Mac bundle's exact
 # libraries in a sandbox venv, every data path in the sandbox, port 8611.
 # See README.md here.
 set -eu
@@ -20,7 +20,7 @@ PY="$SB/venv/bin/python"
 if [ ! -x "$PY" ]; then
   python3 -m venv "$SB/venv"
   "$PY" -m pip install --quiet --disable-pip-version-check --no-deps \
-      -r "$REPO/tools/bundle-requirements-windows.txt"
+      -r "$REPO/tools/bundle-requirements-macos.txt"
 fi
 PREFS="$SB/repo/local_device_prefs.json"
 if [ -f "$PREFS" ]; then

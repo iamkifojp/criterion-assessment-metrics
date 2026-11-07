@@ -8,6 +8,9 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ## Unreleased — CAM2 engine upgrade
 
+- **Run CAM on Apple Silicon.** The Mac ZIP includes CAM, its grading
+  workspace, CAM2 and their Python runtime. It adds native folder selection
+  and keeps preferences, caches and logs separate from the app bundle.
 - **Update every computer before opening existing exams.** Back up the gradebook
   and the class exam folders first. Opening an old exam upgrades its CAM2
   session. If an older installation reports `file_from_newer_version`, update
@@ -28,8 +31,9 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
   and reports how many whole question comments it omits if the prompt is long.
   New CAM2 comments are limited to 300 characters per question and 600
   characters overall. Previously saved comments are preserved.
-- **Licences.** The portable download includes PyMuPDF and is distributed
-  under AGPL-3.0. See the `Licences` folder for notices and source links.
+- **Licences.** The Windows and Mac bundles include PyMuPDF and are
+  distributed under AGPL-3.0. See the `Licences` folder for notices and
+  source links.
 
 ## 2026-11-01 — v2026.11.01 Windows portable release
 
