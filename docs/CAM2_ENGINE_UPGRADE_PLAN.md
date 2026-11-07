@@ -13,10 +13,13 @@ passed on the Mac and on the Windows Surface. The Windows bundle was built and
 booted there, and PR #9 excluded the remaining developer files.
 Phase 4M's signed Apple Silicon development ZIP passed local smoke tests, and
 the teacher accepted the app after testing on their MacBook Air on 2026-11-08.
-The Windows launcher smoke test and the Mac–Windows OneDrive check remain
-before release. The teacher deferred independent Mac testing until after
-release. Phase 5 covers release preparation, and Phase 6 covers the separate
-real-data rollout.
+The rebuilt Windows development ZIP passed its launcher and grading smoke
+tests. The teacher verified that fictional gradebook marks sync through
+OneDrive in both directions between the MacBook Air and Windows desktop.
+Phase 4M is complete. The teacher accepted the gradebook handoff as sufficient
+and chose to skip the separate CAM2 comment and lock handoff. Independent Mac
+testing remains deferred until after release. Phase 5 covers release
+preparation, and Phase 6 covers the separate real-data rollout.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -29,21 +32,10 @@ repository in Codex and check `git status` before updating. With a clean
 checkout, switch to `main` and run `git pull --ff-only`. The pinned CAM2
 engine is already in `exam_grading/`.
 
-1. Ask Codex to build and smoke-test the Windows ZIP from the updated checkout
-   with fictional data. Use the [browser check fixtures](../tools/browser_check/README.md)
-   and confirm the extracted ZIP starts CAM and both grading helpers. Check
-   that **Quit CAM** beside **Settings** closes all three, and that the
-   troubleshooting launcher shows startup messages and writes `logs\cam.log`.
-2. Use a separate OneDrive folder with a fictional gradebook and exam. Open it
-   in the development builds on the Mac and Surface. Save a test change on the
-   Mac, let OneDrive finish syncing and confirm the change on the Surface.
-   Then save a different test change on the Surface, let it sync and confirm
-   both changes on the Mac. Use isolated preferences on both computers and
-   record any macOS folder access prompts.
-3. After that check, finish the release guidance in [Phase 5](#phase-5--documents-and-release-notes--sm).
-   Build and smoke-test both release ZIPs from the same tag. Prepare the release
-   checksums and matching source archives, then share the published Mac ZIP
-   with colleagues for their independent first-launch check.
+Continue with [Phase 5](#phase-5--documents-and-release-notes--sm). Finish the
+release guidance, then build and smoke-test both release ZIPs from the same
+tag. Prepare the checksums and matching source archives. Colleagues will check
+first launch on their Macs after release.
 
 The phase check agreed for development is recorded here:
 
@@ -1429,8 +1421,6 @@ when the app runs.
 - **Quit from the browser on both platforms.** The packaged launcher supervises
   Streamlit and the two grading helpers. **Quit CAM** beside **Settings**
   requests a clean shutdown. The Mac Dock menu can also close the app.
-- **Check on a Mac:** file locking already has a Mac path (`persistence.py:1392`), but the
-  bundle hasn't run it against OneDrive's Mac folder (`~/Library/CloudStorage`).
 - **Licences per platform.** Mac libraries differ, so pin exact versions and keep notices
   for each platform, with Phase 4's build check on both. The Mac runtime needs its own
   entry.
@@ -1442,8 +1432,10 @@ when the app runs.
   permissions requested for Documents and the chosen cloud folder and verify
   that replacing the app preserves the test preferences, gradebook and sessions
   across an upgrade.
-- **A cross-computer check:** one fictional data folder synced between the Mac bundle and
-  the Windows bundle, in both directions.
+- **A cross-computer check:** hand off one fictional data folder in both
+  directions between the Mac and Windows builds. Only one computer opens the
+  shared gradebook or CAM2 exam at a time. Quit both apps on the sending
+  computer and wait for OneDrive before opening them on the receiving computer.
 - Phase 5's guides gain the Mac steps and screenshots.
 
 *Done for release when:* the extracted signed app starts locally and
@@ -1501,10 +1493,52 @@ button was restored.
   grade keeps the selected exam open and updates its distribution.
   A separate Mac smoke test of the shared launcher verified that **Quit CAM**
   stops Streamlit, the grading workspace and CAM2.
-- The updated launcher still needs its packaged smoke test on Windows.
-  The two-way OneDrive check needs a fictional data folder shared between
-  the Mac and Surface. Independent Mac first-launch checks are deferred to
-  colleagues after release.
+- At the time of the Mac test, the updated Windows launcher and two-way
+  OneDrive checks were pending. Independent Mac first-launch checks are
+  deferred to colleagues after release.
+
+**Windows development ZIP, 2026-11-08.** Built from `8228a27` with embedded
+Python 3.14.6. The build finished on the Windows desktop. The archive and
+licence checks passed, and the gradebook in the ZIP matched the committed
+fictional sample. The isolated source run passed 489 CAM tests and 354 CAM2
+tests with no skips.
+
+- **ZIP** `CAM-portable-v2026.11.07-dev-8228a27.zip`. SHA-256
+  `0c56e635cafcc4003db549d8bc133958fe8a2b6421f1e3095c845fb8a595a5f3`.
+- From a fresh extraction, the bundled Python started CAM. Chromium showed
+  all eight current fictional exam fixtures and the licence panel. Initial
+  Sync preserved the exam JSON hashes. CAM launched CAM2 with eight roster
+  entries and opened the grading workspace with four fictional drafts. The
+  test saved an exam comment and report total through CAM2, saved and exported
+  a draft comment through the workspace, then confirmed both edits in CAM's
+  sandbox gradebook. The smoke test used the bundled interpreter directly.
+
+**Rebuilt Windows development ZIP, 2026-11-08.** The Windows checkout was
+fast-forwarded to `5485ce3`, which includes the revised **Grades and Analysis**
+dialog, Browse callbacks and shared launcher. The full rebuild passed the
+archive and licence audits. The isolated source run passed 491 CAM tests and
+354 CAM2 tests with no skips.
+
+- **ZIP** `dist/CAM-portable-v2026.11.08-dev-5485ce3.zip`. SHA-256
+  `2c1f30e1363bdb66bacf6c1e1214323b21e35ec82a938e67dbe6b845c58e594f`.
+- From a fresh extraction, `Start CAM.vbs` and the troubleshooting batch file
+  started CAM with its bundled Python. The batch file showed startup output
+  and wrote `logs\cam.log`. **Grades and Analysis** applied a fictional grade
+  and opened CAM2. The workspace loaded four fictional drafts. **Quit CAM**
+  closed all three servers, cleared CAM2's server record and left no exam lock.
+
+**Two-way OneDrive gradebook check, 2026-11-08.** The teacher used the shared
+fictional **Documents → CAM OneDrive Sync Test** folder. They saved a mark
+change on the MacBook Air and saw it after opening CAM on Windows. They
+then saved another mark change on the Windows desktop and saw it on the Mac.
+Both directions passed for gradebook marks.
+
+**Phase 4M closeout, 2026-11-08.** The teacher accepted the two-way gradebook
+result and chose to skip a separate cross-device test of CAM2 comments and
+session locks, based on the previous version's working comment handoff.
+Local CAM2 grading, sending results and shutdown passed in the packaged
+tests. Only one computer may open the shared gradebook or exam at a time.
+Phase 5 begins with the release notes and platform-specific setup instructions.
 
 ### Phase 5 — Documents and release notes · S–M
 
