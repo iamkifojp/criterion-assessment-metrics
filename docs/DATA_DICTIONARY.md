@@ -106,7 +106,8 @@ cleanly — it simply lands at ingest time.
 Exams are graded in CAM2 and read from its session folder
 (`<class folder>/exams/<exam>/`, ARCHITECTURE §4), not from a CSV. Each paper
 becomes one `ExamResult` on the student (`Student.exam_results[exam]`), kept off
-the 0–8 scale until the teacher bands or confirms it in Window 1. The base keys
+the 0–8 scale. CAM records a separate criterion grade when the teacher chooses
+one in CAM or applies a final level explicitly typed in CAM2. The base keys
 are `assignment`, `total`, `max_total`, `questions` (label → whole mark) and
 `comment`.
 

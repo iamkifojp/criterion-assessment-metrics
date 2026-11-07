@@ -282,9 +282,10 @@ old one. Your gradebook remains in the separate data folder you selected, so
 replacing the app folder does not replace your data. Select the same data
 folder when the updated app first opens.
 
-If several computers use the same data folder, update all of them. An older
-CAM can open a database saved by a newer one, but saving from it loses what
-it does not know about.
+Back up the gradebook and each class's exams folder. Update every computer
+that shares the data folder before opening an existing exam. Opening an old
+exam upgrades its session. If an older computer reports
+file_from_newer_version, update CAM on that computer before reopening it.
 
 CAM is free software. This download includes PyMuPDF, so as a whole it is
 licensed under the GNU AGPL version 3. CAM's own code, and CAM2's, are under

@@ -618,8 +618,8 @@ whether the stored reference looks like a filesystem path or a Drive ID.
 
 ## 4. Exams — CAM2 hosted by CAM (`exam_grading/` + `engine/exam_bridge.py`)
 
-Scanned exams are graded in CAM2 Exam Grading, vendored unmodified at
-`exam_grading/` (§1). CAM2 has its own small Flask server (`launcher.py`, single
+Scanned exams and slide PDFs are graded in CAM2 Exam Grading. CAM vendors
+the `e39afdc` maintenance commit at `exam_grading/` (§1). CAM2 has its own Flask server (`launcher.py`, single
 instance, port from 5182, stops itself when idle) and does everything about the
 paper: scans, booklets and page fixes, question boxes, name matching, grading
 (marks or rubric levels), choice groups, its safe saving, and its own student
@@ -649,6 +649,8 @@ paper by `external_id`, then alias / unambiguous prefix, else the 🧩 pool
 session only once it has been sent, and again only when its two files change
 (the fingerprint is kept in `ingested_files`). Re-reading is purge-replace for
 the exam's results; grades already applied in Grades and Analysis are kept.
+CAM2 upgrades an older session to format version 2 on open. Older readers
+report `file_from_newer_version` for a session they cannot read.
 
 **Picking up a send: compare, don't listen.** CAM2 sends no message; the
 folder is the signal, and CAM compares it with its own record rather than
@@ -678,6 +680,7 @@ blank. The bridge preserves raw and weighted marks and keeps any teacher
 adjustment to the report figures separately. For rubric or mixed exams and
 marks linked to criteria, the dialog maps rubrics to CAM criteria and
 Window 3 groups the evidence for one teacher decision per criterion.
+Marks and question levels remain reference evidence.
 The panel's Apply
 carries over unambiguous final levels typed in CAM2
 (`_apply_exam_rubric_levels`), scaling them to 0–8 when needed. Sync refreshes

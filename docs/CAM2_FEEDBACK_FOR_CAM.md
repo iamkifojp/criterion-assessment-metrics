@@ -1,8 +1,10 @@
 # CAM2 feedback that affects CAM
 
-**Status, 2026-11-07.** CAM's main branch includes CAM2 `v0.3.2-dev`
-(`4423090`), comment length limits, the workspace comment fix and the exam
-feedback block in term prompts. Packaging for the CAM release is in progress
+**Status, 2026-11-08.** The CAM release uses maintenance commit `e39afdc`,
+based on CAM2 `v0.3.2-dev`. This includes slide PDF support, comment length
+limits and the report-value fix. CAM also includes the workspace comment
+and draft-partner fixes and the exam feedback block in term prompts.
+Packaging for the CAM release is in progress
 in the [engine upgrade plan](CAM2_ENGINE_UPGRADE_PLAN.md). The baseline below
 records the assessment before implementation.
 
@@ -69,6 +71,11 @@ None of these change the current upgrade.
 F9 to F15 are optional ideas from research, and nothing in them needs CAM to change. If F14 is taken up, comparing exams over time still belongs in CAM.
 
 ## The second pull
+
+Start from CAM's `e39afdc` pin. Carry the report-value fix into the next
+upstream tag and handle the November 6 review findings alongside the teacher's
+planned CAM2 improvements. The existing standalone downloads stay available
+for this CAM release.
 
 - **Another session version.** F1 and F2 add to the session file and raise its version, so I4 happens again: opening a session upgrades it for good, and a computer on an older CAM reads `file_from_newer_version`. The release notes will need to say again to update every computer first.
 - **Same method.** Change CAM2, tag it, and `git subtree pull`. Never edit `exam_grading/` in place.

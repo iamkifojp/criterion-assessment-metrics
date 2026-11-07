@@ -1,6 +1,6 @@
 # CAM Quick Guide
 
-## Get started
+## Get started on Windows
 
 1. Right-click the downloaded CAM zip, choose **Extract All**, and open the new folder. Don't run CAM from inside the zip — it can't save anything there.
 2. Double-click **Start CAM.vbs**. Your browser opens by itself; the very first start takes a little longer.
@@ -18,6 +18,21 @@
 - The sample class is entirely fictional, so explore freely — nothing you try can affect real students.
 
 > Choosing a folder never overwrites anything: an existing database there is loaded, and an empty folder simply gets a new one on first save.
+
+## Get started on a Mac
+
+Use the Apple Silicon ZIP on a Mac with an Apple chip and macOS 14 (Sonoma) or newer.
+
+1. Open the ZIP in Finder, then move **CAM.app** to **Applications**.
+2. Try opening CAM. If macOS blocks a trusted first download, open **System Settings → Privacy & Security → Open Anyway**. [Apple's first-launch steps](https://support.apple.com/en-gb/102445)
+3. In the browser, choose your existing gradebook with **Browse…** or choose **Start fresh with sample data** to try the fictional class in `~/Documents/CAM Data`.
+4. Click **Quit CAM** beside **Settings** to stop CAM and its grading helpers.
+
+### When updating
+
+Replace **CAM.app** in **Applications** and keep your data folder separately. CAM keeps settings and `cam.log` in `~/Library/Application Support/CAM`.
+
+> Back up the gradebook and class exam folders. Update every computer that uses the shared folder before opening an existing exam.
 
 ## Set up a class
 
@@ -60,20 +75,20 @@ CAM lays the whole job out in three windows, read left to right in the order you
 ## Grade an exam
 
 1. In Window 1, create the item with **➕ Add assignment / exam** and mark it as an **Exam**, then click it and choose **🛠 Exam setup / Grade**. CAM2 Exam Grading opens with your class list already in it.
-2. Bring in paper scans or PDFs exported from slides. Draw a box around each answer on the first paper and choose **Marks** or **Rubric**.
+2. Bring in paper scans or PDFs already exported from slides. Draw a box around each answer on the first paper and choose **Marks** or **Rubric**.
 3. Match each paper to a student, then grade one question at a time across the class, with quick comments where they help.
 4. In **Review & export**, check the totals and click **✓ Grading finished — send to CAM**. You can also make the student PDF reports there.
-5. Click the exam in Window 1 to open **Grades and Analysis**. Use **Grade evaluation** to enter class grades, map rubrics or apply final levels typed in CAM2. For one student, focus them in Window 2 and click the exam's grade pill in Window 3 to see the paper's reference marks.
+5. Open the exam's **Grades and Analysis** to enter class grades, map rubrics or apply final levels typed in CAM2. In Window 3, click a student's exam pill to see the levels and reference marks and choose one grade per assessed criterion.
 
 ![Scans are cut into questions, graded in CAM2 and sent back to CAM](quick_guide_images/grade-exam.svg)
 
 ### Good to know
 
 - A box in the wrong place isn't a disaster: **✎ Adjust this box** while grading fixes it and slices only that question again — every grade you've given stays put.
-- **Hide student names** and **Shuffle papers** (in the grading step) show papers as `01`, `02`, … in a new order for every question, so no impression of any one student builds up.
+- CAM leaves new bands blank. Choose each 0–8 grade yourself. For draft work, use an assignment with **Draft — comments only** and grade in the workspace.
 - Changed a grade after sending? Click **Send again** in CAM2; grades you already applied in CAM are kept.
 
-> Update every computer that shares the class folder before opening an existing exam. CAM2 upgrades older sessions when opened, and older versions cannot read the upgraded sessions.
+> Update every computer that shares the class folder before opening an existing exam. If you see `file_from_newer_version`, update that computer before reopening it.
 
 ## Reports and exports
 

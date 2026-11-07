@@ -21,8 +21,9 @@ and chose to skip the separate CAM2 comment and lock handoff. Independent Mac
 testing remains deferred until after release. Phase 5 covers release
 preparation, and Phase 6 covers the separate real-data rollout.
 The [Phase 4 follow-up](#phase-4-follow-up-2026-11-08) fixes the report-total
-field and restores exported draft partner links. It also records four
-upstream review findings that need a decision before Phase 5.
+field and restores exported draft partner links. On 2026-11-08 the teacher
+deferred the four upstream review findings to the later CAM2 upgrade and
+asked to finish the CAM release first.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -1566,13 +1567,14 @@ Phase 5 begins with the release notes and platform-specific setup instructions.
   both workspace files were removed. It also checked that a newer unlink
   survives a stale handoff and re-export. Release ZIP builds and smoke tests
   still belong to Phase 5.
-- **Open before Phase 5.** The
+- **Deferred to the later CAM2 upgrade by the teacher, 2026-11-08.** The
   [November 6 CAM2 review](https://github.com/iamkifojp/cam2-exam-grading/blob/97ac11b0e9c56764713df89f657ca054002ae35f/doc/repository-review-2026-11-06.md)
   records three P1 findings (rubric loss on navigation, swapped student
   identities after roster reorder, and reused rubric IDs) and one P2
   finding (a successful unrelated save hides unsaved grades). The paths
-  involved are also present in the vendored engine. Review their effect
-  in CAM host mode and settle them before starting Phase 5.
+  involved are also present in the vendored engine. The CAM release uses
+  the current vendored maintenance commit. The standalone CAM2 downloads
+  and the four review findings belong to the later CAM2 upgrade.
 
 ### Phase 5 — Documents and release notes · S–M
 
@@ -1581,6 +1583,13 @@ platform-specific instructions after the launchers and paths are verified.
 Then build both ZIPs from one tagged commit, run the packaged
 smoke tests with fictional data, and prepare `SHA256SUMS.txt` and the matching
 source archives. Phase 6 has its own permission steps.
+
+**Release preparation, 2026-11-08.** The release notes, setup guide, exam
+references and eight-page Quick Guide are ready for tag `v2026.11.08`. The
+PDF was rendered and visually checked in Windows. The vendored engine
+stays on `e39afdc`, as agreed. Build and smoke-test the Windows and Apple
+Silicon ZIPs from this tag, then publish them with the source archives and
+checksums after both pass.
 
 - Rewrite the exam parts of `USER_MANUAL.md` and `QUICK_GUIDE.md` (and its PDF),
   `ARCHITECTURE.md` §4 and `DATA_DICTIONARY.md`, and the `app.py:7560` docstring.

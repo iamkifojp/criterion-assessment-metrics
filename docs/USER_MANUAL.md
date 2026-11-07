@@ -130,6 +130,7 @@ points are:
 
 - **① Exam & scans.** Choose the scans: the whole class in one PDF from the
   photocopier (or a few batches), one file per student, or phone photos.
+  For slide decks, export the decks to PDF before importing them.
   Booklets scanned open on A3 are put back in page order, and turned, missing or
   extra pages can be fixed on screen. Late papers can be added any time.
 - **② Set up questions.** Draw a box around each answer on the first paper
@@ -233,13 +234,15 @@ in CAM2.
 ### Exam feedback in term comments
 
 Window 3 includes each exam's overall and question comments when it builds a
-term comment prompt. The exam feedback block contains comments only. If there
+term comment prompt. The exam feedback block contains comments only, leaving
+the strength and growth evidence slots available for other assignments. If there
 is too much material, CAM keeps the overall comments and tells you how many
 whole question comments it left out. Review the prompt before sending it to
-your chosen AI service.
+your chosen AI service. It receives the exam feedback that is in the prompt.
 
 Use **Draft — comments only** for draft work in the grading workspace.
-Changing a tick or a deadline preserves typed comments. Linking partners
+Changing a tick or a deadline preserves typed comments. CAM updates the line
+generated from the ticks and keeps what you typed. Linking partners
 combines their ticks and comments and shares the first graded member's grade
 when the work is graded. After you export a linked draft and CAM syncs it,
 reopening the draft from CAM can recover the partner link if the workspace

@@ -162,9 +162,11 @@ found by their `SCREEN nn / NN` header, whatever NN is.
 
 ## 5. Phases
 
-Sizes: S ≈ an afternoon, M ≈ a day, L ≈ several days. Phases land in order,
-except that Phase 1 (CAM2) can run alongside Phase 0, and Phase 1W stands
-alone: it can land first, because drafts need it now.
+Sizes: S ≈ an afternoon, M ≈ a day, L ≈ several days. Slide paper sizes
+are complete in the CAM2 engine upgrade. For this release, start with PDFs
+exported from slides and use the normal CAM2 exam workflow. The Drive phases
+below are deferred under D17, including Phase 0 and Fetch from Drive. The
+upgrade plan's Appendix A is the interim route for preparing PDFs in bulk.
 
 ### Phase 1W — Workspace: identify re-uploaded files by name · S–M (CAM repo)
 

@@ -5,7 +5,7 @@ connected to your own data.
 
 ## For colleagues on Windows: use the portable bundle
 
-Download `CAM-portable-v2026.11.01.zip` from the
+Download the `CAM-portable-vYYYY.MM.DD.zip` for your CAM version from the
 [latest GitHub release](https://github.com/iamkifojp/criterion-assessment-metrics/releases/latest),
 or use the same file if you received it from your school or CAM maintainer. It
 needs no administrator access, Python installation, Git, or terminal:
@@ -19,7 +19,8 @@ Start fresh creates the fictional sample gradebook in `Documents\CAM Data`;
 the app folder and your data folder remain separate. For the illustrated daily
 workflow and troubleshooting, open `CAM Quick Guide.pdf` in the bundle. If CAM
 does not start, run **Start CAM (troubleshooting).bat** and inspect
-`logs\cam.log`.
+`logs\cam.log`. To stop CAM and both grading helpers, click **Quit CAM**
+beside **Settings**.
 
 Exams are graded in **CAM2 Exam Grading**, which is included: Window 1's
 **🛠 Exam setup / Grade** opens it in its own browser tab, and it stops by
@@ -30,13 +31,39 @@ shows the reason; the full start-up log is
 When updating, extract the new bundle into a new app folder and select the same
 data folder on first start. Never replace or delete your data folder. The
 release also provides a `SHA256SUMS.txt` file: advanced users can compare it
-with `Get-FileHash .\CAM-portable-v2026.11.01.zip -Algorithm SHA256` in
+with `Get-FileHash .\CAM-portable-v2026.11.08.zip -Algorithm SHA256` in
 PowerShell to confirm the download is unchanged.
 
-See the [v2026.11.01 release notes](RELEASE_NOTES_v2026.11.01.md) for the main
-changes and a short update checklist. If several computers share your data
-folder, update all of them: an older CAM that saves the database drops what it
-does not know about.
+## For colleagues on Apple Silicon Macs
+
+Use `CAM-Mac-AppleSilicon-vYYYY.MM.DD.zip` on a Mac with an Apple chip and
+macOS 14 (Sonoma) or newer.
+
+1. Extract the ZIP in Finder and move **CAM.app** to **Applications**.
+2. Try opening the app. For a trusted download that macOS blocks on the
+   first attempt, use **System Settings → Privacy & Security → Open Anyway**.
+   A managed Mac may require help from IT. [Apple's first-launch instructions](https://support.apple.com/en-gb/102445)
+3. In the browser, choose your existing data folder with **Browse…**, or
+   choose **Start fresh with sample data** for the fictional gradebook in
+   `~/Documents/CAM Data`. Click **Quit CAM** beside **Settings** when done.
+
+When updating, replace **CAM.app** in **Applications**. CAM keeps your settings
+and `cam.log` in `~/Library/Application Support/CAM`. For optional Google
+Drive grading, put your OAuth client file in its `cam_grading_workspace`
+subfolder. The next locations searched are the CAM Application Support
+folder and your configured cloud folder.
+
+## Updating a shared gradebook
+
+Quit CAM on all computers and back up the gradebook and class exam folders.
+Update every computer that uses the folder before opening an existing exam.
+Opening an older exam upgrades it to session version 2. If an older computer
+reports `file_from_newer_version`, update CAM on that computer before reopening.
+Open the shared data folder on one computer at a time. After quitting CAM,
+wait for cloud sync to finish before opening the same data elsewhere.
+
+See the [v2026.11.08 release notes](RELEASE_NOTES_v2026.11.08.md) for the full
+update checklist.
 
 ## For developers and maintainers: run from source
 

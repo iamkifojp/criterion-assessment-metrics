@@ -7621,7 +7621,7 @@ def _render_exam_evaluation(asg, results) -> None:
 
 
 def _render_raw_mark_grades(asg, results) -> None:
-    """Choose gradebook grades using the raw marks for this exam."""
+    """Record teacher-chosen criterion grades beside the CAM2 reference marks."""
     sel = asg.name
     n_unfinished = sum(not r.complete for _, r in results)
     if n_unfinished:

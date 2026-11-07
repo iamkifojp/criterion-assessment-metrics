@@ -145,6 +145,8 @@ gradebook, written to the session's `reports/` folder.
   answered" was meant.)*
 - **D3 · No strand levels; criteria come from Rubric mode** (option C).
   Amended by D10–D13 of the [engine upgrade plan](CAM2_ENGINE_UPGRADE_PLAN.md).
+  The amended workflow supports mixed papers and preserves their per-question
+  levels and marks as evidence for a teacher decision per criterion in Window 3.
   An exam that assesses several criteria is set up in CAM2's Rubric mode, with
   each question (or group of questions) assigned to Criterion A, B, C or D,
   and graded with the teacher's full rubrics. CAM2's review step and student
@@ -161,6 +163,8 @@ gradebook, written to the session's `reports/` folder.
   level per criterion becomes that criterion's `CriterionScore`, confirmed in
   the Window 1 panel, with no raw-mark banding step.
   Amended by D10–D13 of the [engine upgrade plan](CAM2_ENGINE_UPGRADE_PLAN.md).
+  Apply uses only an explicit final level typed in CAM2 with an unambiguous
+  mapping. Other criterion decisions are made by the teacher in CAM.
 - **D5 · Old exams:** dropped completely (§3).
 - **D6 · Scans in the cloud folder:** the session folder, scans included, lives
   in the class cloud folder. Re-slicing and the whole-page view then work on

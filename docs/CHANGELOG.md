@@ -6,7 +6,10 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
-## Unreleased — CAM2 engine upgrade
+## v2026.11.08 — CAM2 engine upgrade
+
+See the [release notes](RELEASE_NOTES_v2026.11.08.md) for the shared-gradebook
+update checklist, installation on both platforms and source archives.
 
 - **Run CAM on Apple Silicon.** The Mac ZIP includes CAM, its grading
   workspace, CAM2 and their Python runtime. It adds native folder selection
