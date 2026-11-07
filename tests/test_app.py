@@ -508,6 +508,12 @@ class ReviewTests(AppTestCase):
         marks = session["summary"]["students"][0]["marks"]
         self.assertEqual((marks["total"], marks["report_total"], marks["adjusted"]), (7, 8, True))
         self.assertEqual(session["summary"]["students"][0]["comment"], "Well done")
+        err = self.post("/api/overall", {"student_id": "s001", "report_total": 78,
+                                         "comment": "Should not save"}, status=400)
+        self.assertEqual(err["error"], "report_value_out_of_range")
+        session = self.client.get("/api/state").get_json()["session"]
+        student = session["summary"]["students"][0]
+        self.assertEqual((student["marks"]["report_total"], student["comment"]), (8, "Well done"))
         session = self.post("/api/overall", {"student_id": "s001", "report_total": ""})["session"]
         self.assertFalse(session["summary"]["students"][0]["marks"]["adjusted"])
         err = self.post("/api/overall", {"student_id": "s001", "report_total": "lots"}, status=400)
@@ -550,6 +556,8 @@ class ReviewTests(AppTestCase):
         self.post("/api/weighting", {"on": True})
         marks = self.post("/api/overall", {"student_id": "s001", "report_percent": "85"})["session"]["summary"]["students"][0]["marks"]
         self.assertEqual((marks["percent"], marks["report_percent"], marks["adjusted"]), (90.0, 85, True))
+        err = self.post("/api/overall", {"student_id": "s001", "report_percent": 101}, status=400)
+        self.assertEqual(err["error"], "report_value_out_of_range")
         marks = self.post("/api/overall", {"student_id": "s001", "report_percent": ""})["session"]["summary"]["students"][0]["marks"]
         self.assertEqual((marks["report_percent"], marks["adjusted"]), (90.0, False))
 

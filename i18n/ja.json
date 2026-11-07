@@ -563,6 +563,7 @@
   "error.unknown_rubric": "このルーブリックはもう存在しません。",
   "error.mark_out_of_range": "{value} は入力できません。点数は 0 から {max} までです。",
   "error.report_total_invalid": "合計には数字を入力してください。",
+  "error.report_value_out_of_range": "レポートに表示する値は0から{max}の範囲で入力してください。",
   "error.choice_group_invalid": "選択問題の設定を確認してください。設問を2つ以上選び、解答する数（選んだ設問の数より少なく）を指定してください。",
   "error.host_handoff_invalid": "CAM から送られた試験の情報を読み取れませんでした。CAM からもう一度開いてください。",
   "error.host_folder_not_empty": "試験のフォルダーにほかのファイルがあります：{folder}。フォルダーを空にするか、CAM で別の試験名にしてください。",

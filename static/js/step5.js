@@ -191,7 +191,7 @@ ${action}` : action,
       h("td", { class: `num-col ${res.marks.adjusted ? "adjusted" : ""}` }, weighted
         ? overrideInput(`percent-${s.id}`, res.marks.report_percent, res.marks.percent, 100,
           (v) => ({ student_id: s.id, report_percent: v }), res.marks.adjusted, t("step5.on_report_percent"))
-        : overrideInput(`total-${s.id}`, res.marks.report_total, res.marks.total, null,
+        : overrideInput(`total-${s.id}`, res.marks.report_total, res.marks.total, res.marks.max,
           (v) => ({ student_id: s.id, report_total: v }), res.marks.adjusted, t("step5.on_report")))];
     const criterionCells = criteria.map((r) => {
       const rr = res.rubrics[r.id];
@@ -296,11 +296,21 @@ function hostPanel(c, incomplete) {
 // value, means "use the calculated value"; a final level has none, so empty
 // means no final level.
 function overrideInput(id, current, calculated, max, payload, adjusted, label) {
+  const reportValue = calculated !== null;
+  const value = reportValue && current === calculated ? "" : current ?? "";
   const input = h("input", { type: "number", id, class: "num override", min: "0", step: "any",
-    max: max === null ? null : String(max), value: current ?? "",
+    max, value, placeholder: reportValue ? calculated : null,
     "aria-label": label,
+    onfocus: reportValue ? (e) => e.target.select() : null,
     onchange: (e) => {
       const raw = e.target.value.trim();
+      if (reportValue && !e.target.validity.valid) {
+        const message = e.target.validity.badInput ? t("error.report_total_invalid")
+          : t("error.report_value_out_of_range", { max });
+        toast(message, "error");
+        e.target.value = value;
+        return;
+      }
       const v = raw === "" || Number(raw) === calculated ? null : Number(raw);
       keepingPlace(post("/api/overall", payload(v)));
     } });

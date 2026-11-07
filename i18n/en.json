@@ -563,6 +563,7 @@
   "error.unknown_rubric": "This rubric no longer exists.",
   "error.mark_out_of_range": "{value} is not allowed. Marks go from 0 to {max}.",
   "error.report_total_invalid": "Please type a number for the total.",
+  "error.report_value_out_of_range": "Enter a report value from 0 to {max}.",
   "error.choice_group_invalid": "Please check the choice questions: tick at least two questions and choose how many students answer (fewer than the number ticked).",
   "error.host_handoff_invalid": "The exam details sent by CAM could not be read. Open the exam from CAM again.",
   "error.host_folder_not_empty": "The exam’s folder already has other files in it: {folder}. Empty it or choose another exam name in CAM.",
