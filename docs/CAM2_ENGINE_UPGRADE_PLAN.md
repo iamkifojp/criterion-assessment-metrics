@@ -20,6 +20,9 @@ Phase 4M is complete. The teacher accepted the gradebook handoff as sufficient
 and chose to skip the separate CAM2 comment and lock handoff. Independent Mac
 testing remains deferred until after release. Phase 5 covers release
 preparation, and Phase 6 covers the separate real-data rollout.
+The [Phase 4 follow-up](#phase-4-follow-up-2026-11-08) fixes the report-total
+field and restores exported draft partner links. It also records four
+upstream review findings that need a decision before Phase 5.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -1317,7 +1320,7 @@ built and booted on the Surface.
     in the sandboxed CAM: the Windows "Choose this class's master directory" dialog opened at
     the sandbox's `scans\master` folder.
   - **Not covered:** an AI-generated comment (Phase 6, step 7).
-  - **Seen, not caused by Phase 4:** CAM2's "Total on report" box keeps the calculated total
+  - **Fixed in the Phase 4 follow-up:** CAM2's "Total on report" box kept the calculated total
     in it, so typing appends (13 then 15 gave 1315), and it accepted 1315 on a /20 paper with
     no warning. One Streamlit log traceback on a static file ("Expected ASGI message
     'http.response.start'"), with no effect on the page. The term-comment prompt called Sam
@@ -1327,7 +1330,7 @@ built and booted on the Surface.
     has a grade on an exam, the pack lists only the criteria decided. Teachers often assess
     one or two criteria per exam, sometimes one for the whole term, so the report should show
     only what was assessed.
-  - **A restored draft loses its partner link.** Links live only in the workspace's own state,
+  - **Fixed in the Phase 4 follow-up:** a restored draft lost its partner link. Links lived only in the workspace's own state,
     so on a fresh computer the combined comments come back but the two cards aren't grouped.
     No text is lost.
   - **The level buttons move after a click** in CAM2's grading screen, as already recorded;
@@ -1539,6 +1542,37 @@ session locks, based on the previous version's working comment handoff.
 Local CAM2 grading, sending results and shutdown passed in the packaged
 tests. Only one computer may open the shared gradebook or exam at a time.
 Phase 5 begins with the release notes and platform-specific setup instructions.
+
+#### Phase 4 follow-up, 2026-11-08
+
+- **CAM2 report values.** The calculated value appears as a hint and an
+  existing override is selected on focus. The field and API reject totals
+  outside the paper's marks and weighted percentages outside 0–100, keeping
+  the last saved value. CAM pins the maintenance commit
+  [`e39afdc`](https://github.com/iamkifojp/cam2-exam-grading/commit/e39afdcc87c1c3b073229291ecbed1a9396d6b71),
+  based on `v0.3.2-dev`. The runtime identifies itself as
+  `0.3.2-dev-cam.1` so a running standalone `0.3.2-dev` cannot serve the old
+  code in its place. Exam sessions still use format version 2.
+- **Draft partners.** Draft CSV exports carry a group identifier through
+  Sync, the database and CAM's workspace handoff. If both workspace state
+  files are lost, the handoff restores groups with at least two present
+  members. A saved workspace unlink wins over an older CAM handoff. Older
+  exports can be regenerated while the original workspace still has the
+  link.
+- **Verified with fictional data on Windows.** All 492 CAM and 354 CAM2
+  tests passed with no skips. Edge exercised report-value entry,
+  replacement, reset and range rejection. The draft regression exercised
+  export, ingestion, database round-trip, CAM handoff and restore after
+  both workspace files were removed. It also checked that a newer unlink
+  survives a stale handoff and re-export. Release ZIP builds and smoke tests
+  still belong to Phase 5.
+- **Open before Phase 5.** The
+  [November 6 CAM2 review](https://github.com/iamkifojp/cam2-exam-grading/blob/97ac11b0e9c56764713df89f657ca054002ae35f/doc/repository-review-2026-11-06.md)
+  records three P1 findings (rubric loss on navigation, swapped student
+  identities after roster reorder, and reused rubric IDs) and one P2
+  finding (a successful unrelated save hides unsaved grades). The paths
+  involved are also present in the vendored engine. Review their effect
+  in CAM host mode and settle them before starting Phase 5.
 
 ### Phase 5 — Documents and release notes · S–M
 

@@ -1034,6 +1034,8 @@ def load_assignment_options(folder_id):
                 if data.get("is_draft"):
                     options["draft_criteria"] = data.get("criteria", [])
                     options["published_feedback"] = data.get("draft_feedback", {})
+            elif "groups" in data:
+                options["saved_groups"] = data["groups"]
         except (OSError, ValueError, AttributeError):
             continue
     return options
@@ -1056,7 +1058,7 @@ def load_cache_entry(folder_id):
             "late_manual": st.get("late_manual", False),
             "cam_modified": _normalize_cam_modified(st.get("cam_modified")),
         }
-    groups = entry.get("groups") or []
+    groups = entry.get("groups")
     checklist = _normalize_checklist(entry.get("checklist_headers"))
     criteria = [c for c in (entry.get("criteria") or []) if c in MYP_CRITERIA]
     deadline = entry.get("deadline", "") or ""
@@ -2299,12 +2301,16 @@ def api_load():
     students, ordered = group_by_student(files, saved, matching_roster, work_aliases)
     options = load_assignment_options(folder_id)
     draft_extra = dict(options.get("draft_extra") or {})
+    published_groups = {}
     if "published_feedback" in options:
         draft_extra = dict(options["published_feedback"] or {})
         for student in students.values():
             record = draft_extra.pop(student["name"], None)
             if record is None:
                 continue
+            group_id = record.get("partner_group")
+            if group_id:
+                published_groups.setdefault(group_id, []).append(student["key"])
             outcome = _merge_cam_comment(student, record.get("comment", ""))
             published = list(record.get("keywords") or [])
             if outcome == "adopted":
@@ -2380,11 +2386,16 @@ def api_load():
         criteria = options["draft_criteria"]
     deadline = cache_deadline
 
-    # Keep only cached groups whose members still exist in this folder, and
-    # drop any group that no longer has at least two real partners.
+    # An empty saved list is authoritative: a teacher may have unlinked
+    # partners since exporting the draft to CAM.
+    saved_groups = cache_groups if cache_groups is not None else options.get("saved_groups")
+    if saved_groups is None:
+        saved_groups = [{"id": gid, "members": members}
+                        for gid, members in published_groups.items()]
+    # Keep only groups with at least two present members.
     valid = set(students.keys())
     groups = []
-    for g in cache_groups:
+    for g in saved_groups:
         members = [m for m in (g.get("members") or []) if m in valid]
         if len(members) >= 2:
             groups.append({"id": g.get("id") or _gen_group_id(),
@@ -2891,6 +2902,8 @@ def api_export():
         is_draft = bool(STATE.get("is_draft"))
         focus_criteria = list(criteria)
         draft_extra = dict(STATE.get("draft_extra") or {})
+        partner_groups = {member: group["id"] for group in STATE["groups"]
+                          for member in group["members"]} if is_draft else {}
 
     if not students:
         return jsonify({"error": "Nothing loaded to export."}), 400
@@ -2930,6 +2943,8 @@ def api_export():
     header = (["Student Name"] + grade_headers +
               ["Checked Keywords", "Comment", "Due Date",
                "File Count", "Files (newest first)", "Late", "Assessment Mode", "Focus Criteria"])
+    if is_draft:
+        header.append("Draft Partner Group")
 
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -2943,12 +2958,13 @@ def api_export():
         # assessed (None). CAM's ingest parses only "1"/"true"/"yes" as late.
         lm = s.get("late_marked")
         late_cell = "1" if lm else ("0" if lm is False else "")
-        writer.writerow(
-            [s["name"]] + grade_cells +
-            [keywords, s.get("comment", ""), due_date,
-             s.get("count", 0), filenames, late_cell,
-             "draft" if is_draft else "graded", ",".join(focus_criteria)]
-        )
+        row = ([s["name"]] + grade_cells +
+               [keywords, s.get("comment", ""), due_date,
+                s.get("count", 0), filenames, late_cell,
+                "draft" if is_draft else "graded", ",".join(focus_criteria)])
+        if is_draft:
+            row.append(partner_groups.get(s["key"], ""))
+        writer.writerow(row)
     # Carry forward CAM-graded students who have no files in this folder —
     # their marks exist only in CAM, and the purge-replace on Sync would
     # silently drop them if this snapshot left them out. The CAM student id
@@ -2970,7 +2986,7 @@ def api_export():
             writer.writerow([sid, "; ".join(record.get("keywords", [])),
                              record.get("comment", ""), due_date, 0,
                              record.get("files", ""), "1" if record.get("late") else "",
-                             "draft", ",".join(focus_criteria)])
+                             "draft", ",".join(focus_criteria), record.get("partner_group", "")])
 
     safe_name = re.sub(r'[\\/*?:"<>|]', "_", folder_name).strip() or "Grades"
     # When a cloud directory + active class are configured, write the CSV

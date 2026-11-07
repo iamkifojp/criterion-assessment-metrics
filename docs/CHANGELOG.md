@@ -26,10 +26,15 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
   map rubrics or apply final levels typed in CAM2 there.
   Click a student's exam grade pill to edit their grade beside the reference marks.
   A paper waiting for your decision is excluded from grade calculations.
+- **Edit report totals safely.** CAM2 accepts totals within the paper's marks
+  and weighted percentages from 0 to 100. Typing over the calculated figure
+  starts a new value, and an out-of-range entry leaves the saved figure intact.
 - **Keep workspace feedback.** Ticks and deadline changes preserve typed
   comments. Linked partners share the first graded member's grade and combine
   their comments and ticks. Reloading preserves the keyword list. If an
   earlier version already lost keywords, add them again.
+  Exporting a linked draft also lets CAM restore the link along with its
+  comments and ticks if the workspace state is lost.
 - **Use exam feedback in term comments.** Exam comments have a separate section
   in the prompt sent to your chosen AI service. CAM keeps overall comments
   and reports how many whole question comments it omits if the prompt is long.

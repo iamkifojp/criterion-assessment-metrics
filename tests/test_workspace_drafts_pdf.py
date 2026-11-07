@@ -3,6 +3,7 @@
 Copy only source files BEFORE import: settings, credentials, cache and every
 runtime path resolve into TemporaryDirectory, never the user's data folder.
 """
+from datetime import datetime
 import hashlib
 import importlib.util
 import io
@@ -14,11 +15,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from engine.ingestion import IngestionPipeline
+from engine.persistence import deserialize_gradebook, serialize_gradebook
 from cam_grading_workspace.pdf_view import visible_pages, prune_pdf_cache
+from tests.test_submission_identity import functions_from
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -742,6 +746,58 @@ class WorkspaceTests(unittest.TestCase):
                           side_effect=lambda folder: {**real(folder), **restored}):
             self.load()
         self.assertEqual(self.student["comment"], "Rewritten in CAM. Typed since.")
+
+    def test_draft_partner_link_round_trips_and_saved_unlink_wins(self):
+        students = self.link_fixture("Ben Okafor", "Chie Sato")
+        self.ws.STATE["is_draft"] = True
+        self.mark(students["ada"], comment="Keep the heading.", keywords=["Context"])
+        self.link(students["ada"], students["ben"])
+        folder_id = self.ws.STATE["folder_id"]
+        state_path = Path(self.ws.state_path(folder_id))
+        cache_path = Path(self.ws.cache_file_path())
+        keys = {students[name]["key"] for name in ("ada", "ben")}
+
+        def publish_export(force=False):
+            route = "/api/export?force=1" if force else "/api/export"
+            result = self.client.get(route).get_json()
+            pipeline = IngestionPipeline()
+            self.assertEqual(pipeline.ingest_csv(result["path"], "Investigation"), [])
+            pipeline.gradebook.assignments[0].class_name = "Art"
+            book = deserialize_gradebook(serialize_gradebook(pipeline.gradebook))
+            namespace = dict(os=os, json=json, datetime=datetime,
+                             st=SimpleNamespace(session_state={
+                                 "active_class": "Art", "prefs": {"db_custom_path": str(self.data)},
+                                 "work_aliases": {}, "rosters": {}}),
+                             students_for_active_class=lambda: [], gb=lambda: book,
+                             class_data_dir=lambda *args, **kwargs: self.ws.class_output_dir(),
+                             _workspace_state_key=lambda ref: folder_id)
+            functions_from(ROOT / "app.py", ["_publish_workspace_grades"], namespace)
+            namespace["_publish_workspace_grades"]("Investigation", str(self.folder))
+
+        publish_export()
+        handoff_path = Path(self.ws.cam_published_path(folder_id))
+        original_handoff = handoff_path.read_bytes()
+        cache_path.unlink()
+        state_path.unlink()
+        self.load()
+        group, = self.loaded["groups"]
+        self.assertEqual(set(group["members"]), keys)
+        for key in keys:
+            student = self.ws.STATE["students"][key]
+            self.assertEqual(student["comment"], "Strengths: Context. Keep the heading.")
+            self.assertEqual(student["keywords"], ["Context"])
+        self.assertTrue(self.client.post("/api/group/unlink", json={"group_id": group["id"]}).get_json()["ok"])
+
+        # Even without the cache, the surviving state file records the unlink.
+        handoff_path.write_bytes(original_handoff)
+        cache_path.unlink()
+        self.load()
+        self.assertEqual(self.loaded["groups"], [])
+        publish_export(force=True)
+        cache_path.unlink()
+        state_path.unlink()
+        self.load()
+        self.assertEqual(self.loaded["groups"], [])
 
     def test_export_holds_the_whole_comment_and_no_new_column(self):
         self.save_comment(self.student["key"], "Strengths: Context. Typed.", "Strengths: Context.")

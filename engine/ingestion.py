@@ -215,7 +215,7 @@ def merge_draft_feedback(existing: dict, incoming: dict) -> dict:
         return list(dict.fromkeys(part.strip() for record in (existing, incoming)
                     for part in (record.get(field) or "").split(separator)
                     if part.strip()))
-    return {
+    combined = {
         "comment": "\n\n".join(unique_parts("comment", "\n\n")),
         "keywords": list(dict.fromkeys((existing.get("keywords") or []) +
                                        (incoming.get("keywords") or []))),
@@ -223,6 +223,12 @@ def merge_draft_feedback(existing: dict, incoming: dict) -> dict:
         "late": bool(existing.get("late") or incoming.get("late")),
         "timestamp": max(existing.get("timestamp") or "", incoming.get("timestamp") or ""),
     }
+    if "partner_group" in existing or "partner_group" in incoming:
+        previous = existing.get("partner_group", incoming.get("partner_group"))
+        current = incoming.get("partner_group", previous)
+        # Two rows routed to one student must agree before restoring a link.
+        combined["partner_group"] = previous if previous == current else ""
+    return combined
 
 
 def _looks_invalid(grade: int, comment: str) -> Optional[str]:
@@ -597,6 +603,9 @@ class IngestionPipeline:
                         continue
                     row_grades.append((criterion, grade))
 
+                partner_group = row.get("Draft Partner Group") if draft else None
+                partner = {"partner_group": partner_group.strip()} if partner_group is not None else {}
+
                 # Identity routing (skipped entirely when roster_keys is falsy →
                 # legacy: target is the raw id and nothing pools).
                 target = sid
@@ -606,7 +615,8 @@ class IngestionPipeline:
                         # Unmatched → pool the whole row for visual matching, but
                         # only when it carried grades (a grade-less row minted no
                         # student before either, so it pools nothing).
-                        if unmatched_out is not None and (row_grades or (draft and (comment or keywords or files))):
+                        if unmatched_out is not None and (row_grades or (draft and (
+                                comment or keywords or files or partner.get("partner_group")))):
                             unmatched_out.append({
                                 "csv_key": sid,
                                 "grades": [[c.value, g] for c, g in row_grades],
@@ -616,16 +626,17 @@ class IngestionPipeline:
                                 "late": late,
                                 "timestamp": timestamp.isoformat(),
                                 "is_draft": draft,
+                                **partner,
                             })
                         continue
                     if auto_alias is not None and auto_aliases_out is not None:
                         auto_aliases_out[sid] = auto_alias
 
                 if draft:
-                    if comment or keywords or files:
+                    if comment or keywords or files or partner.get("partner_group"):
                         feedback[target] = merge_draft_feedback(feedback.get(target, {}), {
                             "comment": comment, "keywords": list(keywords),
-                            "files": files, "late": late, "timestamp": timestamp.isoformat()})
+                            "files": files, "late": late, "timestamp": timestamp.isoformat(), **partner})
                         self.gradebook.get_or_create(target)
                     continue
                 self._apply_grades(target, assignment, row_grades, comment,
@@ -697,6 +708,7 @@ class IngestionPipeline:
                     "files": pool_row.get("files", ""),
                     "late": bool(pool_row.get("late")),
                     "timestamp": pool_row.get("timestamp", ""),
+                    **({"partner_group": pool_row["partner_group"]} if "partner_group" in pool_row else {}),
                 })
                 self.gradebook.get_or_create(target_sid)
             return []

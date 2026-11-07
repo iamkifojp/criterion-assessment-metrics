@@ -92,7 +92,7 @@ The fixtures are fictional "Class 1" students. Numbers are from the Mac run.
 | | Back in CAM | Totals as graded; Emma "report shows …/20 (typed in CAM2)"; hashes unchanged except `cam2.lock` |
 | Report-card pack | Build it, fetch the file | Decided exam grades, other exams "awaiting decision". Only decided criteria are listed for a partly decided exam (correct, the teacher's decision) |
 | Workspace drafts | Settings → Add / Edit class: master directory `<sb>\scans\master`; make "Poster draft" a Draft (⋯ menu), 🖌 Grade this Assignment, open the logged address | 4 students; type comments; link 100001 and 100002 **with the mouse** (link icon, then the partner card): ticks and comments combine under one line; Export CSV; CAM shows the feedback in Window 3 |
-| Draft restore | Rename the class folder's `grading_cache.json` and `grades_local-*.json`, reopen from CAM | Every comment and tick comes back from CAM's `cam_grades_*.json`; a second export duplicates nothing. The partner link doesn't come back (known) |
+| Draft restore | Export and sync a linked draft, rename the class folder's `grading_cache.json` and `grades_local-*.json`, then reopen from CAM | Comments, ticks and the partner link come back from CAM's `cam_grades_*.json`. A second export duplicates nothing. |
 
 **On Windows also check:** the 📁 Browse buttons open a folder dialog. Choose only folders
 inside the sandbox.

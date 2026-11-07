@@ -241,7 +241,10 @@ your chosen AI service.
 Use **Draft — comments only** for draft work in the grading workspace.
 Changing a tick or a deadline preserves typed comments. Linking partners
 combines their ticks and comments and shares the first graded member's grade
-when the work is graded.
+when the work is graded. After you export a linked draft and CAM syncs it,
+reopening the draft from CAM can recover the partner link if the workspace
+files are lost. Drafts exported by an older version can be exported again
+while the link is still present in the workspace.
 
 ---
 

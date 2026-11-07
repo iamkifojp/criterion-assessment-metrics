@@ -429,7 +429,7 @@ def _validate_assignment(value: Any, path: str,
                 if not isinstance(sid, str) or not isinstance(record, dict):
                     _add_issue(issues, loc, "expected-feedback-object")
                     continue
-                for field in ("comment", "files", "timestamp"):
+                for field in ("comment", "files", "timestamp", "partner_group"):
                     if field in record and not isinstance(record[field], str):
                         _add_issue(issues, f"{loc}.{field}", "expected-string")
                 if "keywords" in record:

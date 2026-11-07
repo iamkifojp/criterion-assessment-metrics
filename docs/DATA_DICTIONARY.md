@@ -224,10 +224,12 @@ See ARCHITECTURE §8 and §7's `acm_database.json` row.
 records feedback focus (for example `["A"]`). `draft_feedback` defaults to `{}`
 and maps canonical student IDs to records with `comment` (string), `keywords`
 (string list), `files` (string), `late` (boolean), and `timestamp` (ISO string).
+The optional `partner_group` string identifies members of an exported draft group.
 These records do not create `CriterionScore` objects.
 
 Workspace CSVs append `Assessment Mode` (`draft` or `graded`) and `Focus Criteria`
-(comma-separated A–D letters). Draft CSVs omit grade columns. Import recognizes
+(comma-separated A–D letters). Draft CSVs omit grade columns and include
+`Draft Partner Group`, blank for unlinked students. Import recognizes
 the explicit mode and ignores stale numeric cells when draft mode is active;
 the Module-1 draft setting can also override a legacy CSV. Ordinary blank-grade
 behavior is unchanged. The unmatched-work pool carries `is_draft` so manual
@@ -237,6 +239,9 @@ Workspace saved state and cache additionally carry `is_draft`, `draft_extra`
 (feedback for students whose files are absent), and `pdf_omit_pages` (range
 text such as `1-9, 12`). The CAM handoff carries `is_draft`, `criteria`,
 `draft_feedback`, `matching_roster`, and `work_aliases`.
+If both workspace state files are missing, the handoff can restore a group
+when at least two of its members are present. Saved workspace links take
+precedence, including an explicitly saved unlink.
 
 ### A.7 Lateness — the two layers (`CriterionScore.late` + `late_flags`)
 
