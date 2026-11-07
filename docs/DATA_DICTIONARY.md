@@ -170,8 +170,8 @@ older CAM ignores them on load and drops them on save.
 **Grades on an exam.** At most one per student, exam and criterion. The paper's
 levels and marks are evidence, and only the teacher's 0–8 decision is a grade. It's
 made in Window 3, one per criterion, and a decision made there has no `exam_value`,
-so a re-send can't change it. Window 1's Apply carries over final levels typed in
-CAM2. A plain marks exam keeps Window 1's class-wide panel, whose dropdowns start
+so a re-send can't change it. Apply in Grades and Analysis carries over final levels typed
+in CAM2. A plain marks exam uses the same dialog, whose dropdowns start
 blank. Sync replaces the `ExamResult` and never writes a grade, though a grade's
 comment still equal to the earlier result's takes the new one. Apply changes only
 criteria with a new final level. A student with a result and no grade on the exam is

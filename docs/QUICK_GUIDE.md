@@ -21,7 +21,7 @@
 
 ## Set up a class
 
-CAM lays the whole job out in three windows, read left to right in the order you work: **Window 1 · Classes & Assignments**, **Window 2 · Students & Evidence**, **Window 3 · Report & Comment** — pick the work, score it, write the report.
+CAM lays the whole job out in three windows, read left to right in the order you work: **Window 1 · Assignments and Exams**, **Window 2 · Students & Evidence**, **Window 3 · Report & Comment** — pick the work, score it, write the report.
 
 1. In the top bar, click **✎ Add / Edit class**, then **➕ Add a class**.
 2. Name the class, and add the grade, MYP year and subject if you use them.
@@ -63,7 +63,7 @@ CAM lays the whole job out in three windows, read left to right in the order you
 2. Bring in paper scans or PDFs exported from slides. Draw a box around each answer on the first paper and choose **Marks** or **Rubric**.
 3. Match each paper to a student, then grade one question at a time across the class, with quick comments where they help.
 4. In **Review & export**, check the totals and click **✓ Grading finished — send to CAM**. You can also make the student PDF reports there.
-5. In Window 1's **📝 Exam grading** panel, choose and apply grades for a plain marks exam. If the exam has rubrics or marks linked to criteria, check the mapping in Window 1, then decide each student's grade in Window 3. Window 1 can also apply final levels you typed in CAM2.
+5. Click the exam in Window 1 to open **Grades and Analysis**. Use **Grade evaluation** to enter class grades, map rubrics or apply final levels typed in CAM2. For one student, focus them in Window 2 and click the exam's grade pill in Window 3 to see the paper's reference marks.
 
 ![Scans are cut into questions, graded in CAM2 and sent back to CAM](quick_guide_images/grade-exam.svg)
 

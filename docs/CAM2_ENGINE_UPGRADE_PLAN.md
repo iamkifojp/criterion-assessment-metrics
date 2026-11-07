@@ -11,10 +11,12 @@ trial moved to after the whole upgrade (§6.1). Phases 2, 2W and 3 are on CAM's 
 notes). Phase 4 merged in PR #8, pinning the Phase 1 tag. Its browser matrix
 passed on the Mac and on the Windows Surface. The Windows bundle was built and
 booted there, and PR #9 excluded the remaining developer files.
-Phase 4M's signed Apple Silicon development ZIP passed local smoke tests.
-The Mac–Windows OneDrive check is next. Phase 5's exam guidance and draft
-release notes are in progress. Phase 6 is
-the separate real-data rollout.
+Phase 4M's signed Apple Silicon development ZIP passed local smoke tests, and
+the teacher accepted the app after testing on their MacBook Air on 2026-11-08.
+The Windows launcher smoke test and the Mac–Windows OneDrive check remain
+before release. The teacher deferred independent Mac testing until after
+release. Phase 5 covers release preparation, and Phase 6 covers the separate
+real-data rollout.
 
 Earlier versions: v3 changed D10, D11 and D13, so a paper's repeated levels stay on the
 exam and the teacher decides one grade per criterion in Window 3. v4 corrected D16 and
@@ -22,14 +24,16 @@ added D17. v5 added the Apps Script route (Appendix A).
 
 ## Picking up on another computer
 
-Updated 2026-11-07 for the next session on the Windows Surface. Open the CAM
+Updated 2026-11-08 for the next session on the Windows Surface. Open the CAM
 repository in Codex and check `git status` before updating. With a clean
 checkout, switch to `main` and run `git pull --ff-only`. The pinned CAM2
 engine is already in `exam_grading/`.
 
 1. Ask Codex to build and smoke-test the Windows ZIP from the updated checkout
    with fictional data. Use the [browser check fixtures](../tools/browser_check/README.md)
-   and confirm the extracted ZIP starts CAM and both grading helpers.
+   and confirm the extracted ZIP starts CAM and both grading helpers. Check
+   that **Quit CAM** beside **Settings** closes all three, and that the
+   troubleshooting launcher shows startup messages and writes `logs\cam.log`.
 2. Use a separate OneDrive folder with a fictional gradebook and exam. Open it
    in the development builds on the Mac and Surface. Save a test change on the
    Mac, let OneDrive finish syncing and confirm the change on the Surface.
@@ -81,8 +85,9 @@ release is still `v2026.11.01`.
 | ~~Make the `v0.3.2-dev` pre-release~~ Done 2026-11-06: both zips, the sample exams and the two source archives | |
 | ~~Share the build with colleagues~~ Done: colleagues are using the test builds, largely without problems | |
 
-**Phase 4M on this Mac:** The app ZIP and local checks are recorded below.
-The teacher deferred independent Mac testing until colleagues have the release.
+**Phase 4M on this Mac:** The development ZIP and the teacher's local acceptance
+are recorded below. Colleagues will check first launch on their Macs after
+release.
 
 **The teacher's decisions on what was still open (2026-11-06):**
 
@@ -1421,9 +1426,9 @@ when the app runs.
 - **Mac folder selection.** The five Browse buttons use the native Mac
   picker. The path fields show Mac examples and **Start fresh** offers
   `~/Documents/CAM Data`.
-- **Stop the workspace when CAM stops.** The Mac launcher supervises Streamlit
-  and its grading helpers as a process group. Quit CAM closes them, and the
-  supervisor also cleans up if the native launcher or Streamlit exits.
+- **Quit from the browser on both platforms.** The packaged launcher supervises
+  Streamlit and the two grading helpers. **Quit CAM** beside **Settings**
+  requests a clean shutdown. The Mac Dock menu can also close the app.
 - **Check on a Mac:** file locking already has a Mac path (`persistence.py:1392`), but the
   bundle hasn't run it against OneDrive's Mac folder (`~/Library/CloudStorage`).
 - **Licences per platform.** Mac libraries differ, so pin exact versions and keep notices
@@ -1479,9 +1484,27 @@ verification and exercised embedded Python, PyMuPDF, PyArrow and Pillow.
   489 CAM and 354 CAM2 tests and no skips. The Windows staging audit passed.
 - The known Streamlit static-file traceback still appeared in the log. The
   browser loaded and the grading flows passed.
-- The real OneDrive and two-way Mac–Windows sync checks still need to run
-  with a fictional shared data folder. Independent Mac first-launch checks
-  are deferred to colleagues after release.
+**MacBook Air acceptance, 2026-11-08.** The teacher tested the signed
+development build with the fictional gradebook. They reported that grading
+**Poster draft** worked, saw **Quit CAM**, and confirmed that grading the
+mock exam in **Grades and Analysis** worked. The master-folder Browse fix
+uses a Streamlit callback to fill the path before the dialog redraws.
+The teacher accepted the app after the full-width red **Exam setup / Grade**
+button was restored.
+
+- The final local test ZIP is `CAM-Mac-AppleSilicon-dev-8dbfa9c.zip`.
+  Its SHA-256 is
+  `9d8a5ed40f9d58f3f2a195c89209d1d11ce88f6d3a9cc4d89255c1558963c0c5`.
+  It is a development build. Both release ZIPs will be built from one tag.
+- In the signed build, browser checks verified that the exam and assignment
+  buttons match in dark mode at 920 and 1440 pixels, and that applying a
+  grade keeps the selected exam open and updates its distribution.
+  A separate Mac smoke test of the shared launcher verified that **Quit CAM**
+  stops Streamlit, the grading workspace and CAM2.
+- The updated launcher still needs its packaged smoke test on Windows.
+  The two-way OneDrive check needs a fictional data folder shared between
+  the Mac and Surface. Independent Mac first-launch checks are deferred to
+  colleagues after release.
 
 ### Phase 5 — Documents and release notes · S–M
 

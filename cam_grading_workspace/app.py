@@ -4994,6 +4994,10 @@ loadConfig().then(autoloadFromParams);
 
 if __name__ == "__main__":
     import argparse
+    import signal
+
+    if os.name == "nt" and os.environ.get("CAM_QUIT_FILE"):
+        signal.signal(signal.SIGBREAK, signal.default_int_handler)
 
     parser = argparse.ArgumentParser(
         description="CAM Grading Workspace — Flask sub-app of Criterion "

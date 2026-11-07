@@ -24,7 +24,7 @@ PYTHON_VERSION = "3.14.6"
 MIN_MACOS = "14.0"  # NumPy's arm64 wheel requires macOS Sonoma.
 PINS = Path("tools/bundle-requirements-macos.txt")
 LAUNCHER = Path("tools/macos/launcher.m")
-SUPERVISOR = Path("tools/macos/start_cam.py")
+SUPERVISOR = Path("tools/start_cam.py")
 
 
 def run(*command, **kwargs):

@@ -19,6 +19,7 @@ Run:  python -m unittest tests.test_exam_upgrade_phase3
 import os
 import sys
 import unittest
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -148,6 +149,9 @@ class DialogColumn:
     def __init__(self, ui):
         self.ui = ui
 
+    def caption(self, text):
+        self.ui.captions.append(text)
+
     def checkbox(self, label, value=False, **kw):
         return self.ui.excused if label == "Excused" else value
 
@@ -165,6 +169,8 @@ class DialogStreamlit:
         self.session_state = session_state
         self.grade, self.comment, self.excused = grade, comment, excused
         self.markdowns = []
+        self.captions = []
+        self.expanders = []
         self.select = {}
         self.area = {}
 
@@ -172,7 +178,11 @@ class DialogStreamlit:
         self.markdowns.append(text)
 
     def caption(self, text):
-        pass
+        self.captions.append(text)
+
+    def expander(self, label):
+        self.expanders.append(label)
+        return nullcontext()
 
     def columns(self, spec, **kw):
         return [DialogColumn(self) for _ in range(spec if isinstance(spec, int) else len(spec))]
@@ -356,7 +366,17 @@ class RemoveExamGradeTests(_DialogBase):
         self.meta["criteria"] = {}
         app._write_exam_grade(self.aoki, self.asg, "A", 6, datetime(2026, 11, 1), "", "banded")
         app._refresh_exam_counts(self.asg, ["A"])
-        self.open_dialog("A", grade=None)
+        paper = self.result()
+        paper.mode = "marks"
+        paper.total, paper.max_total = 2, 2
+        paper.questions = {"Q1": 2}
+        paper.levels = {}
+        paper.counted = ["Q1"]
+        self.asg.question_labels = ["Q1"]
+        fake = self.open_dialog("A", grade=None)
+        self.assertIn("Exam reference · 2/2", fake.expanders)
+        self.assertIn("Q1", fake.captions)
+        self.assertIn("2", fake.captions)
         self.assertIsNone(self.grade("A"))
         self.assertEqual(self.asg.criteria, ["A"])
         self.assertEqual(self.asg.score_count, 0)

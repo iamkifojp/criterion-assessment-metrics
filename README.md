@@ -64,6 +64,9 @@ administrator access, a Python installation, or a terminal.
 3. On first start, choose a separate data folder or start with the fictional
    sample class in `Documents\CAM Data`.
 
+Windows builds for the CAM2 engine upgrade add **Quit CAM** beside **Settings**
+in the browser. It stops CAM and both grading helpers.
+
 Do not run CAM from inside the zip. The app folder and data folder are kept
 separate, so installing an update never replaces the gradebook. The bundle also
 contains **CAM Quick Guide.pdf**, a visible troubleshooting launcher, and a log
@@ -84,7 +87,7 @@ Grading.
    and follow the prompts. See [Apple's first-launch instructions](https://support.apple.com/en-gb/102445).
 3. CAM opens in your browser. Select your existing CAM data folder or start with
    the fictional sample class in `~/Documents/CAM Data`. To stop CAM and its
-   grading helpers, choose **CAM → Quit CAM** from the Mac menu bar.
+   grading helpers, click **Quit CAM** beside **Settings** in the browser.
 
 Replace **CAM.app** when upgrading. Keep your chosen gradebook folder separately.
 CAM keeps settings and its startup log under `~/Library/Application Support/CAM`.

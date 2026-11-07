@@ -58,7 +58,9 @@ CAM2_PACKAGE = "cam2_engine"
 # workspace instead, so CAM2's ``import engine`` / ``from app import ...``
 # would load CAM's engine and the workspace's app.py.
 _LAUNCH_BOOT = (
-    "import os, runpy, sys; launcher = sys.argv[1]; sys.argv = sys.argv[1:]; "
+    "import os, runpy, signal, sys; launcher = sys.argv[1]; sys.argv = sys.argv[1:]; "
+    "signal.signal(signal.SIGBREAK, signal.default_int_handler) "
+    "if sys.platform == 'win32' and os.environ.get('CAM_QUIT_FILE') else None; "
     "sys.path.insert(0, os.path.dirname(launcher)); "
     "runpy.run_path(launcher, run_name='__main__')"
 )

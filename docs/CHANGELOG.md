@@ -10,7 +10,10 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 - **Run CAM on Apple Silicon.** The Mac ZIP includes CAM, its grading
   workspace, CAM2 and their Python runtime. It adds native folder selection
-  and keeps preferences, caches and logs separate from the app bundle.
+  and keeps preferences, caches and logs outside the app bundle.
+- **Quit CAM from the browser.** Both platform bundles use the same launch
+  flow. **Quit CAM** beside **Settings** stops CAM and its bundled grading
+  helpers. Startup messages remain available in each bundle's CAM log.
 - **Update every computer before opening existing exams.** Back up the gradebook
   and the class exam folders first. Opening an old exam upgrades its CAM2
   session. If an older installation reports `file_from_newer_version`, update
@@ -18,9 +21,10 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 - **Grade scans or slide PDFs in CAM2.** Export the slides to PDF first. For
   drafts, choose **Draft — comments only** and use the grading workspace.
 - **Decide each criterion grade yourself.** CAM shows raw marks, weighted
-  percentages, and rubric levels as evidence. Plain marks exams have blank
-  grade fields in Window 1. For criteria-based exams, decide each grade in
-  Window 3 or use Window 1 to apply a final level you explicitly typed in CAM2.
+  percentages, and rubric levels as evidence. Click an exam in **Assignments
+  and Exams** to open **Grades and Analysis** for that exam. Grade the class,
+  map rubrics or apply final levels typed in CAM2 there.
+  Click a student's exam grade pill to edit their grade beside the reference marks.
   A paper waiting for your decision is excluded from grade calculations.
 - **Keep workspace feedback.** Ticks and deadline changes preserve typed
   comments. Linked partners share the first graded member's grade and combine

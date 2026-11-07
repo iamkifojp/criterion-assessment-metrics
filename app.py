@@ -10,7 +10,7 @@ rubrics). Run with:
     streamlit run app.py
 
 Layout (st.columns([4, 3, 5])):
-    Window 1  Timeline & assignment system   (staging, sync, dates, toggles)
+    Window 1  Assignments and exams           (staging, sync, dates, toggles)
     Window 2  Roster & submission tracker     (order, missing-work highlights)
     Window 3  Evaluation cockpit              (edit, trend, comments, AI deck)
     Tray      Deliverables (Excel, report-card pack, class comments)
@@ -147,6 +147,8 @@ GRADING_WORKSPACE_DIR = os.path.join(BASE_DIR, "cam_grading_workspace")
 GRADING_WORKSPACE_STATE = (os.path.join(APP_STATE_DIR, "cam_grading_workspace")
                            if APP_STATE_DIR != BASE_DIR else GRADING_WORKSPACE_DIR)
 GRADING_PORT = int(os.environ.get("CAM_WORKSPACE_PORT", "5001"))
+GRADING_CHILD_FLAGS = (0 if os.environ.get("CAM_QUIT_FILE")
+                       else getattr(subprocess, "CREATE_NO_WINDOW", 0))
 NATIVE_FOLDER_PICKER = os.name == "nt" or sys.platform == "darwin"
 # CAM2 host-mode handoffs (convergence Stage 3) hold the class list, so they
 # stay on this computer, never in the cloud class folder.
@@ -2842,11 +2844,10 @@ def _ensure_workspace_running() -> bool:
         # refused".
         log_path = os.path.join(GRADING_WORKSPACE_STATE, "workspace_startup.log")
         try:
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             with open(log_path, "w", encoding="utf-8", errors="replace") as log:
                 proc = subprocess.Popen(
                     [sys.executable, app_path, "--port", str(GRADING_PORT)],
-                    cwd=GRADING_WORKSPACE_DIR, creationflags=flags,
+                    cwd=GRADING_WORKSPACE_DIR, creationflags=GRADING_CHILD_FLAGS,
                     stdout=log, stderr=subprocess.STDOUT)
             # Bind it to CAM's lifetime so closing CAM doesn't leave an orphan.
             _bind_workspace_to_cam(proc)
@@ -3145,7 +3146,7 @@ def launch_exam_setup(exam_name: str) -> str:
             proc = subprocess.Popen(
                 exam_bridge.launch_command(handoff_path),
                 cwd=exam_bridge.CAM2_DIR,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                creationflags=GRADING_CHILD_FLAGS,
                 stdout=log, stderr=subprocess.STDOUT)
     except OSError as exc:
         st.session_state["save_status"] = ("error", f"Could not start CAM2: {exc}")
@@ -4514,7 +4515,7 @@ def _pull_cam2_sends() -> dict:
 
 
 def _cam2_status(class_name: str, exam_name: str) -> str:
-    """One line for the Window 1 exam panel: where this exam stands between
+    """One line for the Window 3 exam panel: where this exam stands between
     CAM2 and CAM."""
     folder = os.path.abspath(cam2_session_dir(class_name, exam_name))
     storage = exam_bridge.cam2_module("storage")
@@ -6793,6 +6794,15 @@ def _render_term_restore_confirm(payload: dict, term: str, sig: str) -> None:
         st.rerun()
 
 
+def _browse_folder_into(input_key: str, title: str) -> None:
+    """Update the path before Streamlit recreates its text input."""
+    current = st.session_state.get(input_key)
+    initial = current if current and os.path.isdir(current) else None
+    chosen = pick_folder(title, initial)
+    if chosen:
+        st.session_state[input_key] = chosen
+
+
 def _render_term_backup_section(prefs: dict) -> None:
     """The ⚙ Settings 'Term backup & restore' block (plan §3).
 
@@ -7202,8 +7212,8 @@ def upload_dialog() -> None:
             "exactly.\n\n"
             "**Exam CSV** — an item-level export with one column per "
             "question plus `Total Score` (and optionally `Max Total`); "
-            "detected automatically and graded to 0-8 later in Window 1's "
-            "📝 Exam grading panel.")
+            "detected automatically. Open the exam in Window 1 to assign "
+            "0–8 grades in **Grades and Analysis**.")
     up_plan = st.file_uploader("Unit plan (.docx)", type=["docx"], key="up_plan")
     if up_plan is not None:
         sig = f"plan:{up_plan.name}:{up_plan.size}"
@@ -7267,8 +7277,8 @@ def add_assignment_dialog() -> None:
     An **assignment** carries the chosen criterion immediately: each student
     shows an editable "0 (missing)" cell under it in Window 3 where the
     teacher enters individual grades. An **exam** opens in CAM2, and its results
-    arrive at Sync. Its grades are then decided in Window 3, or in Window 1's
-    📝 Exam grading panel for a plain marks exam or typed final levels."""
+    arrive at Sync. Open the exam in Grades and Analysis to grade raw marks or
+    apply typed final levels for the class. Window 3 edits individual grades."""
     st.caption(f"Class: **{st.session_state['active_class']}** · "
                f"Term: **{current_term()}**")
     with st.form("add_asg_form"):
@@ -7327,7 +7337,7 @@ def add_assignment_dialog() -> None:
 # --------------------------------------------------------------------------
 
 def render_window1() -> None:
-    st.subheader("1 · Timeline & Assignments")
+    st.subheader("1 · Assignments and Exams")
 
     # Sync is no longer a button here — it runs automatically (session start,
     # entering/returning from grading, class add/watch). The manual escape hatch
@@ -7359,7 +7369,9 @@ def render_window1() -> None:
         add_assignment_dialog()
 
     _render_assignment_table()
-    _render_exam_banding()
+    reopen = st.session_state.pop("_grades_analysis_reopen", None)
+    if reopen:
+        show_analytics_dialog(*reopen)
 
 
 def _stage_uploads(ups) -> int:
@@ -7519,7 +7531,7 @@ def manage_assignment_dialog(name: str, r: dict) -> None:
 def _render_assignment_table() -> None:
     """Active-assignment table (the whole window scrolls), with a per-row ⋯
     Manage dialog (rename, due date, term inclusion, archive)."""
-    st.markdown("**Active assignments** (April → March)")
+    st.markdown("**Active assignments and exams** (April → March)")
     st.caption(f"**On** = counts in **{current_term()}**'s assessment. Switch "
                "the term in the top bar to choose that term's set — each term "
                "keeps its own selection.")
@@ -7529,7 +7541,7 @@ def _render_assignment_table() -> None:
         return
 
     head = st.columns([0.5, 2.4, 1.4, 0.6, 1.0])
-    for col, cap in zip(head, ("On", "Assignment", "Crit · date", "Subs", "Manage")):
+    for col, cap in zip(head, ("On", "Assignment / exam", "Crit · date", "Subs", "Manage")):
         col.caption(cap)
     for r in rows:
         name = r["name"]
@@ -7546,7 +7558,7 @@ def _render_assignment_table() -> None:
             c[2].caption(f"Draft · {r['criteria']} · {r['date']:%b %d}")
         elif r.get("is_exam"):
             # Exams show their RAW class average (e.g. "raw ø 31.5/45"), not a
-            # band — banding happens in the panel below the table.
+            # band. Grades and Analysis holds the grade controls.
             raw = ("rubric" if r.get("is_rubric")
                    else f"raw ø {r['raw_avg']}/{r['max_total']}"
                    if r["raw_avg"] is not None else "raw · ungraded")
@@ -7579,99 +7591,74 @@ def _clamp_band(value: int) -> int:
     return max(0, min(8, int(value)))
 
 
-def _render_exam_banding() -> None:
-    """Window 1 exam panel: raw totals per student + a 0-8 band dropdown.
+def _rerun_grades_analysis(name: str, status: tuple | None = None) -> None:
+    """Refresh the gradebook and reopen the dialog that made the change."""
+    st.session_state["_grades_analysis_reopen"] = (name, status)
+    st.rerun()
 
-    A CAM2 marks exam arrives with raw marks (e.g. 31/45) that cannot enter
-    the 0-8 gradebook directly. This panel reflects every student's raw score
-    and lets the teacher assign each a 0-8 band. The field is blank until a
-    grade has been decided. Applying writes
-    ordinary CriterionScores under the chosen criterion, so the exam then
-    behaves like any other assessed task downstream.
-    """
-    exams = _class_exams()
-    if not exams:
-        return
-    with st.expander("📝 Exam grading — raw marks → 0–8 grade", expanded=False):
-        names = [a.name for a in exams]
-        sel = st.selectbox("Exam", names, key="exam_band_sel")
-        asg = next(a for a in exams if a.name == sel)
-        cls = st.session_state.get("active_class", "")
-        sc = st.columns([4, 1.4], vertical_alignment="center")
-        sc[0].caption(_cam2_status(cls, sel))
-        if sc[1].button("🔄 Check CAM2 now", key=f"cam2_check_{sel}",
-                        width="stretch",
-                        help="Read this exam's CAM2 folder again now. CAM "
-                             "also checks by itself every few seconds."):
-            summary = sync_exam(cls, sel)
+
+def _render_exam_evaluation(asg, results) -> None:
+    """Class-wide controls for the exam already open in Grades and Analysis."""
+    with st.container(border=True):
+        st.markdown("**Grade evaluation**")
+        status, check = st.columns([3, 1.4], vertical_alignment="center")
+        status.caption(_cam2_status(asg.class_name, asg.name))
+        if check.button("Check CAM2 now", key=f"cam2_check_{asg.name}",
+                        icon=":material/sync:",
+                        help="Read this exam's CAM2 results again. CAM also checks automatically."):
+            summary = sync_exam(asg.class_name, asg.name)
             if summary["ingested"] or summary["updated"] or summary["errors"]:
                 _report_sync(summary)
             else:
-                st.session_state["save_status"] = (
-                    "ok", f"'{sel}' is up to date with CAM2.")
-            st.rerun()
-        results = _exam_results_for(sel)
+                st.session_state["save_status"] = ("ok", f"'{asg.name}' is up to date with CAM2.")
+            _rerun_grades_analysis(asg.name, st.session_state["save_status"])
         if not results:
-            st.caption("No results for this exam yet. Grade it in CAM2 and "
-                       "send it to CAM.")
-            return
-        if _exam_uses_criteria(asg, results):
+            st.caption("No results yet. Grade the exam in CAM2 and send it to CAM.")
+        elif _exam_uses_criteria(asg, results):
             _render_cam2_rubric_banding(asg, results)
-            return
-        # A paper still being graded in CAM2 (or with a "teacher picks"
-        # choice open) is held back from the average and from banding.
-        counted = [r.total for _, r in results if r.complete]
-        avg = mean(counted) if counted else 0.0
-        n_unfinished = sum(1 for _, r in results if not r.complete)
-        pending_note = (f" · ⏳ {n_unfinished} not finished in CAM2 — "
-                        "finish grading there and send it to CAM again"
-                        if n_unfinished else "")
-        st.caption(f"Raw marks out of **{results[0][1].max_total or '?'}** "
-                   f"· class raw average **{avg:.1f}** · {len(results)} student(s)"
-                   f"{pending_note} · questions: "
-                   f"{', '.join(asg.question_labels) or '—'}")
-        if any(r.weighted for _, r in results):
-            st.caption("ⓘ CAM2 weights this exam's marks. CAM shows its result "
-                       "beside the raw total and doesn't work a grade out of "
-                       "either.")
+        else:
+            _render_raw_mark_grades(asg, results)
 
-        crit_default = asg.criteria[0] if asg.criteria else "A"
-        crit = st.selectbox(
-            "Counts toward criterion", CRIT_ORDER,
-            index=CRIT_ORDER.index(crit_default) if crit_default in CRIT_ORDER else 0,
-            key=f"exam_crit_{sel}",
-            help="The 0–8 grade each student receives is recorded as a normal "
-                 "score under this MYP criterion.")
 
-        # Bands already applied on this criterion (rerunning the panel edits
-        # them in place). Another criterion's grades are left alone.
-        graded = [(s, sc) for s, sc in scores_for_assignment(sel) if sc.is_valid]
-        existing = {s.student_id: sc.value for s, sc in graded
-                    if sc.criterion.value == crit}
-        others = sorted({sc.criterion.value for _, sc in graded} - {crit},
-                        key=CRIT_ORDER.index)
-        if others:
-            st.caption(f"ⓘ This exam also has grades on Criterion "
-                       f"{', '.join(others)}. Applying here adds Criterion "
-                       f"{crit} and doesn't change them.")
+def _render_raw_mark_grades(asg, results) -> None:
+    """Choose gradebook grades using the raw marks for this exam."""
+    sel = asg.name
+    n_unfinished = sum(not r.complete for _, r in results)
+    if n_unfinished:
+        st.caption(f"{n_unfinished} paper(s) are unfinished. Finish them in CAM2 and send again.")
+    st.caption("Choose the 0–8 grade to record for each student.")
+    crit_default = asg.criteria[0] if asg.criteria else "A"
+    crit = st.selectbox(
+        "Counts toward criterion", CRIT_ORDER,
+        index=CRIT_ORDER.index(crit_default) if crit_default in CRIT_ORDER else 0,
+        key=f"exam_crit_{sel}", width=220,
+        help="The 0–8 grade each student receives is recorded as a normal "
+             "score under this MYP criterion.")
 
-        head = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
+    # Bands already applied on this criterion (rerunning the panel edits
+    # them in place). Another criterion's grades are left alone.
+    graded = [(s, sc) for s, sc in scores_for_assignment(sel) if sc.is_valid]
+    existing = {s.student_id: sc.value for s, sc in graded
+                if sc.criterion.value == crit}
+    others = sorted({sc.criterion.value for _, sc in graded} - {crit},
+                    key=CRIT_ORDER.index)
+    if others:
+        st.caption(f"ⓘ This exam also has grades on Criterion "
+                   f"{', '.join(others)}. Applying here adds Criterion "
+                   f"{crit} and doesn't change them.")
+
+    with st.container(height=340 if len(results) > 8 else "content", border=False):
+        head = st.columns([2.4, 1.35, 1.05, 1.35], vertical_alignment="center")
         for col, cap in zip(head, ("Student", "Raw score", "%", "Grade (0–8)")):
             col.caption(cap)
         for s, r in results:
-            row = st.columns([2.2, 1.1, 0.9, 1.3], vertical_alignment="center")
+            row = st.columns([2.4, 1.35, 1.05, 1.35], vertical_alignment="center")
             row[0].write(student_label(s))
             rmax = r.max_total or asg.max_total or 0
             if not r.complete:
                 row[1].write(f"… / {rmax or '?'}")
                 row[2].write("…")
-                row[3].button("not finished",
-                              key=f"band_unf_{sel}_{s.student_id}",
-                              disabled=True, width="stretch",
-                              help="This paper is not fully graded in "
-                                   "CAM2 yet (or a choice group is "
-                                   "waiting for you to pick). Finish it "
-                                   "there and send it to CAM again.")
+                row[3].caption("Not finished in CAM2")
                 continue
             pct = (r.total / rmax * 100.0) if rmax else 0.0
             row[1].write(f"{r.total} / {rmax or '?'}")
@@ -7682,22 +7669,22 @@ def _render_exam_banding() -> None:
             # Blank until the teacher chooses: marks never suggest a grade (P3).
             _seed_dropdown(f"band_{sel}_{s.student_id}", existing.get(s.student_id))
             row[3].selectbox(
-                " ", list(range(0, 9)), index=None, placeholder="—",
+                f"Grade for {student_label(s)}", list(range(9)), index=None, placeholder="—",
                 key=f"band_{sel}_{s.student_id}",
                 label_visibility="collapsed")
 
-        if st.button("Apply grades to gradebook", key=f"apply_bands_{sel}",
-                     type="primary"):
-            n = _apply_exam_bands(asg, crit, results)
-            msg = f"Graded {n} student(s) for '{sel}' → Criterion {crit}."
-            if n_unfinished:
-                msg += (f" {n_unfinished} paper(s) not finished in CAM2 "
-                        "skipped.")
-            if others:
-                msg += (f" Grades on Criterion {', '.join(others)} stay as "
-                        "they were.")
-            st.session_state["save_status"] = ("ok", msg)
-            st.rerun()
+    if st.button("Apply grades to gradebook", key=f"apply_bands_{sel}",
+                 type="primary"):
+        n = _apply_exam_bands(asg, crit, results)
+        msg = f"Graded {n} student(s) for '{sel}' → Criterion {crit}."
+        if n_unfinished:
+            msg += (f" {n_unfinished} paper(s) not finished in CAM2 "
+                    "skipped.")
+        if others:
+            msg += (f" Grades on Criterion {', '.join(others)} stay as "
+                    "they were.")
+        st.session_state["save_status"] = ("ok", msg)
+        _rerun_grades_analysis(sel, st.session_state["save_status"])
 
 
 def _exam_band_time(asg) -> datetime:
@@ -7836,7 +7823,7 @@ def _exam_uses_criteria(asg, results) -> bool:
 
 
 def _render_cam2_rubric_banding(asg, results) -> None:
-    """Window 1 panel for an exam with rubrics or marks on a criterion (P2).
+    """Class-wide mapping and typed final levels for the open exam (P2).
 
     The teacher decides each student's grade in Window 3. What stays here is
     what applies to the whole class: which criterion each rubric counts toward
@@ -7875,6 +7862,7 @@ def _render_cam2_rubric_banding(asg, results) -> None:
     if changed:
         _refresh_exam_counts(asg, mapping.values())
         persist()
+        _rerun_grades_analysis(asg.name)
     orphans = _exam_orphan_letters(asg, mapping)
     if orphans:
         st.caption(f"⚠ This exam still has grades on Criterion {', '.join(orphans)}, which "
@@ -7924,7 +7912,7 @@ def _render_cam2_rubric_banding(asg, results) -> None:
         st.session_state["save_status"] = (
             "ok", f"Applied final levels for {n} student(s) in '{asg.name}' → "
                   f"Criterion {', '.join(letters)}.")
-        st.rerun()
+        _rerun_grades_analysis(asg.name, st.session_state["save_status"])
 
 
 def _final_level_plan(asg, mapping: dict, results) -> dict:
@@ -8009,12 +7997,9 @@ def _decide_exam_grade(student, asg, letter: str, value, result, rubric_ids, let
     persist()
 
 
-@st.dialog("Assignment analytics", width="large")
-def show_analytics_dialog(name: str) -> None:
-    """Pop-up modal: assignment metrics + a Plotly band-distribution chart.
-
-    Replaces the old inline analytics column; opens only when an assignment
-    row is clicked in the table above."""
+@st.dialog("Grades and Analysis", width="large")
+def show_analytics_dialog(name: str, status: tuple | None = None) -> None:
+    """Show grading and analysis for the selected assignment or exam."""
     import plotly.graph_objects as go
 
     match = next((r for r in assignment_table() if r["name"] == name), None)
@@ -8022,6 +8007,9 @@ def show_analytics_dialog(name: str) -> None:
         st.write("No analytics available for this assignment.")
         return
     st.markdown(f"### {name}")
+    if status:
+        kind, message = status
+        (st.success if kind == "ok" else st.error)(message)
 
     # ---- App bridge: hand this assignment/exam to the grading workspace ----
     # Spawns the Flask sub-app (./cam_grading_workspace) on its own port so
@@ -8056,12 +8044,11 @@ def show_analytics_dialog(name: str) -> None:
             autocomplete="off",
             placeholder=("e.g. /Users/you/Documents/Y7 Art/Artist Looking"
                      if sys.platform == "darwin" else r"e.g. C:\Users\you\OneDrive\Y7 Art\Artist Looking"))
-        if NATIVE_FOLDER_PICKER and relink_row[1].button(
-                "📁 Browse…", key=f"relinkbrowse_{name}", width="stretch"):
-            chosen = pick_folder(f"Re-link the folder for {name}", newp or None)
-            if chosen:
-                st.session_state[f"relink_{name}"] = chosen
-                st.rerun()
+        if NATIVE_FOLDER_PICKER:
+            relink_row[1].button(
+                "📁 Browse…", key=f"relinkbrowse_{name}", width="stretch",
+                on_click=_browse_folder_into,
+                args=(f"relink_{name}", f"Re-link the folder for {name}"))
         if st.button("🔗 Re-link folder", key=f"relinkbtn_{name}",
                      width="stretch"):
             newp = (newp or "").strip()
@@ -8113,10 +8100,9 @@ def show_analytics_dialog(name: str) -> None:
         # question-by-question analysis lives in CAM2's own review step.
         st.caption(f"📝 Rubric exam (CAM2)  ·  {match['date']:%b %d, %Y}  ·  "
                    f"{match['submissions']} paper(s)")
+        if is_exam_rec:
+            _render_exam_evaluation(asg_rec, _exam_results_for(name))
         if match["avg"] is None:
-            st.caption("Map its rubrics in Window 1's 📝 Exam grading panel, then "
-                       "decide each student's grades in Window 3 to bring this "
-                       "exam into the criterion math.")
             return
     elif match.get("is_exam"):
         # Item-level exam analytics: raw totals + per-question averages.
@@ -8132,6 +8118,8 @@ def show_analytics_dialog(name: str) -> None:
         cc.metric("Spread (sd)", round(pstdev(totals), 2) if len(totals) > 1 else 0.0)
         graded_on = match.get("graded_criteria") or []
         d.metric("Graded", "Crit " + ",".join(graded_on) if graded_on else "not yet")
+        if is_exam_rec:
+            _render_exam_evaluation(asg_rec, results)
 
         labels = next((a_.question_labels for a_ in gb().assignments
                        if a_.name == name and getattr(a_, "is_exam", False)), [])
@@ -8171,8 +8159,7 @@ def show_analytics_dialog(name: str) -> None:
                         ic[1].caption("— no name crop on disk —")
 
         if match["avg"] is None:
-            st.caption("Give 0–8 grades in Window 1's 📝 Exam grading panel or Window 3 "
-                       "to bring this exam into the criterion math.")
+            st.caption("Grade distribution appears after you record grades for this exam.")
             return
         # Bands were applied — fall through to the normal band distribution.
     else:
@@ -9027,6 +9014,14 @@ def edit_grade_dialog(sid: str, asg: str, crit: str) -> None:
                 + ("  ·  _awaiting decision (not counted yet)_" if awaiting
                    else "  ·  _not graded yet (not counted)_" if ungraded
                    else "  ·  _missing (counts as 0)_" if is_missing else ""))
+    exam = next((a for a in _class_exams() if a.name == asg), None) if is_exam_row else None
+    paper = student.exam_results.get(asg) if exam is not None else None
+    if paper is not None:
+        reference = (_exam_marks_text(exam, paper) if paper.mode != "rubric"
+                     else "Question levels and comments")
+        with st.expander(f"Exam reference · {reference}"):
+            _render_cam2_result(exam, paper)
+
     k = f"{sid}||{asg}||{crit}"   # unique widget keys per cell
     cur = int(sc.value) if sc else 0
     # Awaiting a decision starts blank, so saving can't invent a 0. A paper not
@@ -9059,7 +9054,6 @@ def edit_grade_dialog(sid: str, asg: str, crit: str) -> None:
              "counting it as a 0).")
     # A new grade on a paper starts with its overall comment, as a dropdown decision
     # does. Left empty, saving would clear it from the term comment (Q3).
-    paper = getattr(student, "exam_results", {}).get(asg)
     feedback = st.text_area(
         "Comment (this task's descriptive feedback)",
         value=(sc.comment if sc else paper.comment if paper else ""), key=f"ed_fb_{k}",
@@ -9080,11 +9074,6 @@ def edit_grade_dialog(sid: str, asg: str, crit: str) -> None:
         lk = late_key(sid, asg, crit)
         if lk in lf or late != is_late(sid, asg, crit, sc):
             lf[lk] = late
-        exam = None
-        if is_exam_row:
-            exam = next((a for a in gb().assignments if a.name == asg
-                         and getattr(a, "class_name", "")
-                         == st.session_state.get("active_class", "")), None)
         mapped = _exam_mapped_letters(exam) if exam is not None else []
         if sc is not None and new_val is None:
             if exam is not None:
@@ -9204,7 +9193,7 @@ def _render_criterion_group(asg, student, r, group, letters) -> None:
                   + "). Decide here.")
     elif finals:
         status = (f"CAM2 final level: {final_text(finals[0])}. Not in the gradebook "
-                  "yet: Apply it in Window 1, or choose here.")
+                  "yet. Apply it in Grades and Analysis in Window 1, or choose here.")
     else:
         status = "⏳ Awaiting your decision."
     cc = st.columns([3, 1.2], vertical_alignment="center")
@@ -9243,8 +9232,8 @@ def _render_exam_decisions(asg, student, r) -> bool:
     for group in groups:
         _render_criterion_group(asg, student, r, group, letters)
     if unmapped:
-        st.caption("**Not counted toward a criterion.** Map these in Window 1's "
-                   "📝 Exam grading panel to decide them.")
+        st.caption("**Not counted toward a criterion.** Map these in "
+                   "Grades and Analysis in Window 1 to decide them.")
         for row in unmapped:
             if row["items"]:
                 st.caption(f"{row['name']} · " + " · ".join(row["items"]))
@@ -10544,24 +10533,23 @@ def _class_dialog_body(edit: bool) -> None:
     # Per-mode widget keys: flipping the Edit/Add toggle must always start the
     # other mode's form from its own defaults, never from half-typed values.
     k = "edit" if edit else "add"
+    master_key = f"clsdlg_master_{k}"
+    st.session_state.setdefault(master_key, ac.get("master_dir", ""))
     master_row = st.columns([5, 1], vertical_alignment="bottom")
     master = master_row[0].text_input(
         "Master directory (optional — local path or Drive Folder ID)",
-        value=ac.get("master_dir", ""),
-        key=f"clsdlg_master_{k}", autocomplete="off",
+        key=master_key, autocomplete="off",
         placeholder=("e.g. /Users/you/Documents/Y7 Art or a Drive folder ID"
                      if sys.platform == "darwin" else r"e.g. C:\Users\you\OneDrive\Y7 Art   or   1AbCdEfGhIjK..."),
         help="The class's assignment home — its subfolders are scanned into "
              "Window 1's assignment list automatically when you save a new or "
              "changed directory (and again on every 🔄 Sync, or via 👁 Watch "
              "in Edit mode).")
-    if NATIVE_FOLDER_PICKER and master_row[1].button(
-            "📁 Browse…", key=f"clsdlg_master_browse_{k}", width="stretch"):
-        initial = master if master and os.path.isdir(master) else None
-        chosen = pick_folder("Choose this class's master directory", initial)
-        if chosen:
-            st.session_state[f"clsdlg_master_{k}"] = chosen
-            st.rerun()
+    if NATIVE_FOLDER_PICKER:
+        master_row[1].button(
+            "📁 Browse…", key=f"clsdlg_master_browse_{k}", width="stretch",
+            on_click=_browse_folder_into,
+            args=(master_key, "Choose this class's master directory"))
     with st.form(f"{k}class_form"):
         name = st.text_input("Class name", value=ac.get("name", ""),
                              key=f"clsdlg_name_{k}", autocomplete="off",
@@ -10817,13 +10805,11 @@ def _render_first_boot_setup() -> None:
         key="boot_manual_path", autocomplete="off",
         placeholder=("e.g. /Users/you/Documents/CAM Data/acm_database.json"
                      if sys.platform == "darwin" else r"e.g. D:\CAM   or   \\server\share\CAM\acm_database.json"))
-    if NATIVE_FOLDER_PICKER and manual_row[1].button(
-            "📁 Browse…", key="boot_manual_browse", width="stretch"):
-        initial = manual if manual and os.path.isdir(manual) else None
-        chosen = pick_folder("Choose your CAM data folder", initial)
-        if chosen:
-            st.session_state["boot_manual_path"] = chosen
-            st.rerun()
+    if NATIVE_FOLDER_PICKER:
+        manual_row[1].button(
+            "📁 Browse…", key="boot_manual_browse", width="stretch",
+            on_click=_browse_folder_into,
+            args=("boot_manual_path", "Choose your CAM data folder"))
     if st.button("Use this folder", key="boot_manual_use",
                  disabled=not manual.strip()):
         path = manual.strip()
@@ -11059,6 +11045,19 @@ def _render_db_quarantine_banner() -> None:
             st.rerun()
 
 
+def _render_quit_cam() -> None:
+    request = os.environ.get("CAM_QUIT_FILE")
+    if request and st.button("Quit CAM", key="quit_cam", help="Close CAM and its grading helpers."):
+        try:
+            with open(request, "a", encoding="utf-8"):
+                pass
+        except OSError as exc:
+            st.error(f"Could not quit CAM: {exc}")
+        else:
+            st.info("CAM is closing. You can close this tab.")
+            st.stop()
+
+
 def _render_top_bar() -> None:
     """Title + class/level selector + Add/Edit class + Settings."""
     st.title("Criterion Assessment Metrics")
@@ -11119,6 +11118,8 @@ def _render_top_bar() -> None:
         class_dialog()
     if ctrl[3].button("⚙ Settings", key="open_settings", width="stretch"):
         settings_dialog()
+    with ctrl[4]:
+        _render_quit_cam()
 
 
 def main() -> None:
@@ -11132,6 +11133,7 @@ def main() -> None:
     # persist() fires against the (unchosen) path before the teacher picks.
     if _needs_first_boot_setup():
         _render_first_boot_setup()
+        _render_quit_cam()
         return
     ensure_class_context()
     ensure_term_context()

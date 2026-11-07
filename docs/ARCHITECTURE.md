@@ -633,9 +633,9 @@ writes a `cam2-host` handoff (exam, class, session folder, roster as
 the cloud folder, and starts `exam_grading/launcher.py --host <handoff>`. CAM2
 opens the browser itself; a CAM2 that is already running is handed the exam.
 The session folder is `<class folder>/exams/<exam>/` (D6), so the scans travel
-with the class and the exam reopens on any computer that syncs it. CAM2 is not
-tied to CAM's lifetime (unlike the workspace, §1): closing CAM must not cut off
-a grading tab.
+with the class and the exam reopens on any computer that syncs it. In both
+platform bundles, the launcher stops bundled CAM2 and the workspace when
+CAM quits. Standalone CAM2 has its own process and app-data folder.
 
 **The session folder is the contract, and CAM only reads it.** When the teacher
 clicks *Grading finished — send to CAM*, CAM2 writes `host_ready_at` into
@@ -648,7 +648,7 @@ paper by `external_id`, then alias / unambiguous prefix, else the 🧩 pool
 `_sync_cam2_sessions` runs from the global Sync and from `sync_exam`; it reads a
 session only once it has been sent, and again only when its two files change
 (the fingerprint is kept in `ingested_files`). Re-reading is purge-replace for
-the exam's results; grades already applied in Window 1 are kept.
+the exam's results; grades already applied in Grades and Analysis are kept.
 
 **Picking up a send: compare, don't listen.** CAM2 sends no message; the
 folder is the signal, and CAM compares it with its own record rather than
@@ -666,18 +666,19 @@ and every 3 s while CAM is open (`_cam2_send_poller`, a `run_every` fragment
 that repaints only when something was filed or could not be read). The timer
 only sets how soon a send appears, never whether: a send made while CAM was
 closed, asleep or on another class is still newer than the record at the next
-check. The Window 1 exam panel shows where each exam stands (`_cam2_status`:
+check. The Grades and Analysis dialog shows where the selected exam stands (`_cam2_status`:
 not opened / not sent / sent at … · in CAM since …, or marked not finished
 since) with a **🔄 Check CAM2 now** button (`sync_exam`). CAM2 cannot see
 whether CAM has read a send: that would need CAM to write into the session
 folder, which it never does.
 
 **Grading onto criteria.** For a plain marks exam, the teacher chooses grades
-in Window 1 (`_apply_exam_bands`). The dropdowns show saved grades or start
+in Grades and Analysis (`_apply_exam_bands`). The dropdowns show saved grades or start
 blank. The bridge preserves raw and weighted marks and keeps any teacher
 adjustment to the report figures separately. For rubric or mixed exams and
-marks linked to criteria, Window 1 maps rubrics to CAM criteria and Window 3
-groups the evidence for one teacher decision per criterion. Window 1's Apply
+marks linked to criteria, the dialog maps rubrics to CAM criteria and
+Window 3 groups the evidence for one teacher decision per criterion.
+The panel's Apply
 carries over unambiguous final levels typed in CAM2
 (`_apply_exam_rubric_levels`), scaling them to 0–8 when needed. Sync refreshes
 the evidence. Apply previews updates and respects teacher-entered grades.

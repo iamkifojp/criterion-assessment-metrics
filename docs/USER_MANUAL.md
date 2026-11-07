@@ -24,7 +24,7 @@ write the report.**
 
 | Window | You use it to… |
 |---|---|
-| **1 · Classes & Assignments** | Switch between the classes you teach, import grade CSVs, watch a synced folder for new work, and see the timeline of assessed assignments. |
+| **1 · Assignments and Exams** | Switch between the classes you teach, import grade CSVs, watch a synced folder for new work, and see the timeline of assessed assignments. |
 | **2 · Students & Evidence** | See every student's Criterion A–D scores, flag or exclude a piece, mark work late, and set the weighting method. Each student's gender (optional) sets the pronouns used in their comment. |
 | **3 · Report & Comment** | Read the final criterion grades — plus, if you switch them on in Settings, the school-specific **MYP Grade** / **Effort** / **School Grade** — jot teacher remarks, and generate the report-card comment. |
 
@@ -117,7 +117,8 @@ whole loop.
 ### 1 · Create the exam and open it in CAM2
 
 In Window 1, use **Add assignment / exam** and choose **Exam**. Click the exam in
-the list, then **🛠 Exam setup / Grade**. CAM2 opens with the exam name, your
+the list to open **Grades and Analysis**, then click the red
+**🛠 Exam setup / Grade** button. CAM2 opens with the exam name, your
 class list and the save folder already filled in. The exam is saved in the class
 folder, under `exams/<exam name>/` (scans included), so any computer that syncs
 the class folder can open it again with the same button.
@@ -159,35 +160,42 @@ Opening an older exam upgrades its session. If CAM2 reports
 `file_from_newer_version`, update the app on that computer before reopening
 the exam. Keep a backup of the gradebook and the class `exams/` folders.
 
-### 3 · Bring the results into the gradebook (Window 1)
+### 3 · Bring the results into the gradebook
 
 A few seconds after you send, CAM reads the exam. It never changes the files
 in the exam folder, and nothing is missed if CAM was closed, the computer was
 asleep or another class was open: CAM compares each exam folder with what it
 last read, so an exam sent in the meantime is brought in the next time CAM
-looks. The results appear in Window 1's **📝 Exam grading** panel and in each
-student's marks list in Window 3, with every question's mark (or Not answered),
+looks. Click the exam in **Window 1 · Assignments and Exams** to open
+**Grades and Analysis** for that exam. Results also appear in the student's
+marks list in Window 3, with every question's mark (or Not answered),
 which choice answers counted and the comment. If you change grades in CAM2
 afterwards, click **Send again**. Sync refreshes the evidence and keeps your
 gradebook decisions.
 
-The top of the panel says where the exam stands, for example
+**Grade evaluation** sits above item-level analysis and shows where the
+exam stands, for example
 *📨 Sent from CAM2 Nov 01 10:42 · in CAM since Nov 01 10:42*, or *Not sent from
 CAM2 yet*. **🔄 Check CAM2 now** reads the exam folder again straight away.
 
-- **Plain marks exam.** Choose a criterion in Window 1, use the raw total and
+- **Plain marks exam.** Choose a criterion under **Grade evaluation**, use the raw total and
   weighted percentage (if set) as evidence, and enter the 0–8 grade yourself.
-  Click **Apply grades to gradebook** to save your choices. The grade field
-  starts blank for each student without a saved grade.
+  Click **Apply grades to gradebook** to save your choices and refresh the
+  grade distribution. The dialog stays open on the same exam. The grade
+  field starts blank for each student without a saved grade.
 - **Rubrics or marks linked to criteria.** Map each CAM2 rubric to a CAM
-  criterion in Window 1. Several rubrics can map to the same criterion.
+  criterion in **Grades and Analysis**. Several rubrics can map to the same criterion.
   Select a student in Window 2 and open the exam in Window 3 to see the
   question levels, marks and comments grouped by criterion. Choose one 0–8
   grade for each criterion you assessed.
-- **Final levels typed in CAM2.** Window 1 previews which grades Apply can fill
+- **Final levels typed in CAM2.** The panel previews which grades Apply can fill
   or update. CAM scales a typed final level to 0–8 if the rubric uses a
   different scale. If two typed levels map to the same criterion, decide in
   Window 3. Use **No grade** in Window 3 to remove an existing grade.
+
+To enter or change one grade, click the exam's grade pill in the focused
+student's marks list. The editor shows the paper's total and lets you expand
+**Exam reference** to see the questions and comments while you grade.
 
 A paper with an ungraded question or an open choice group shows as
 **not finished**. Finish it in CAM2 and send again before deciding the grade.

@@ -76,12 +76,12 @@ The fixtures are fictional "Class 1" students. Numbers are from the Mac run.
 |---|---|---|
 | All nine sessions | Wait for Sync (or Settings → Force full re-scan) | Window 1 lists them all; session hashes unchanged |
 | Window 2 | Open any student's ⚠ list | Each exam "awaiting decision", never a 0 |
-| Quiz 1 marks | Window 1 panel | Alex 7, Sam 10 with "report shows 12/14 (typed in CAM2)", Jordan 9, Priya 14, Liam 6, Mia 11, Noah 5, Emma "not finished" |
+| Quiz 1 marks | Grades and Analysis | Alex 7, Sam 10 with "report shows 12/14 (typed in CAM2)", Jordan 9, Priya 14, Liam 6, Mia 11, Noah 5, Emma "not finished" |
 | | Grade Alex 4 and Sam 6, Apply | "Graded 2 student(s)… 1 paper(s) not finished in CAM2 skipped" |
-| Choice open | Window 1 panel | Mia, Noah and Emma "not finished"; Sam 7/12 with Q3 not counted |
-| Weighted final | Window 1 panel | Alex 38.8% weighted; Jordan 56.3% with "report shows 80.0% (typed in CAM2)"; Sam 47.5% |
-| Unit test rubric | Window 1 panel, Apply | "Apply will fill 8 empty grade(s)", then 4 of 8 decided on A and on C; Sam A 6, C 5 |
-| | Window 3 for Sam | "CAM2 final level: 6. Not in the gradebook yet: Apply it in Window 1, or choose here." before Apply |
+| Choice open | Grades and Analysis | Mia, Noah and Emma "not finished"; Sam 7/12 with Q3 not counted |
+| Weighted final | Grades and Analysis | Alex 38.8% weighted; Jordan 56.3% with "report shows 80.0% (typed in CAM2)"; Sam 47.5% |
+| Unit test rubric | Grades and Analysis, Apply | "Apply will fill 8 empty grade(s)", then 4 of 8 decided on A and on C; Sam A 6, C 5 |
+| | Window 3 for Sam | "CAM2 final level: 6. Not in the gradebook yet. Apply it in Grades and Analysis in Window 1, or choose here." before Apply |
 | Essay one criterion | Window 3, Sam: choose 5 | "Your decision." and B: 5 in the marks table |
 | Lab practical | Window 3, Sam | A 9/20 (45.0%) and D 9/20; choose A 4 |
 | Mixed (both) | Window 3, Sam | Q2 level 4; total 7/15 under "Every question and comment" for both |
@@ -98,5 +98,5 @@ The fixtures are fictional "Class 1" students. Numbers are from the Mac run.
 inside the sandbox.
 
 **Known and not to report again:** CAM2's level buttons move after a click (fixed in the
-next CAM2 update); the report-figure caption wraps in Window 1's narrow column; CAM2's
+next CAM2 update); CAM2's
 thumbnails show slides in portrait cards.
