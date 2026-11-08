@@ -2,7 +2,7 @@
 // write overall comments, then make the student PDFs and the Excel gradebook.
 import { post, waitForJob } from "./api.js";
 import { t, language } from "./i18n.js";
-import { goTo } from "./main.js";
+import { closeSession, goTo } from "./main.js";
 import { openAddPapers } from "./step1.js";
 import { act, app, config, criteriaOf, gradeOf, gradedWith, handleError, render, usedCriteria } from "./store.js";
 import { button, coach, commentField, confirmBox, debounce, formatTime, h, modal, progressOverlay, toast } from "./ui.js";
@@ -286,6 +286,7 @@ function hostPanel(c, incomplete) {
     sent
       ? [h("p", { class: "ok-text" }, t("host.sent", { time: formatTime(sent), host: c.host.name })),
         h("div", { class: "actions left" },
+          button(t("save.close"), closeSession, "primary"),
           button(t("host.send_again"), send),
           button(t("host.unsend"), () => act(post("/api/host/ready", { ready: false })), "ghost"))]
       : [h("p", { class: "muted" }, t("host.send_hint", { host: c.host.name })),

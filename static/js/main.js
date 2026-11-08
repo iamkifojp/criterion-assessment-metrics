@@ -90,6 +90,10 @@ function languageSwitch() {
 
 function banners() {
   const out = [];
+  if (!app.session && app.view === "start" && app.finishedHost) {
+    out.push(h("div", { class: "banner ok", role: "status" },
+      t("host.session_closed", { host: app.finishedHost })));
+  }
   if (app.saveError) {
     const reopen = app.saveError.code === "save_changed_elsewhere";
     out.push(h("div", { class: "banner danger", role: "alert" },
@@ -116,15 +120,18 @@ async function reopenSession() {
   if (data) { app.saveError = null; app.draft = {}; render(); }
 }
 
-async function closeSession() {
+export async function closeSession() {
   if (commentRefused()) return;
+  const c = config();
   try {
     const data = await post("/api/session/close");
     app.session = null;
     app.recent = data.recent;
     app.saveError = null;
+    app.finishedHost = c?.host_ready_at ? c.host?.name : null;
     app.view = "start";
     app.draft = {};
+    window.scrollTo(0, 0);
     render();
   } catch (err) {
     await handleError(err);
