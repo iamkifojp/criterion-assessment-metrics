@@ -1690,9 +1690,20 @@ marks in CAM's Grades and Analysis. The mock exam was switched off for term
 assessment. A read-only comparison confirmed that all four results arrived and
 that the existing criterion scores and other exam results matched the backup.
 
-Phase 6 remains open. The teacher checks that a workspace tick change preserves
-typed comments, then reviews one generated term comment that includes exam
-feedback. Confirm the release on any other computers sharing the working data.
+**Pilot follow-up.** The teacher confirmed that a workspace tick and a typed
+comment each survived export and reopen, and that a new exam comment reached
+Window 3. Clearing the exam comment and sending again cleared the raw result,
+but the class comment mirror restored the old copy on an existing criterion
+grade. Sync now limits that recovery to non-exam scores. The regression test
+reproduced the bug before the fix and passed afterward, including preservation
+of CAM-side comment edits and criterion grades. The isolated suites passed all
+493 CAM and 354 CAM2 tests.
+
+Phase 6 remains open. The teacher confirmed that only the Windows pilot computer
+uses the working data. Confirm that a workspace tick change preserves typed
+text while both are present. On the patched client, repeat the exam comment
+addition and removal and review one generated term comment that includes exam
+feedback.
 
 ### 6.1 After this upgrade
 

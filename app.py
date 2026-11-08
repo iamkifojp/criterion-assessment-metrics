@@ -1799,12 +1799,15 @@ def _heal_from_class_mirrors() -> None:
 
 
 def _heal_score_comments_from_mirrors() -> None:
-    """Refill blank ``sc.comment`` slots from each class's cloud twin (Phase 3).
+    """Refill blank CSV score comments from each class's cloud twin (Phase 3).
 
     Runs after a Sync purge-replace, which rebuilds a class's scores from its
     export CSVs and so drops any comment that was typed in CAM (not carried by
-    the CSV). Fill blanks only — a comment the CSV still carries, or one typed
-    this session, always wins. Never raises."""
+    the CSV). Exam scores survive Sync, so their current comments are
+    authoritative, including blanks cleared in CAM or sent from CAM2."""
+    gradebook = gb()
+    exams = {(assignment.class_name, assignment.name)
+             for assignment in gradebook.assignments if assignment.is_exam}
     for cls in class_names():
         try:
             mirror = load_class_mirror(class_data_dir(cls), cls)
@@ -1814,8 +1817,10 @@ def _heal_score_comments_from_mirrors() -> None:
         if not sc_map:
             continue
         for assignment, by_sid in sc_map.items():
+            if (cls, assignment) in exams:
+                continue
             for sid, by_crit in by_sid.items():
-                student = gb().students.get(sid)
+                student = gradebook.students.get(sid)
                 if student is None:
                     continue
                 for crit, text in by_crit.items():

@@ -1007,11 +1007,15 @@ class ExamCommentTests(_PromptBase):
 
 
 class ResendCommentTests(_DeckBase):
+    def setUp(self):
+        super().setUp()
+        self.ss["unit_plans"] = {}
+
     def resend(self, comment):
         session, _config, grades = self.storage.open_session(self.folder)
         grades.setdefault("overall", {}).setdefault("s001", {})["comment"] = comment
         session.grades_file.save(grades)
-        self.sync()
+        app.sync_exam(CLASS, EXAM)
 
     def test_a_re_sent_comment_replaces_a_copy_not_edited(self):
         self.resend("First")
@@ -1036,6 +1040,27 @@ class ResendCommentTests(_DeckBase):
         self.grade("A").comment = ""
         self.resend("Corrected")
         self.assertEqual(self.grade("A").comment, "")
+
+    def test_cam2_comment_clear_survives_the_cloud_mirror(self):
+        self.resend("Original exam comment.")
+        self.decide("A", 5)
+        self.decide("B", 4)
+        self.grade("B").comment = "Edited in CAM."
+        app.save_class_mirror(self.class_dir, CLASS, {
+            "score_comments": {EXAM: {AOKI: {
+                "A": self.grade("A").comment, "B": self.grade("B").comment,
+            }}},
+        })
+
+        self.resend("")
+
+        self.assertEqual(self.result().comment, "")
+        self.assertEqual(self.grade("A").comment, "")
+        self.assertEqual(self.grade("A").value, 5)
+        self.assertEqual(self.grade("B").value, 4)
+        self.assertEqual(app._exam_feedback_for(self.aoki), [
+            ExamFeedback(EXAM, ["Edited in CAM"]),
+        ])
 
     def test_a_re_send_changes_no_grade(self):
         self.resend("First")
