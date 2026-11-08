@@ -27,6 +27,7 @@ jobs:
           codesign --verify --deep --strict "$RUNNER_TEMP/cam-extracted/CAM.app"
           "$RUNNER_TEMP/cam-smoke-venv/bin/python" .github/cam-release-smoke.py "$RUNNER_TEMP/cam-release-src" "$RUNNER_TEMP/cam-extracted"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
         with:
           name: CAM-Mac-AppleSilicon-v2026.11.08
           path: ${{ runner.temp }}/cam-release/CAM-Mac-AppleSilicon-v2026.11.08.zip

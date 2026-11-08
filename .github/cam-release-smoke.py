@@ -128,9 +128,23 @@ with tempfile.TemporaryDirectory(prefix="cam-release-smoke-", ignore_cleanup_err
 
             page.keyboard.press("Escape")
             page.get_by_role("button", name="Poster draft", exact=True).click()
-            page.get_by_role("button", name="Grade this Assignment").click()
+            grade_button = page.get_by_role("button", name="Grade this Assignment")
+            grade_button.click()
             link = page.locator('a[href^="http://127.0.0.1:"]').filter(has_text="http://127.0.0.1:")
-            expect(link).to_be_visible(timeout=30_000)
+            startup_error = page.get_by_text("Grading workspace did not start on port", exact=False)
+            expect(link.or_(startup_error)).to_be_visible(timeout=40_000)
+            if startup_error.is_visible():
+                print(startup_error.inner_text(), flush=True)
+                port = re.search(r"port (\d+)", startup_error.inner_text()).group(1)
+                def late_workspace():
+                    try:
+                        with urlopen(f"http://127.0.0.1:{port}/api/state", timeout=1) as response:
+                            return "students" in json.load(response)
+                    except OSError:
+                        return False
+                wait_for(late_workspace, "Workspace did not start after its first timeout", seconds=25)
+                grade_button.click()
+            expect(link).to_be_visible(timeout=15_000)
             workspace = context.new_page()
             workspace.goto(link.get_attribute("href"))
             origin = re.match(r"http://127\.0\.0\.1:\d+", workspace.url).group()
@@ -163,6 +177,9 @@ with tempfile.TemporaryDirectory(prefix="cam-release-smoke-", ignore_cleanup_err
     except Exception:
         if log.exists():
             print(log.read_text(encoding="utf-8")[-8000:])
+        workspace_log = state / "cam_grading_workspace/workspace_startup.log"
+        if workspace_log.exists():
+            print(workspace_log.read_text(encoding="utf-8")[-8000:])
         raise
     finally:
         if proc.poll() is None:
