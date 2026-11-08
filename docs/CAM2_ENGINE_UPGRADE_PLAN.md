@@ -1679,8 +1679,10 @@ copy. A v2 session can't be opened by older code. CAM2 also leaves a v1 copy in
 entered after the upgrade would need re-entering. The older workspace ignores the
 remembered line, so the F4 bug simply returns.
 
-*Done when:* all computers are updated, every sampled exam matches its numbers from
-before the upgrade, and steps 6 and 7 passed.
+*Done when:* all computers sharing the working data are updated, the sampled
+exam results are verified, and the workspace and term-comment checks are
+complete. The teacher accepted clipboard prompt compilation for step 7 and
+skipped generating a draft with the usual AI service.
 
 **Windows rollout pilot, 2026-11-08.** The working gradebook was readable and
 the exposure report found zero existing CAM2 sessions. A timestamped gradebook
@@ -1717,13 +1719,11 @@ The fictional checks for prompt compilation before any grade decision and for
 comment deletion on re-send also passed. The teacher confirmed this is the
 only computer using the working data.
 
-The teacher chose to skip the AI-generated draft check after verifying prompt
-compilation. The fictional workspace checks passed for preserving typed text
-when a tick changes and for retaining the saved comment on reopen. Phase 6
-remains open for confirmation of that combined check on a live workspace task
-and for mock-exam cleanup. The mock exam was still On for term assessment at
-the last read-only check. Switch it Off to exclude it from assessment and term
-prompts.
+**Phase 6 complete, 2026-11-08.** The teacher confirmed that the typed workspace
+sentence survived a tick change on a live assignment, matching the fictional
+checks for text preservation and reopening. A final read-only check found the
+mock exam Off for Term 1, all four mock results present in CAM, and no session
+lock. Criterion grades and exam results outside the mock matched the backup.
 
 ### 6.1 After this upgrade
 
