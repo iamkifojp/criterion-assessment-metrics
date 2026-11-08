@@ -6,6 +6,16 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## v2026.11.08.1 — CAM2 comment and session close fixes
+
+- Clearing an exam comment in CAM2 and sending again clears its unedited copy
+  on a criterion grade in CAM. The comment backup no longer restores the old
+  text. Feedback edited directly in CAM is preserved.
+- CAM2 offers **Save & close session** after sending results and shows how to
+  return to CAM's **Grades and Analysis** or quit CAM2.
+- The [patch release notes](RELEASE_NOTES_v2026.11.08.1.md) cover installation
+  on Windows and Apple Silicon.
+
 ## v2026.11.08 — CAM2 engine upgrade
 
 See the [release notes](RELEASE_NOTES_v2026.11.08.md) for the shared-gradebook

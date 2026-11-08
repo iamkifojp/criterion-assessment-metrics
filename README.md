@@ -70,8 +70,8 @@ Do not run CAM from inside the zip. The app folder and data folder are kept
 separate, so installing an update never replaces the gradebook. The bundle also
 contains **CAM Quick Guide.pdf**, a visible troubleshooting launcher, and a log
 file for startup problems. See the
-[v2026.11.08 release notes](docs/RELEASE_NOTES_v2026.11.08.md) for highlights and
-upgrade guidance. Update every computer that shares the data folder before
+[latest release notes](docs/RELEASE_NOTES_v2026.11.08.1.md) for installation
+and upgrade guidance. Update every computer that shares the data folder before
 opening an existing exam.
 
 ## Download for Apple Silicon Macs
@@ -140,7 +140,7 @@ live in a local or cloud folder you point CAM at via
 - [CAM Quick Guide](docs/QUICK_GUIDE.md) — task-based first steps included as a PDF in the Windows bundle.
 - [Setup guide](docs/SETUP.md) — install, run, connect your data and API keys.
 - [User manual](docs/USER_MANUAL.md) — illustrated walkthrough of daily use.
-- [v2026.11.08 release notes](docs/RELEASE_NOTES_v2026.11.08.md) — Windows and Apple Silicon, the updated exam workflow and the upgrade checklist.
+- [Latest release notes](docs/RELEASE_NOTES_v2026.11.08.1.md) — Windows and Apple Silicon, exam comment fixes and update instructions.
 - [v2026.11.01 release notes](docs/RELEASE_NOTES_v2026.11.01.md) — what's new, and updating every computer that shares a data folder.
 - [v2026.07.14 release notes](docs/RELEASE_NOTES_v2026.07.14.md) — the first Windows bundle.
 - [Architecture](docs/ARCHITECTURE.md) — how the pieces fit together.

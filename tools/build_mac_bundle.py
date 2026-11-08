@@ -144,6 +144,9 @@ print(f"Verified Python {sys.version.split()[0]}, Streamlit {streamlit.__version
 
 
 def build(output: Path, ref: str, version: str, suffix: str, wheelhouse: Path | None) -> Path:
+    year, month, day, *patch = version.split(".")
+    # macOS reads three components. Reserve two digits for same-day patches.
+    bundle_version = f"{year}.{month}.{int(day) * 100 + int(patch[0] if patch else 0)}"
     archive_path = download(RUNTIME_URL, CACHE_DIR / RUNTIME_ASSET)
     output.mkdir(parents=True, exist_ok=True)
     target = output / f"CAM-Mac-AppleSilicon-{suffix}.zip"
@@ -171,8 +174,9 @@ def build(output: Path, ref: str, version: str, suffix: str, wheelhouse: Path | 
             "CFBundleName": "CAM",
             "CFBundleExecutable": "CAM",
             "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": version,
-            "CFBundleVersion": version,
+            "CFBundleShortVersionString": f"{year}.{month}.{day}",
+            "CFBundleVersion": bundle_version,
+            "CAMReleaseVersion": version,
             "LSMinimumSystemVersion": MIN_MACOS,
             "NSDocumentsFolderUsageDescription": "CAM uses Documents for gradebooks you choose there.",
             "NSDesktopFolderUsageDescription": "CAM reads student work and gradebooks you choose on Desktop.",
@@ -196,15 +200,15 @@ def build(output: Path, ref: str, version: str, suffix: str, wheelhouse: Path | 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--tag", help="release tag vYYYY.MM.DD")
+    mode.add_argument("--tag", help="release tag vYYYY.MM.DD or vYYYY.MM.DD.N")
     mode.add_argument("--dev", action="store_true", help="build a test ZIP from HEAD")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--wheelhouse", type=Path, help="use a local folder of pinned wheels")
     args = parser.parse_args()
     if platform.system() != "Darwin" or platform.machine() != "arm64" or sys.version_info < (3, 12):
         parser.error("Run with native Python 3.12+ and Xcode Command Line Tools on Apple Silicon.")
-    if args.tag and not re.fullmatch(r"v[0-9]{4}\.[0-9]{2}\.[0-9]{2}", args.tag):
-        parser.error("Release tag must have the form vYYYY.MM.DD.")
+    if args.tag and not re.fullmatch(r"v[0-9]{4}\.[0-9]{2}\.[0-9]{2}(?:\.[1-9][0-9]?)?", args.tag):
+        parser.error("Release tag must have the form vYYYY.MM.DD or vYYYY.MM.DD.N (N from 1 to 99).")
     ref = git("rev-parse", "--verify", f"refs/tags/{args.tag}^{{commit}}" if args.tag else "HEAD")
     version = args.tag[1:] if args.tag else git("show", "-s", "--format=%cs", ref).replace("-", ".")
     wheelhouse = args.wheelhouse.resolve() if args.wheelhouse else None

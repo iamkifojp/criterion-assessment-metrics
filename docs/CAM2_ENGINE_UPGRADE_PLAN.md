@@ -1592,7 +1592,7 @@ Silicon ZIPs from this tag, then publish them with the source archives and
 checksums after both pass.
 
 **Complete, 2026-11-08.** [CAM v2026.11.08](https://github.com/iamkifojp/criterion-assessment-metrics/releases/tag/v2026.11.08)
-is the latest public release. The final tag points to `304ca05`. The tagged
+was published from `304ca05`. The tagged
 source passed 492 CAM and 354 CAM2 tests with no skips on Windows. The
 eight-page Quick Guide was visually checked and the source archive and
 new documentation links passed verification.
@@ -1724,6 +1724,12 @@ sentence survived a tick change on a live assignment, matching the fictional
 checks for text preservation and reopening. A final read-only check found the
 mock exam Off for Term 1, all four mock results present in CAM, and no session
 lock. Criterion grades and exam results outside the mock matched the backup.
+
+**Patch release preparation.** Package the Phase 6 comment and session close
+fixes as `v2026.11.08.1` for Windows and Apple Silicon from the same tag. The
+Mac builder accepts a patch suffix. Verify both extracted packages with
+fictional data, including the comment re-send and the new post-send guidance,
+then publish them with checksums and matching source archives.
 
 ### 6.1 After this upgrade
 

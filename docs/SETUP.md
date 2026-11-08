@@ -31,7 +31,7 @@ shows the reason; the full start-up log is
 When updating, extract the new bundle into a new app folder and select the same
 data folder on first start. Never replace or delete your data folder. The
 release also provides a `SHA256SUMS.txt` file: advanced users can compare it
-with `Get-FileHash .\CAM-portable-v2026.11.08.zip -Algorithm SHA256` in
+with `Get-FileHash .\CAM-portable-v2026.11.08.1.zip -Algorithm SHA256` in
 PowerShell to confirm the download is unchanged.
 
 ## For colleagues on Apple Silicon Macs
@@ -62,8 +62,9 @@ reports `file_from_newer_version`, update CAM on that computer before reopening.
 Open the shared data folder on one computer at a time. After quitting CAM,
 wait for cloud sync to finish before opening the same data elsewhere.
 
-See the [v2026.11.08 release notes](RELEASE_NOTES_v2026.11.08.md) for the full
-update checklist.
+See the [latest release notes](RELEASE_NOTES_v2026.11.08.1.md) for the patch
+and the [original upgrade notes](RELEASE_NOTES_v2026.11.08.md) for the full
+checklist when moving from an earlier release.
 
 ## For developers and maintainers: run from source
 
