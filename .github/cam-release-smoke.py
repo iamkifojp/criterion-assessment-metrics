@@ -129,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix="cam-release-smoke-", ignore_cleanup_err
             page.keyboard.press("Escape")
             page.get_by_role("button", name="Poster draft", exact=True).click()
             page.get_by_role("button", name="Grade this Assignment").click()
-            link = page.get_by_role("link", name=re.compile(r"http://127\.0\.0\.1:\d+"))
+            link = page.locator('a[href^="http://127.0.0.1:"]').filter(has_text="http://127.0.0.1:")
             expect(link).to_be_visible(timeout=30_000)
             workspace = context.new_page()
             workspace.goto(link.get_attribute("href"))
