@@ -15,6 +15,7 @@ export const app = {
   draft: {},              // per-screen scratch state, keyed by screen
   prefs: {},              // per-computer settings: { hide_names, shuffle_papers }
   host: null,             // the app that opened CAM2 (CAM) and its exam, or null
+  finishedHost: null,     // host whose sent session was just closed in this tab
 };
 
 let renderFn = () => {};
