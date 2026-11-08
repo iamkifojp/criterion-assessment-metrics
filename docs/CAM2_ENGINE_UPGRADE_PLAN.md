@@ -1699,11 +1699,20 @@ reproduced the bug before the fix and passed afterward, including preservation
 of CAM-side comment edits and criterion grades. The isolated suites passed all
 493 CAM and 354 CAM2 tests.
 
+CAM2's hosted review screen now offers **Save & close session** after sending
+results. On the start screen, a confirmation directs the teacher back to CAM's
+**Grades and Analysis** and identifies **Quit CAM2**. The CAM2 maintenance
+commit `920fea1` is based on the release's engine pin. An isolated browser
+check verified sending, saving, releasing the session lock, and the return
+guidance in English and Japanese. Both suites passed again after integration.
+The Windows pilot installation received and verified the six changed app files,
+with a rollback copy of the originals.
+
 Phase 6 remains open. The teacher confirmed that only the Windows pilot computer
 uses the working data. Confirm that a workspace tick change preserves typed
 text while both are present. On the patched client, repeat the exam comment
-addition and removal and review one generated term comment that includes exam
-feedback.
+addition and removal, check the save-and-close guidance, and review one
+generated term comment that includes exam feedback.
 
 ### 6.1 After this upgrade
 
