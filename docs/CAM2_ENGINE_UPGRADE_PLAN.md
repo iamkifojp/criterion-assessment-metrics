@@ -1591,6 +1591,31 @@ stays on `e39afdc`, as agreed. Build and smoke-test the Windows and Apple
 Silicon ZIPs from this tag, then publish them with the source archives and
 checksums after both pass.
 
+**Complete, 2026-11-08.** [CAM v2026.11.08](https://github.com/iamkifojp/criterion-assessment-metrics/releases/tag/v2026.11.08)
+is the latest public release. The final tag points to `304ca05`. The tagged
+source passed 492 CAM and 354 CAM2 tests with no skips on Windows. The
+eight-page Quick Guide was visually checked and the source archive and
+new documentation links passed verification.
+
+- **Windows.** The portable ZIP passed the dependency, licence and archive
+  audits. The extracted launcher started CAM with its bundled Python.
+  Chromium verified the CAM2 exam handoff, report-value range rejection,
+  linked draft export, gradebook sync and clean shutdown.
+  SHA-256 `52a6b0e54d193cc3955e2aa8fc834567bf618693b2e5630ecff19f4a6dfc97db`.
+- **Apple Silicon.** The signed ZIP passed strict signature, symlink and
+  embedded-runtime checks. A [hosted Mac smoke test](https://github.com/iamkifojp/criterion-assessment-metrics/actions/runs/42455679589)
+  started the extracted app and passed both grading handoffs, sync and
+  shutdown on macOS 26.7.2 with fictional data. The workspace finished
+  starting after the first wait, and a second click opened it. The release
+  notes explain the retry. SHA-256
+  `5f965b8d4021d3b73a5bc987539632dd07e2e005c833634ebc438c8fcdaf5099`.
+- **Assets.** GitHub's SHA-256 digests matched all six uploaded files. The
+  release includes both platform ZIPs, the tagged CAM source ZIP, the
+  PyMuPDF 2.0 and MuPDF 1.28.5 source archives, and `SHA256SUMS.txt`.
+- **Handoff.** Colleagues check Finder's first-launch approval after
+  downloading the release on their Macs, as agreed in Phase 4M. The
+  teacher authorizes the separate real-data rollout in Phase 6.
+
 - Rewrite the exam parts of `USER_MANUAL.md` and `QUICK_GUIDE.md` (and its PDF),
   `ARCHITECTURE.md` §4 and `DATA_DICTIONARY.md`, and the `app.py:7560` docstring.
 - Mark D3 and D4 as amended in the convergence plan. Update `SLIDE_DECK_EXAM_PLAN.md`

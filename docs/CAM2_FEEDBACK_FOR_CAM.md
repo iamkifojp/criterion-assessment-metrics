@@ -4,8 +4,9 @@
 based on CAM2 `v0.3.2-dev`. This includes slide PDF support, comment length
 limits and the report-value fix. CAM also includes the workspace comment
 and draft-partner fixes and the exam feedback block in term prompts.
-Packaging for the CAM release is in progress
-in the [engine upgrade plan](CAM2_ENGINE_UPGRADE_PLAN.md). The baseline below
+[CAM v2026.11.08](https://github.com/iamkifojp/criterion-assessment-metrics/releases/tag/v2026.11.08)
+ships this combination. The [engine upgrade plan](CAM2_ENGINE_UPGRADE_PLAN.md)
+records the release checks. The baseline below
 records the assessment before implementation.
 
 **The full entries are in CAM2's [Feedback-and-Upgrades.md](https://github.com/iamkifojp/cam2-exam-grading/blob/main/Feedback-and-Upgrades.md).** This note lists only what each one means for CAM, so that the details stay in one place. The F numbers are that document's. Suggesters stay anonymous.

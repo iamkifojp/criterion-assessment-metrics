@@ -34,6 +34,10 @@ then too.
 **Quit CAM** beside **Settings** stops CAM and both bundled grading helpers.
 Use the release's `SHA256SUMS.txt` to verify your ZIP. [Setup guide](SETUP.md)
 
+On the hosted Mac used for the release smoke test, the grading workspace took
+longer than CAM's first wait. If you see that startup message, wait a few
+seconds and click **Grade this Assignment** again.
+
 ## Grading and reporting
 
 - **Exams open in CAM2.** Import paper scans or slide decks exported to PDF.
