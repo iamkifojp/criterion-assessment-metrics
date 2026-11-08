@@ -1705,6 +1705,25 @@ upgrade.
 `test_exam_bridge.py` with it. Release notes repeat the "update every computer first"
 step.
 
+#### Google Drive sign-in from CAM's database folder
+
+On a fresh installation, **Connect Google Drive** opens sign-in before CAM
+passes its database folder to the grading workspace. A Desktop OAuth client
+JSON stored only in that OneDrive folder is missed on first sign-in.
+
+In the next CAM update, have **Connect Google Drive** also look for
+`credentials.json` or `client_secret*.json` beside the active `acm_database.json`
+on the first click. Resolve the path from each device's CAM settings and keep
+the existing credential lookup order ahead of this fallback. Keep the database
+folder lookup in CAM's sign-in flow so it carries forward when the grading
+workspace is retired.
+
+Verify on clean Windows and Mac installations configured to use the same private
+synced database folder. With the Desktop OAuth client JSON only in that folder,
+the first click should start Google authorization on each device. Each device
+signs in separately and saves its own local `token.json` by default. Also check
+that a client JSON in an existing local location still takes precedence.
+
 ---
 
 ## 7. How this was checked, and what wasn't
