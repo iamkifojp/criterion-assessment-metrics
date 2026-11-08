@@ -1708,11 +1708,22 @@ guidance in English and Japanese. Both suites passed again after integration.
 The Windows pilot installation received and verified the six changed app files,
 with a rollback copy of the originals.
 
-Phase 6 remains open. The teacher confirmed that only the Windows pilot computer
-uses the working data. Confirm that a workspace tick change preserves typed
-text while both are present. On the patched client, repeat the exam comment
-addition and removal, check the save-and-close guidance, and review one
-generated term comment that includes exam feedback.
+**Patched Windows acceptance.** After the teacher aligned the old criterion
+comment with the CAM2 copy, a fresh CAM2 comment reached the saved criterion
+grade in Window 3. A read-only check confirmed the match and found that all
+scores outside the mock exam still matched the backup. The teacher compiled a
+clipboard prompt and verified that it included the exam's overall feedback.
+The fictional checks for prompt compilation before any grade decision and for
+comment deletion on re-send also passed. The teacher confirmed this is the
+only computer using the working data.
+
+The teacher chose to skip the AI-generated draft check after verifying prompt
+compilation. The fictional workspace checks passed for preserving typed text
+when a tick changes and for retaining the saved comment on reopen. Phase 6
+remains open for confirmation of that combined check on a live workspace task
+and for mock-exam cleanup. The mock exam was still On for term assessment at
+the last read-only check. Switch it Off to exclude it from assessment and term
+prompts.
 
 ### 6.1 After this upgrade
 
