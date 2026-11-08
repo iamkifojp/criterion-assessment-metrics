@@ -1682,6 +1682,18 @@ remembered line, so the F4 bug simply returns.
 *Done when:* all computers are updated, every sampled exam matches its numbers from
 before the upgrade, and steps 6 and 7 passed.
 
+**Windows rollout pilot, 2026-11-08.** The working gradebook was readable and
+the exposure report found zero existing CAM2 sessions. A timestamped gradebook
+backup matched the working file by SHA-256 before the pilot. The teacher sent
+four paper results from a new version 2 mock marks exam and confirmed the raw
+marks in CAM's Grades and Analysis. The mock exam was switched off for term
+assessment. A read-only comparison confirmed that all four results arrived and
+that the existing criterion scores and other exam results matched the backup.
+
+Phase 6 remains open. The teacher checks that a workspace tick change preserves
+typed comments, then reviews one generated term comment that includes exam
+feedback. Confirm the release on any other computers sharing the working data.
+
 ### 6.1 After this upgrade
 
 These aren't in Phases 1 to 6. The details are in `CAM2_FEEDBACK_FOR_CAM.md` and CAM2's
