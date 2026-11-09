@@ -105,6 +105,12 @@ bias). It hands finished grades back to the dashboard automatically. Scanned
 exams are graded in CAM2 instead (see [Grading exam papers](#grading-exam-papers)). Setup is in
 [Setup · the grading workspace](SETUP.md#7-optional-the-grading-workspace--google-drive).
 
+For a Google Drive class, use **Add / Edit class → Connect Google Drive**
+on each computer before using **Watch**. If you keep your Desktop OAuth client
+JSON beside the gradebook in a private shared CAM data folder, CAM can find it
+on the first click. Each computer saves its own sign-in token by default.
+A local or OneDrive class folder needs no Google sign-in.
+
 ---
 
 ## Grading exam papers

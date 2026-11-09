@@ -3198,12 +3198,21 @@ def launch_drive_signin() -> str:
     Drive subfolders. Returns the URL opened ('' on failure)."""
     if not _ensure_workspace_running():
         return ""
-    url = f"http://127.0.0.1:{GRADING_PORT}/signin"
+    base = f"http://127.0.0.1:{GRADING_PORT}"
     try:
+        # This can be the first workspace request, before the class handoff
+        # configures cloud_dir. Pass the current folder for sign-in only.
+        req = Request(f"{base}/api/signin", method="POST",
+                      data=json.dumps({"db_folder": db_folder()}).encode("utf-8"),
+                      headers={"Content-Type": "application/json"})
+        with urlopen(req, timeout=5) as response:
+            handoff = json.load(response)["handoff"]
+        url = f"{base}/signin?{urlencode({'handoff': handoff})}"
         webbrowser.open(url)
-    except Exception:
-        pass
-    st.session_state["save_status"] = ("ok", f"Google sign-in launched → {url}")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        st.session_state["save_status"] = ("error", f"Could not open Google sign-in: {exc}")
+        return ""
+    st.session_state["save_status"] = ("ok", "Google sign-in opened in your browser.")
     return url
 
 
@@ -10591,8 +10600,8 @@ def _class_dialog_body(edit: bool) -> None:
                 "then create an OAuth **Desktop app** client under "
                 "[Credentials](https://console.cloud.google.com/apis/credentials) "
                 "and save the downloaded JSON as `credentials.json` (or "
-                "`client_secret*.json`) in the project root or "
-                "`cam_grading_workspace/`; then click **🔗 Connect Google "
+                "`client_secret*.json`) in `cam_grading_workspace/`, the project "
+                "root, or beside the active CAM gradebook; then click **🔗 Connect Google "
                 "Drive** once and sign in with the account that can see the "
                 "class folders (a consent screen still in **Testing** status "
                 "needs that account added as a Test user). The sign-in is "
@@ -10625,8 +10634,8 @@ def _class_dialog_body(edit: bool) -> None:
                 watch_master_directory()
             st.rerun()
     drive_help = ("Drive watching needs a one-time Google sign-in (and a "
-                  "credentials.json or client_secret*.json in the project root "
-                  "or cam_grading_workspace/). Opens the "
+                  "credentials.json or client_secret*.json in cam_grading_workspace/, "
+                  "the project root, or beside the active CAM gradebook). Opens the "
                   "sign-in page in your browser.")
     if edit:
         # Watch acts on the SAVED master directory (the form above only

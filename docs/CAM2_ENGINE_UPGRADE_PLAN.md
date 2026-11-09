@@ -1767,22 +1767,16 @@ step.
 
 #### Google Drive sign-in from CAM's database folder
 
-On a fresh installation, **Connect Google Drive** opens sign-in before CAM
-passes its database folder to the grading workspace. A Desktop OAuth client
-JSON stored only in that OneDrive folder is missed on first sign-in.
+**Implemented for v2026.11.10.** On a fresh installation, **Connect Google Drive**
+checks for `credentials.json` or `client_secret*.json` beside the active
+`acm_database.json`, even before the first grading handoff. CAM resolves the
+folder from the device's settings and supplies it for that click. The earlier
+credential locations still take precedence; the workspace's saved configuration
+is unchanged. See the [setup instructions](SETUP.md#7-optional-the-grading-workspace--google-drive).
 
-In the next CAM update, have **Connect Google Drive** also look for
-`credentials.json` or `client_secret*.json` beside the active `acm_database.json`
-on the first click. Resolve the path from each device's CAM settings and keep
-the existing credential lookup order ahead of this fallback. Keep the database
-folder lookup in CAM's sign-in flow so it carries forward when the grading
-workspace is retired.
-
-Verify on clean Windows and Mac installations configured to use the same private
-synced database folder. With the Desktop OAuth client JSON only in that folder,
-the first click should start Google authorization on each device. Each device
-signs in separately and saves its own local `token.json` by default. Also check
-that a client JSON in an existing local location still takes precedence.
+Clean Windows and Mac test packages passed first-click authorization, local
+client precedence, local token storage and clean shutdown with fictional data
+and a simulated OAuth service. No live Google account was used.
 
 ---
 

@@ -70,7 +70,7 @@ Do not run CAM from inside the zip. The app folder and data folder are kept
 separate, so installing an update never replaces the gradebook. The bundle also
 contains **CAM Quick Guide.pdf**, a visible troubleshooting launcher, and a log
 file for startup problems. See the
-[latest release notes](docs/RELEASE_NOTES_v2026.11.08.1.md) for installation
+[latest release notes](docs/RELEASE_NOTES_v2026.11.10.md) for installation
 and upgrade guidance. Update every computer that shares the data folder before
 opening an existing exam.
 
@@ -91,10 +91,14 @@ Grading.
 
 Replace **CAM.app** when upgrading. Keep your chosen gradebook folder separately.
 CAM keeps settings and its startup log under `~/Library/Application Support/CAM`.
-For optional Google Drive grading, put `credentials.json` or the Google
-`client_secret*.json` file in that folder's `cam_grading_workspace` subfolder.
-The workspace also looks in the CAM Application Support folder and then in the
-cloud data folder you configured.
+
+## Optional Google Drive sign-in
+
+On Windows or Mac, keep your Desktop OAuth `credentials.json` or
+`client_secret*.json` beside your gradebook in your private CAM data folder.
+In **Add / Edit class**, click **Connect Google Drive** and authorize each
+computer once. Existing local credential locations still work and take
+precedence. See the [Google Drive setup instructions](docs/SETUP.md#7-optional-the-grading-workspace--google-drive).
 
 ## Run from source
 
@@ -140,7 +144,7 @@ live in a local or cloud folder you point CAM at via
 - [CAM Quick Guide](docs/QUICK_GUIDE.md) — task-based first steps included as a PDF in the Windows bundle.
 - [Setup guide](docs/SETUP.md) — install, run, connect your data and API keys.
 - [User manual](docs/USER_MANUAL.md) — illustrated walkthrough of daily use.
-- [Latest release notes](docs/RELEASE_NOTES_v2026.11.08.1.md) — Windows and Apple Silicon, exam comment fixes and update instructions.
+- [Latest release notes](docs/RELEASE_NOTES_v2026.11.10.md) — Windows and Apple Silicon, first-time Google Drive sign-in and update instructions.
 - [v2026.11.01 release notes](docs/RELEASE_NOTES_v2026.11.01.md) — what's new, and updating every computer that shares a data folder.
 - [v2026.07.14 release notes](docs/RELEASE_NOTES_v2026.07.14.md) — the first Windows bundle.
 - [Architecture](docs/ARCHITECTURE.md) — how the pieces fit together.

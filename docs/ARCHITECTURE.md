@@ -203,8 +203,9 @@ cloud mirror), and `load_settings()` takes the **union** of root and cloud copie
 — an identity's *absence* misfiles the teacher's own uploads under a student, so
 the allowlist is never narrowed by a sync. `my_identities()` merges the empty
 public default + settings + device-local prefs, de-duped case-insensitively.
-`find_client_secret()` probes `<cloud_dir>` after the app root, so
-`credentials.json` can live in the private cloud folder. An **opt-in**,
+`find_client_secret()` probes `<cloud_dir>` after the two local locations. CAM's
+explicit sign-in also checks beside its active gradebook (§3, Sign-in bootstrap).
+An **opt-in**,
 one-way `token.json` bootstrap (device pref `token_bootstrap`, default off) seeds
 an absent local token from `<cloud_dir>/token.json` on the next sign-in; refreshes
 still write locally only — the token is never mirrored back.
@@ -588,25 +589,33 @@ The Flask workspace, by contrast, is Drive-first: it uses `os.listdir`
 everything else, authenticated via `token.json` obtained through
 `InstalledAppFlow` (`google_auth_oauthlib`).
 
-### Sign-in bootstrap (`/signin`)
+### Sign-in bootstrap (`POST /api/signin`, `GET /signin`)
 
 Obtaining that token used to be circular: `_drive_list_subfolders()` needs
 `token.json`, the token is only written by the workspace's OAuth flow, and the
 only buttons that launched the workspace lived on assignment rows — rows that
-Watch (which needs the token) creates. The workspace therefore exposes a
-`GET /signin` route that calls `get_credentials()` directly, running the
-`InstalledAppFlow` and writing `token.json` with no assignment involved.
-The **✎ Add / Edit class** dialog (top bar) pairs it with a **🔗 Connect
-Google Drive** button (`launch_drive_signin()`) that starts the workspace and
-opens the route in the browser. The token is device-wide, not class-specific,
+Watch (which needs the token) creates. The **✎ Add / Edit class** dialog (top
+bar) offers **🔗 Connect Google Drive**. `launch_drive_signin()` starts the
+workspace if needed, resolves CAM's active `db_folder()` from device settings
+(or `CAM_DB_PATH`), and posts it to the workspace over loopback. The workspace
+returns a single-use handoff that expires after two minutes. CAM opens
+`GET /signin` with that handoff, so the database path never appears in the
+browser URL. The workspace consumes it and calls `get_credentials()` with the
+folder as a fallback. This works before the first grading handoff, without
+persisting the path or changing the workspace's `cloud_dir` or class map.
+A standalone `GET /signin` can still use the workspace's usual locations.
+
+The OAuth flow saves `token.json` locally. The token is device-wide, not class-specific,
 so the button appears in *both* modes: always in Add mode (a first-time user
 can sign in before creating their first Drive-backed class), and in Edit mode
 whenever the saved master directory is a Drive ID (per `_master_is_local()`).
 `credentials.json` — the OAuth client secret, type
 "Desktop app" — remains a prerequisite. Discovery accepts `credentials.json`
 or `client_secret*.json` in the workspace directory, then the project root,
-then the configured cloud folder. All credential names remain git-ignored.
-When absent, `/signin` renders setup guidance instead of raising. Drafts,
+then the configured workspace cloud folder, then the active CAM database folder
+if supplied for this click. The first two locations in the Mac bundle are under
+CAM Application Support. All credential names remain git-ignored.
+If authorization is needed and no client file is found, `/signin` shows setup guidance. Drafts,
 filename matching and PDF controls reuse the existing Drive connection and do
 not require a new API project or broader permissions.
 
@@ -765,7 +774,7 @@ Flask, Pillow and PyMuPDF, plus `openpyxl` for its Excel gradebook.
 | `grades_<folderId>.json` | Flask | Per-assignment full `STATE` snapshot. |
 | `<class>/exams/<exam>/` | CAM2 writes, Streamlit reads | One CAM2 exam session (`cam2_session.json`, `grades.json`, scans, crops, `reports/`); `_deleted/` holds permanently deleted exams (§4). |
 | `cam_grades_<folderId>.json` | Streamlit writes, Flask consumes | CAM's current grades for one folder-backed assignment, published at handoff into `[db folder]/[class]/`; deleted by the workspace once merged (§8). |
-| `token.json`, `client_secret_*.json` | Flask | Google OAuth material (read by Streamlit for Drive listing). `find_client_secret()` also probes `<cloud_dir>` after the app root; `token.json` may be opt-in seeded from `<cloud_dir>` (Phase 5). |
+| `token.json`, `credentials.json`, `client_secret*.json` | Flask | Google OAuth material. Streamlit reads the local token for Drive listing. Client discovery also checks the configured cloud folder and, during CAM sign-in, the active gradebook folder. `token.json` may be opt-in seeded from `<cloud_dir>` (Phase 5). |
 | `gcg_settings.json` | Flask; `cloud_dir` + class map are **CAM-managed** (seeded by the launch bridge via `POST /api/config`, read-only in the workspace). `my_identities` is workspace-owned and editable in Settings. | Cloud-sync dir + class → Drive-folder-ID map + the teacher's own identities. Mirrored into `<cloud_dir>` so identities heal across machines (Phase 5). |
 | `local_device_prefs.json` | both (each app keeps its own copy beside its `app.py`) | Device-local prefs, never the shared cloud DB. CAM: db path, path-keyed `database_expectations`, column widths and scroll heights. CGW: the `anonymous_grading` toggle (§8), the opt-in `token_bootstrap` toggle (Phase 5), and any `my_identities` override. Writers merge, so unknown keys are preserved. |
 

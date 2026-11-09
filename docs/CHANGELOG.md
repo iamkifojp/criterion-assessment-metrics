@@ -6,6 +6,14 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## v2026.11.10 — First-time Google Drive sign-in
+
+- **Connect Google Drive** finds a Desktop OAuth client JSON beside the active
+  CAM gradebook on a fresh installation. Existing credential locations still
+  take precedence, and the sign-in token stays on the device by default.
+- The [release notes](RELEASE_NOTES_v2026.11.10.md) cover installation on
+  Windows and Apple Silicon. The gradebook and CAM2 exam formats are unchanged.
+
 ## v2026.11.08.1 — CAM2 comment and session close fixes
 
 - Clearing an exam comment in CAM2 and sending again clears its unedited copy

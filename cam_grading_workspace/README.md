@@ -87,7 +87,9 @@ Keep real rosters and submissions in your runtime data folder, outside git.
 
 ### OAuth client setup
 
-Place your downloaded `credentials.json` or `client_secret*.json` in the project
-root or `cam_grading_workspace/`. Discovery checks the workspace, then the
-project root, then the configured cloud folder. All these credential filenames
-are git-ignored. See [setup guidance](../docs/SETUP.md).
+Place your Desktop OAuth `credentials.json` or `client_secret*.json` in
+`cam_grading_workspace/`, the project root, or your configured workspace cloud
+folder. Discovery checks those locations in that order. When you click
+**Connect Google Drive** in CAM, it also checks beside the active CAM gradebook
+as a final fallback, including on a fresh installation. The token stays local by
+default. See the [setup guide](../docs/SETUP.md#7-optional-the-grading-workspace--google-drive).

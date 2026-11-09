@@ -869,6 +869,42 @@ class WorkspaceTests(unittest.TestCase):
                     self.assertEqual(Path(self.ws.find_client_secret()), path)
                     path.unlink()
 
+    def test_first_signin_uses_active_db_folder_without_changing_workspace_config(self):
+        gradebook = self.root / "OneDrive [school] 日本語"
+        gradebook.mkdir()
+        paths = (Path(self.ws.BASE_DIR) / "credentials.json",
+                 self.root / "credentials.json", self.data / "credentials.json",
+                 gradebook / "client_secret_fixture.json")
+        for path in paths:
+            path.write_text("{}", encoding="utf-8")
+        settings_file = Path(self.ws.BASE_DIR) / "gcg_settings.json"
+        settings_before = settings_file.read_bytes()
+
+        def sign_in():
+            handoff = self.client.post("/api/signin", json={"db_folder": str(gradebook)})
+            self.assertEqual(handoff.status_code, 200)
+            url = "/signin?handoff=" + handoff.get_json()["handoff"]
+            response = self.client.get(url)
+            self.assertEqual(self.client.get(url).status_code, 410)
+            return response
+
+        self.assertEqual(self.client.post("/api/signin", json={"db_folder": str(gradebook)},
+                                         headers={"Origin": "https://example.test"}).status_code, 403)
+        for path in paths:
+            with self.subTest(path=path), patch.object(self.ws, "InstalledAppFlow") as oauth:
+                oauth.from_client_secrets_file.return_value.run_local_server.return_value.to_json.return_value = "{}"
+                response = sign_in()
+                self.assertIn(b"Google Drive connected", response.data)
+                oauth.from_client_secrets_file.assert_called_once_with(str(path), self.ws.SCOPES)
+                Path(self.ws.TOKEN_FILE).unlink()
+                path.unlink()
+
+        self.assertIn(b"beside the active CAM gradebook", sign_in().data)
+        self.assertEqual(self.ws.SETTINGS["cloud_dir"], str(self.data))
+        self.assertEqual(settings_file.read_bytes(), settings_before)
+        self.assertFalse((gradebook / "gcg_settings.json").exists())
+        self.assertFalse((gradebook / "token.json").exists())
+
     def test_word_uses_drive_preview_but_never_treats_it_as_a_pdf(self):
         self.assertEqual(self.client.get('/static/pdf_viewer.js').status_code, 200)
         kind = self.ws.classify("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "Ada.docx")
