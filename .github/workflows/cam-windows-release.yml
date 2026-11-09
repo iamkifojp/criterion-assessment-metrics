@@ -1,0 +1,36 @@
+name: Build and test CAM v2026.11.10 on Windows
+on:
+  push:
+    branches: [codex/cam-release-windows-2026-11-10]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Build the Windows ZIP from the release tag
+        shell: pwsh
+        run: |
+          Copy-Item .github/drive-signin-smoke.py "$env:RUNNER_TEMP/drive-signin-smoke.py"
+          git fetch origin tag v2026.11.10
+          git switch --detach v2026.11.10
+          if ((git rev-parse HEAD) -ne "c00b26c8f73fdd684d486bfb7929d598afb61f5f") { throw "Unexpected release commit" }
+          python tools/build_windows_bundle.py --version 2026.11.10 --output-dir "$env:RUNNER_TEMP/cam-release"
+          Get-FileHash "$env:RUNNER_TEMP/cam-release/CAM-portable-v2026.11.10.zip" -Algorithm SHA256
+      - name: Smoke test the extracted ZIP with fictional data and loopback OAuth
+        shell: pwsh
+        run: |
+          python -m pip install playwright==1.64.1
+          python -m playwright install chromium
+          Expand-Archive -LiteralPath "$env:RUNNER_TEMP/cam-release/CAM-portable-v2026.11.10.zip" -DestinationPath "$env:RUNNER_TEMP/cam-extracted"
+          python "$env:RUNNER_TEMP/drive-signin-smoke.py" "$env:GITHUB_WORKSPACE" "$env:RUNNER_TEMP/cam-extracted"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: CAM-Windows-v2026.11.10
+          path: ${{ runner.temp }}/cam-release/CAM-portable-v2026.11.10.zip
+          if-no-files-found: error
