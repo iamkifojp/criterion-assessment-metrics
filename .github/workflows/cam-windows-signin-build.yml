@@ -11,13 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
       - name: Build the Windows ZIP from the candidate source
         shell: pwsh
         run: |
           Copy-Item .github/drive-signin-smoke.py "$env:RUNNER_TEMP/drive-signin-smoke.py"
-          git switch --detach "HEAD^"
+          git switch --detach 60fe0c8ccbb1948484d261305f5a9bbf93bfe82f
           git rev-parse HEAD "HEAD^{tree}"
           python tools/build_windows_bundle.py --version 2026.11.10-drive-signin-test --output-dir "$env:RUNNER_TEMP/cam-release"
           Get-FileHash "$env:RUNNER_TEMP/cam-release/*.zip" -Algorithm SHA256

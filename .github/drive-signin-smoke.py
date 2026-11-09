@@ -139,8 +139,9 @@ with tempfile.TemporaryDirectory(prefix="cam-signin-smoke-", ignore_cleanup_erro
             client_json(workspace / "credentials.json", "workspace-client")
             sign_in("workspace-client")
             print("An existing workspace client took precedence on a later click.", flush=True)
-            page.keyboard.press("Escape")
-            page.get_by_role("button", name="Quit CAM").click()
+            page.get_by_role("button", name="Cancel", exact=True).click()
+            expect(connect).to_have_count(0)
+            page.get_by_role("button", name="Quit CAM", exact=True).press("Enter")
             wait_for(lambda: proc.poll() is not None, "CAM failed to quit")
             assert proc.returncode == 0
             browser.close()
