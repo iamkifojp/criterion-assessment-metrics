@@ -6,6 +6,12 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## Unreleased
+
+- **Connect Google Drive** finds a Desktop OAuth client JSON beside the active
+  CAM gradebook on a fresh installation. Existing credential locations still
+  take precedence, and the sign-in token stays on the device by default.
+
 ## v2026.11.08.1 — CAM2 comment and session close fixes
 
 - Clearing an exam comment in CAM2 and sending again clears its unedited copy

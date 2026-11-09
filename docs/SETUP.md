@@ -251,11 +251,11 @@ If you use Google Drive sync, you supply your own Google OAuth client:
 1. In the [Google Cloud Console](https://console.cloud.google.com/), create an
    OAuth 2.0 **Desktop app** client and download its JSON.
 2. Save it as `credentials.json` or keep its `client_secret*.json` name in
-   either the repo root or `cam_grading_workspace/` (both are git-ignored).
-   Discovery checks the workspace first, then the repo root, then the configured
-   cloud sync folder. On first
-   connect, a browser window authorizes access and a local `token.json` is
-   cached.
+   `cam_grading_workspace/`, the project root (both are git-ignored), or
+   beside your active CAM gradebook. **Connect Google Drive** checks the
+   workspace first, then the project root, the workspace's configured cloud
+   sync folder, and finally the active gradebook folder. Each computer opens
+   Google authorization on its first connection and saves its own local `token.json`.
 3. Tell the workspace which Drive accounts are **yours**, so files you upload
    are never mistaken for a student's work. When you share a class folder from
    your school account to a personal Gmail, Drive reports *you* as the owner of
@@ -276,10 +276,10 @@ If you use Google Drive sync, you supply your own Google OAuth client:
 of the per-machine setup heals from it:
 
 - **Identities** already travel in `gcg_settings.json` (above) — nothing to copy.
-- **Client secret**: you can drop `credentials.json` (or `client_secret_*.json`)
-  into the cloud sync folder instead of each repo root; the workspace probes it
-  there after both local locations. An installed-app secret is unusable without your
-  browser consent, so a private cloud folder is a fine home for it.
+- **Client secret**: you can drop `credentials.json` (or `client_secret*.json`)
+  beside the shared CAM gradebook. CAM finds it on the first click of
+  **Connect Google Drive**, even before the workspace has been configured on
+  that computer. Keep the synced folder private.
 - **Sign-in**: signing in once per machine is the only remaining step. To skip
   even that, place your `token.json` in the cloud folder and turn on **⚙ Settings
   → Seed sign-in from the cloud folder** (off by default). It is a one-way seed —

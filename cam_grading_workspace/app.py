@@ -40,6 +40,7 @@ import random
 import shutil
 import hashlib
 import datetime
+import secrets
 import threading
 import time
 
@@ -69,6 +70,8 @@ STATE_DIR = os.path.join(APP_STATE, "cam_grading_workspace") if APP_STATE else B
 CACHE_DIR = os.path.join(APP_CACHE, "cam_grading_workspace") if APP_CACHE else BASE_DIR
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 TOKEN_FILE = os.path.join(STATE_DIR, "token.json")
+_SIGNIN_HANDOFFS = {}  # short-lived browser tokens -> (expiry, CAM database folder)
+_SIGNIN_LOCK = threading.Lock()
 
 # On-disk cache for PDFs the focused viewer downloads from Drive. Keyed by
 # file id + modifiedTime so a re-upload (new modifiedTime) busts the entry.
@@ -580,27 +583,33 @@ load_settings()
 # -----------------------------------------------------------------------------
 # Google authentication
 # -----------------------------------------------------------------------------
-def find_client_secret():
+class OAuthClientSecretMissing(FileNotFoundError):
+    pass
+
+
+def find_client_secret(db_folder=""):
     """Locate the OAuth client-secret file regardless of its exact name.
 
     Probes the workspace, project root, then the configured cloud dir so a new
     machine that only has the shared OneDrive/Drive folder can authenticate
     without hand-copying credentials.json. An installed-app client secret is
     low-sensitivity — useless without the teacher consenting in a browser — so a
-    private cloud folder is a fine home for it. .gitignore excludes both name
-    shapes from the repo regardless."""
+    private cloud folder is a fine home for it. CAM can supply its active
+    database folder as a final fallback on the first sign-in click."""
     def _probe(folder):
+        folder = os.path.abspath(folder)
         found = [os.path.join(folder, "credentials.json")]
-        found += sorted(glob.glob(os.path.join(folder, "client_secret_*.json")))
-        found += sorted(glob.glob(os.path.join(folder, "client_secret*.json")))
+        pattern = glob.escape(folder)
+        found += sorted(glob.glob(os.path.join(pattern, "client_secret_*.json")))
+        found += sorted(glob.glob(os.path.join(pattern, "client_secret*.json")))
         return found
 
     candidates = _probe(STATE_DIR) + _probe(os.path.dirname(STATE_DIR))
-    cloud = SETTINGS.get("cloud_dir", "").strip()
-    if cloud and os.path.isdir(cloud):
-        candidates += _probe(cloud)
+    for folder in (SETTINGS.get("cloud_dir", "").strip(), db_folder):
+        if folder and os.path.isdir(folder):
+            candidates += _probe(folder)
     for path in candidates:
-        if os.path.exists(path):
+        if os.path.isfile(path):
             return path
     return None
 
@@ -635,7 +644,7 @@ def _maybe_bootstrap_token():
         print("Warning: could not seed token from cloud dir:", e)
 
 
-def get_credentials():
+def get_credentials(db_folder=""):
     """Return valid OAuth credentials, running the local-server flow if needed."""
     _maybe_bootstrap_token()
     creds = None
@@ -652,12 +661,13 @@ def get_credentials():
             except Exception:
                 creds = None
         if not creds or not creds.valid:
-            secret = find_client_secret()
+            secret = find_client_secret(db_folder)
             if not secret:
-                raise FileNotFoundError(
+                raise OAuthClientSecretMissing(
                     "No OAuth client-secret file found. Place your downloaded "
                     "'credentials.json' (or 'client_secret*.json') in the project "
-                    "root or cam_grading_workspace/, or your configured cloud folder."
+                    "root, cam_grading_workspace/, your configured cloud folder, "
+                    "or beside the active CAM gradebook and click Connect Google Drive."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(secret, SCOPES)
             creds = flow.run_local_server(port=0)
@@ -2116,6 +2126,27 @@ def index():
     return Response(HTML_PAGE, mimetype="text/html")
 
 
+@app.post("/api/signin")
+def prepare_signin():
+    """Register a local CAM sign-in without putting filesystem paths in URLs."""
+    if request.remote_addr not in {"127.0.0.1", "::1"} or request.headers.get("Origin"):
+        abort(403)
+    data = request.get_json(silent=True)
+    folder = data.get("db_folder") if isinstance(data, dict) else None
+    if not isinstance(folder, str) or "\0" in folder or not os.path.isabs(folder):
+        abort(400)
+    handoff = secrets.token_urlsafe(24)
+    with _SIGNIN_LOCK:
+        now = time.monotonic()
+        for key, (expiry, _) in list(_SIGNIN_HANDOFFS.items()):
+            if expiry <= now:
+                del _SIGNIN_HANDOFFS[key]
+        if len(_SIGNIN_HANDOFFS) >= 32:
+            del _SIGNIN_HANDOFFS[next(iter(_SIGNIN_HANDOFFS))]
+        _SIGNIN_HANDOFFS[handoff] = (now + 120, folder)
+    return jsonify({"handoff": handoff})
+
+
 @app.route("/signin")
 def signin():
     """One-time Google sign-in bootstrap (opened by CAM's 🔗 Connect button).
@@ -2125,7 +2156,17 @@ def signin():
     and the grading buttons only appear on rows Watch creates. This route
     breaks that loop by running get_credentials() (which writes token.json)
     on demand."""
-    if not find_client_secret():
+    folder = ""
+    if "handoff" in request.args:
+        with _SIGNIN_LOCK:
+            pending = _SIGNIN_HANDOFFS.pop(request.args["handoff"], None)
+        if not pending or pending[0] <= time.monotonic():
+            return Response("This sign-in link expired or was already used. "
+                            "Click Connect Google Drive in CAM again.", status=410)
+        folder = pending[1]
+    try:
+        get_credentials(folder)
+    except OAuthClientSecretMissing:
         return Response(
             "<html><body style='font-family:sans-serif;max-width:40em;"
             "margin:4em auto'>"
@@ -2134,13 +2175,12 @@ def signin():
             "<a href='https://console.cloud.google.com/apis/credentials'>"
             "Google Cloud Console</a>, create an OAuth client of type "
             "“Desktop app”, download its JSON and save it as "
-            "<code>credentials.json</code> (or <code>client_secret_*.json"
-            "</code>) in the project root or <code>cam_grading_workspace/</code> "
-            "(the configured cloud folder is also supported), then click "
+            "<code>credentials.json</code> (or <code>client_secret*.json"
+            "</code>) in <code>cam_grading_workspace/</code>, the project root, "
+            "the configured cloud folder, or beside the active CAM gradebook. Then click "
             "\U0001F517 Connect Google Drive in CAM again.</p>"
             "</body></html>",
             mimetype="text/html")
-    get_credentials()
     return Response(
         "<html><body style='font-family:sans-serif;max-width:40em;"
         "margin:4em auto'>"
