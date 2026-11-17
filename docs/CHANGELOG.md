@@ -6,7 +6,7 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
-## Unreleased — The same assignment name in different classes
+## v2026.11.17 — The same assignment name in different classes
 
 - **Symptom.** Adding or renaming an assignment or exam failed with "already
   exists" when any other class, in any year, already used that name. Two
@@ -28,6 +28,8 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
   format keeps a `.bak-pre-class-scoped-names-*` copy beside the gradebook.
 - **CAM2 is unchanged.** It finds an exam by its session folder, which already
   sits inside the class's own folder.
+- The [release notes](RELEASE_NOTES_v2026.11.17.md) cover installation on
+  Windows and Apple Silicon and the update-every-computer-first rule.
 
 ## v2026.11.10 — First-time Google Drive sign-in
 
