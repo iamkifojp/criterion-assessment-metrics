@@ -50,6 +50,12 @@ preferences are saved to your device only.
 5. **Finalize.** Export the mail-merge pack and snapshot the term so next term's
    comments can build on this one.
 
+**Naming assignments.** A name has to be unique within a class. Different
+classes can use the same name, for example one exam sat by 8A and 8B, and each
+class keeps its own grades, date, archive and On/Off setting for it. The one
+exception is a student who is in both classes: CAM then asks for a different
+name, because that student's two sets of grades could not be told apart.
+
 ---
 
 ## How a grade is worked out

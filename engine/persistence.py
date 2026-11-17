@@ -50,6 +50,10 @@ from .models import (
 
 # The schema version lets future loaders migrate older files gracefully.
 SCHEMA_VERSION = 2
+# Session key holding each class's own assignment settings (archive, date
+# override, On/Off per term). Additive: the flat name-keyed maps are still
+# written beside it for readers that predate it.
+ASSIGNMENT_STATE_KEY = "assignment_state_by_class"
 
 # Default filename, resolved next to the project root by the caller.
 DEFAULT_DB_FILENAME = "acm_database.json"
@@ -643,6 +647,46 @@ def _validate_unmatched_works(value: Any, path: str,
                         _add_issue(issues, f"{row_path}.{field}", "expected-integer")
 
 
+def _validate_iso_date_map(dates: Any, path: str,
+                           issues: List[DatabaseValidationIssue]) -> None:
+    if not isinstance(dates, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    for key, value in dates.items():
+        if not isinstance(key, str):
+            _add_issue(issues, path, "expected-string-key")
+        if not isinstance(value, str):
+            _add_issue(issues, f"{path}.*", "expected-iso-date")
+            continue
+        try:
+            datetime.fromisoformat(value)
+        except ValueError:
+            _add_issue(issues, f"{path}.*", "expected-iso-date")
+
+
+def _validate_assignment_state(value: Any, path: str,
+                               issues: List[DatabaseValidationIssue]) -> None:
+    """``{class: {"archived": [...], "date_override": {...},
+    "active_by_term": {term: {name: bool}}}}`` (every part optional)."""
+    if not isinstance(value, dict):
+        _add_issue(issues, path, "expected-object")
+        return
+    for class_name, state in value.items():
+        if not isinstance(class_name, str):
+            _add_issue(issues, path, "expected-string-key")
+        if not isinstance(state, dict):
+            _add_issue(issues, f"{path}.*", "expected-object")
+            continue
+        if "archived" in state:
+            _validate_string_list(state["archived"], f"{path}.*.archived", issues)
+        if "date_override" in state:
+            _validate_iso_date_map(state["date_override"],
+                                   f"{path}.*.date_override", issues)
+        if "active_by_term" in state:
+            _validate_nested_map(state["active_by_term"],
+                                 f"{path}.*.active_by_term", issues, _expect_bool)
+
+
 def _validate_session(session: Any, path: str,
                       issues: List[DatabaseValidationIssue]) -> None:
     if not isinstance(session, dict):
@@ -714,6 +758,9 @@ def _validate_session(session: Any, path: str,
                         _add_issue(issues, f"{path}.date_override.*", "expected-iso-date")
     if "archived" in session:
         _validate_string_list(session["archived"], f"{path}.archived", issues)
+    if ASSIGNMENT_STATE_KEY in session:
+        _validate_assignment_state(session[ASSIGNMENT_STATE_KEY],
+                                   f"{path}.{ASSIGNMENT_STATE_KEY}", issues)
     if "classes" in session:
         classes = session["classes"]
         if not isinstance(classes, list):
@@ -1145,6 +1192,53 @@ def serialize_gradebook(gradebook: Gradebook) -> Dict[str, Any]:
     return {"students": students, "assignments": assignments}
 
 
+def expand_flat_assignment_state(
+        gradebook: Gradebook, session: Dict[str, Any]) -> Dict[str, Any]:
+    """Per-class assignment settings implied by a session's flat, name-keyed
+    maps (``archived`` / ``date_override`` / ``active_by_term``).
+
+    Databases written before assignment names became class-scoped hold these
+    settings once per name. Each class that has an assignment of that name gets
+    its own copy, which reproduces the old shared behaviour exactly; the copies
+    only diverge once a setting is edited in one class. Entries for a name no
+    class holds are dropped. Returned in the on-disk shape of
+    ``session[ASSIGNMENT_STATE_KEY]``.
+    """
+    names_by_class: Dict[str, set] = {}
+    for entry in session.get("classes") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+            names_by_class.setdefault(entry["name"], set())
+    for assignment in gradebook.assignments:
+        names_by_class.setdefault(
+            getattr(assignment, "class_name", "") or "", set()).add(assignment.name)
+    archived = session.get("archived")
+    archived = set(archived) if isinstance(archived, (list, set, tuple)) else set()
+    dates = session.get("date_override")
+    dates = dates if isinstance(dates, dict) else {}
+    by_term = session.get("active_by_term")
+    by_term = by_term if isinstance(by_term, dict) else {}
+    expanded: Dict[str, Any] = {}
+    for class_name, names in names_by_class.items():
+        expanded[class_name] = {
+            "archived": sorted(n for n in names if n in archived),
+            "date_override": {n: v for n, v in dates.items() if n in names},
+            "active_by_term": {
+                str(term): {n: v for n, v in mapping.items() if n in names}
+                for term, mapping in by_term.items() if isinstance(mapping, dict)},
+        }
+    return expanded
+
+
+def _without_empty(value: Any) -> Any:
+    """Drop empty containers recursively, for shape-insensitive comparison."""
+    if isinstance(value, dict):
+        cleaned = {k: _without_empty(v) for k, v in value.items()}
+        return {k: v for k, v in cleaned.items() if v not in ({}, [])}
+    if isinstance(value, (list, tuple, set)):
+        return sorted(value) if all(isinstance(v, str) for v in value) else list(value)
+    return value
+
+
 def persistent_content_fingerprint(
         gradebook: Gradebook,
         session: Optional[Dict[str, Any]] = None) -> str:
@@ -1159,6 +1253,13 @@ def persistent_content_fingerprint(
     # Additive optional store: loading an old DB must not itself dirty it.
     if normalized_session.get("reporting_classes") == []:
         normalized_session.pop("reporting_classes")
+    # Same rule for the per-class assignment settings: while they still say
+    # only what the flat maps beside them say, they add nothing, so opening a
+    # database written before they existed does not by itself make it dirty.
+    scoped = normalized_session.get(ASSIGNMENT_STATE_KEY)
+    if isinstance(scoped, dict) and _without_empty(scoped) == _without_empty(
+            expand_flat_assignment_state(gradebook, normalized_session)):
+        normalized_session.pop(ASSIGNMENT_STATE_KEY)
     logical = {
         "gradebook": serialize_gradebook(gradebook),
         "session": normalized_session,
@@ -1618,6 +1719,14 @@ def save_database_checked(path: str, gradebook: Gradebook,
         if observed.state == "ok" and observed.schema_version == 1:
             pre_upgrade = _verified_snapshot_copy(
                 _backup_name(path, "pre-concurrency-upgrade"), observed)
+
+        # First save that gives each class its own assignment settings: keep
+        # a verified copy of the file as it was (never pruned).
+        if (observed.state == "ok" and observed.raw_bytes is not None
+                and ASSIGNMENT_STATE_KEY in session
+                and f'"{ASSIGNMENT_STATE_KEY}"'.encode() not in observed.raw_bytes):
+            _verified_snapshot_copy(
+                _backup_name(path, "pre-class-scoped-names"), observed)
 
         _rotate_daily_backup_from_snapshot(path, observed)
         intended_hash = hashlib.sha256(raw).hexdigest()

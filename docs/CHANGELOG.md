@@ -6,6 +6,29 @@ why*, symptom-first, so a future maintainer can trace a regression quickly.
 
 ---
 
+## Unreleased — The same assignment name in different classes
+
+- **Symptom.** Adding or renaming an assignment or exam failed with "already
+  exists" when any other class, in any year, already used that name. Two
+  classes sitting the same exam could not both call it "Drawing".
+- **Cause.** The archive flag, date override and per-term On/Off were stored
+  under the assignment name alone, so the name had to be unique across the
+  whole gradebook. Watch-folder imports skipped that check, and two classes
+  that got the same name that way shared those settings without warning.
+- **Fix.** Names are unique within a class. Each class keeps its own archive,
+  date and On/Off settings (`assignment_state_by_class`, Data Dictionary C.9),
+  and rename, archive, permanent delete, re-sync, analytics, reports and term
+  backups act on one class's assignment only. A shared name is still refused
+  when a student is in both classes, because scores are filed per student
+  under the assignment name.
+- **Gradebook format.** One session key is added; the old ones are still
+  written, so an older CAM opens the file. If an older CAM saves it, classes
+  sharing a name go back to sharing those settings (grades are unaffected), so
+  update every computer before using a shared name. The first save in the new
+  format keeps a `.bak-pre-class-scoped-names-*` copy beside the gradebook.
+- **CAM2 is unchanged.** It finds an exam by its session folder, which already
+  sits inside the class's own folder.
+
 ## v2026.11.10 — First-time Google Drive sign-in
 
 - **Connect Google Drive** finds a Desktop OAuth client JSON beside the active

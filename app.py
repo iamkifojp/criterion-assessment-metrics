@@ -105,6 +105,8 @@ from engine import (
     exam_result_to_dict,
     exam_result_from_dict,
     persistent_content_fingerprint,
+    expand_flat_assignment_state,
+    ASSIGNMENT_STATE_KEY,
 )
 # METHOD_60_40 / METHOD_WEIGHTED_MEDIAN are the two methods the auto default
 # picks between; they live in the aggregation module (not re-exported by the
@@ -764,8 +766,18 @@ def init_state() -> None:
         # active_by_term[current term], so the On checkboxes select which
         # assignments count in the selected term's assessment.
         "active": {},            # assignment name -> bool (current term's map)
+        # The next three (and "archived") are per-CLASS aliases: assignment
+        # names are unique within a class only, so each class keeps its own
+        # copy in "assignment_state" and ensure_class_context() points these
+        # flat keys at the active class's (see _bind_assignment_state).
         "active_by_term": {},    # term -> {assignment name -> bool}
         "date_override": {},     # assignment name -> date
+        # class -> {"archived": set, "date_override": {name -> date},
+        #           "active_by_term": {term -> {name -> bool}}}. None until the
+        # first bind builds it from the flat maps (a database saved before
+        # names were class-scoped).
+        "assignment_state": None,
+        "assignment_state_bound": None,  # the class the flat aliases point at
         "late_flags": {},        # "sid||assignment||crit" -> bool
         "late_flags_cleanup_v1": False,  # one-shot: old-dialog redundant-override purge done
         "excused_flags": {},     # "sid||assignment" -> bool (drop from math/AI)
@@ -972,9 +984,16 @@ def _database_session_key(path: str, token: DatabaseWriteToken) -> str:
 def build_session_payload() -> dict:
     """Collect the JSON-safe teacher-side state that travels with the gradebook."""
     ss = st.session_state
-    return {
+    scoped = _assignment_state_payload()
+    if scoped is None:      # not class-scoped yet: the flat maps are the data
+        flat_archived = sorted(ss["archived"])
+        flat_dates = {k: v.isoformat() for k, v in ss["date_override"].items()}
+        flat_active = ss["active_by_term"]
+    else:
+        flat_archived, flat_dates, flat_active = _merged_assignment_state(scoped)
+    payload = {
         "active": ss["active"],                    # legacy alias (current term)
-        "active_by_term": ss["active_by_term"],
+        "active_by_term": flat_active,
         "late_flags": ss["late_flags"],
         "late_flags_cleanup_v1": ss["late_flags_cleanup_v1"],
         "excused_flags": ss["excused_flags"],
@@ -994,8 +1013,10 @@ def build_session_payload() -> dict:
         "active_term": ss["active_term"],
         "rosters": ss["rosters"],
         "archived_students": ss["archived_students"],
-        "archived": sorted(ss["archived"]),
-        "date_override": {k: v.isoformat() for k, v in ss["date_override"].items()},
+        # Flat, name-keyed copies of the per-class assignment settings below,
+        # still written so a CAM that predates them can open this file.
+        "archived": flat_archived,
+        "date_override": flat_dates,
         # Cloud-sync dedup registry: which watch-folder files we've ingested.
         "ingested_files": ss["ingested_files"],
         # Roster-aware identity routing (Phase 3): the durable alias map and the
@@ -1011,6 +1032,172 @@ def build_session_payload() -> dict:
         # School-specific report-card figure toggles + Effort range.
         "report_cfg": dict(ss["report_cfg"]),
     }
+    if scoped is not None:
+        payload[ASSIGNMENT_STATE_KEY] = scoped
+    return payload
+
+
+def _new_assignment_state() -> dict:
+    """One class's empty assignment settings."""
+    return {"archived": set(), "date_override": {}, "active_by_term": {}}
+
+
+def _assignment_state_payload():
+    """The per-class assignment settings in their on-disk shape, or None when
+    this session has not been made class-scoped (see _bind_assignment_state).
+
+    The flat keys are what the app edits, so the bound class's entry is
+    re-pointed at them first: a flat key that was replaced outright (a wipe, a
+    restore) is then saved as it now stands."""
+    ss = st.session_state
+    store = ss.get("assignment_state")
+    if not isinstance(store, dict):
+        return None
+    bound = ss.get("assignment_state_bound")
+    if bound in store:
+        store[bound].update(archived=ss["archived"],
+                            date_override=ss["date_override"],
+                            active_by_term=ss["active_by_term"])
+    return {
+        str(cls): {
+            "archived": sorted(state["archived"]),
+            "date_override": {n: d.isoformat()
+                              for n, d in state["date_override"].items()},
+            "active_by_term": {t: dict(m)
+                               for t, m in state["active_by_term"].items()},
+        }
+        for cls, state in store.items()
+    }
+
+
+def _merged_assignment_state(scoped: dict) -> tuple:
+    """``(archived, date_override, active_by_term)`` flattened across classes,
+    for the name-keyed copies an older CAM reads. Where two classes hold the
+    same name with different settings, the bound class's wins, then class
+    order."""
+    ss = st.session_state
+    order = [c for c in [ss.get("assignment_state_bound")] + class_names()
+             + list(scoped) if c in scoped]
+    order = list(dict.fromkeys(order))
+    # The first class (in that order) holding a name decides its archive flag.
+    holder: dict = {}
+    for cls in order:
+        for a in gb().assignments:
+            if getattr(a, "class_name", "") == cls:
+                holder.setdefault(a.name, cls)
+    archived, dates, active = set(), {}, {}
+    for cls in order:
+        state = scoped[cls]
+        archived.update(n for n in state["archived"]
+                        if holder.get(n, cls) == cls)
+        for name, iso in state["date_override"].items():
+            dates.setdefault(name, iso)
+        for term, mapping in state["active_by_term"].items():
+            merged = active.setdefault(term, {})
+            for name, on in mapping.items():
+                merged.setdefault(name, on)
+    return sorted(archived), dates, active
+
+
+def _assignment_state_from_payload(raw: dict) -> dict:
+    """Parse ``session[ASSIGNMENT_STATE_KEY]`` defensively: a malformed entry
+    is skipped, not fatal."""
+    store: dict = {}
+    for cls, state in raw.items():
+        if not isinstance(state, dict):
+            continue
+        entry = _new_assignment_state()
+        if isinstance(state.get("archived"), list):
+            entry["archived"] = {str(n) for n in state["archived"]}
+        for name, iso in (state.get("date_override") or {}).items():
+            try:
+                entry["date_override"][str(name)] = date.fromisoformat(iso)
+            except (TypeError, ValueError):
+                pass
+        abt = state.get("active_by_term")
+        if isinstance(abt, dict):
+            entry["active_by_term"] = {
+                str(t): {str(n): bool(v) for n, v in m.items()}
+                for t, m in abt.items() if isinstance(m, dict)}
+        store[str(cls)] = entry
+    return store
+
+
+def _bind_assignment_state() -> None:
+    """Point the flat ``archived`` / ``date_override`` / ``active_by_term`` keys
+    (and the current term's ``active``) at the active class's own settings, so
+    every existing read and write of those keys is scoped to the class on
+    screen. Two classes can then hold an assignment of the same name without
+    sharing its archive, date or On/Off state.
+
+    A session not yet class-scoped (a database saved before this, or a fresh
+    one) is converted here first: every class that has an assignment of a name
+    gets its own copy of that name's settings."""
+    ss = st.session_state
+    store = ss.get("assignment_state")
+    if not isinstance(store, dict):
+        expanded = expand_flat_assignment_state(gb(), {
+            "classes": ss["classes"],
+            "archived": ss.get("archived", set()),
+            "date_override": ss.get("date_override", {}),
+            "active_by_term": ss.get("active_by_term", {})})
+        store = {cls: {"archived": set(state["archived"]),
+                       "date_override": dict(state["date_override"]),
+                       "active_by_term": {t: dict(m) for t, m
+                                          in state["active_by_term"].items()}}
+                 for cls, state in expanded.items()}
+        ss["assignment_state"] = store
+    cls = ss["active_class"]
+    state = store.setdefault(cls, _new_assignment_state())
+    ss["archived"] = state["archived"]
+    ss["date_override"] = state["date_override"]
+    ss["active_by_term"] = state["active_by_term"]
+    ss["assignment_state_bound"] = cls
+    ss["active"] = ss["active_by_term"].setdefault(current_term(), {})
+
+
+def class_assignment_state(cls: str) -> dict:
+    """``{"archived", "date_override", "active_by_term"}`` of one class, for
+    code that works on a class other than the one on screen (Sync, class
+    delete). The bound class's are the flat keys themselves."""
+    ss = st.session_state
+    if _assignment_state_is_flat(cls):
+        return {"archived": ss["archived"],
+                "date_override": ss["date_override"],
+                "active_by_term": ss["active_by_term"]}
+    return ss["assignment_state"].setdefault(cls, _new_assignment_state())
+
+
+def _assignment_state_is_flat(cls: str) -> bool:
+    """True when ``cls``'s assignment settings ARE the flat session keys: it is
+    the bound class, or the session is not class-scoped."""
+    ss = st.session_state
+    return (not isinstance(ss.get("assignment_state"), dict)
+            or cls == ss.get("assignment_state_bound"))
+
+
+def class_active_map(cls: str, term: str = "") -> dict:
+    """One class's On-map for a term (default: current)."""
+    t = term if term in TERMS else current_term()
+    if _assignment_state_is_flat(cls):
+        if t == current_term():
+            return st.session_state["active"]
+        return st.session_state["active_by_term"].setdefault(t, {})
+    return class_assignment_state(cls)["active_by_term"].setdefault(t, {})
+
+
+def class_active_by_term(cls: str) -> dict:
+    """One class's ``{term -> {assignment name -> bool}}`` On-maps."""
+    if _assignment_state_is_flat(cls):
+        return st.session_state["active_by_term"]
+    return class_assignment_state(cls)["active_by_term"]
+
+
+def class_archived(cls: str) -> set:
+    """One class's archived assignment names."""
+    if _assignment_state_is_flat(cls):
+        return st.session_state["archived"]
+    return class_assignment_state(cls)["archived"]
 
 
 def restore_session(session: dict) -> None:
@@ -1146,6 +1333,13 @@ def restore_session(session: dict) -> None:
         ss["calc_method_by_term"] = {
             str(t): {str(s): m for s, m in mp.items() if m in CALCULATION_METHODS}
             for t, mp in cmt.items() if isinstance(mp, dict)}
+    # Per-class assignment settings. Absent in a database saved before names
+    # were class-scoped: leave them unbuilt so _bind_assignment_state() derives
+    # them from the flat maps restored above.
+    scoped = session.get(ASSIGNMENT_STATE_KEY)
+    ss["assignment_state"] = (_assignment_state_from_payload(scoped)
+                              if isinstance(scoped, dict) else None)
+    ss["assignment_state_bound"] = None
 
 
 def persist(show: bool = False, allow_shrink: bool = False) -> None:
@@ -1946,10 +2140,19 @@ def build_term_backup(term: str) -> dict:
     exam_results: dict = {}
     for cls, names in names_by_class.items():
         cls_sids = set(_class_sids(cls))
+        # Where another class has an assignment of the same name, that class's
+        # students' evidence is theirs, not this class's.
+        theirs = {n: _other_class_sids(n, cls) for n in names}
+
+        def owned(name, sid, names=names, theirs=theirs):
+            return name in names and sid not in theirs[name]
+
         for student in gbk.students.values():
-            has_score = any(sc.assignment in names
+            sid = student.student_id
+            has_score = any(owned(sc.assignment, sid)
                             for bucket in student.scores.values() for sc in bucket)
-            has_exam = any(k in names for k in getattr(student, "exam_results", {}))
+            has_exam = any(owned(k, sid)
+                           for k in getattr(student, "exam_results", {}))
             if has_score or has_exam:
                 cls_sids.add(student.student_id)
         for sid in cls_sids:
@@ -1957,16 +2160,29 @@ def build_term_backup(term: str) -> dict:
             if student is None:
                 continue
             sc_list = [score_to_dict(sc) for bucket in student.scores.values()
-                       for sc in bucket if sc.assignment in names]
+                       for sc in bucket if owned(sc.assignment, sid)]
             if sc_list:
                 scores.setdefault(cls, {})[sid] = sc_list
             ex_list = [exam_result_to_dict(r) for k, r
-                       in getattr(student, "exam_results", {}).items() if k in names]
+                       in getattr(student, "exam_results", {}).items()
+                       if owned(k, sid)]
             if ex_list:
                 exam_results.setdefault(cls, {})[sid] = ex_list
 
-    active = {n: bool(v) for n, v in (ss["active_by_term"].get(term, {}) or {}).items()
-              if n in all_term_names}
+    # On/Off for the term, per class (each class keeps its own map, so two
+    # classes can hold an assignment of the same name). ``active`` is the same
+    # flattened across classes, kept for backups read by an older CAM.
+    active_by_class: dict = {}
+    for cls, names in names_by_class.items():
+        mapping = class_active_by_term(cls).get(term, {}) or {}
+        slice_ = {n: bool(v) for n, v in mapping.items() if n in names}
+        if slice_:
+            active_by_class[cls] = slice_
+    active: dict = {}
+    for cls in sorted(active_by_class,
+                      key=lambda c: c != ss.get("assignment_state_bound")):
+        for n, v in active_by_class[cls].items():
+            active.setdefault(n, v)
     calc_method = {sid: m for sid, m
                    in (ss["calc_method_by_term"].get(term, {}) or {}).items()
                    if m in CALCULATION_METHODS}
@@ -2005,6 +2221,7 @@ def build_term_backup(term: str) -> dict:
             "comments": comments,
             "effort": effort,
             "active": active,
+            "active_by_class": active_by_class,
             "calc_method": calc_method,
             "late_flags": late_flags,
             "excused": excused,
@@ -2267,8 +2484,27 @@ def restore_term_backup(payload: dict) -> str:
     ss["effort_by_term"][term] = {str(s): int(v) for s, v
                                   in _merge_class_maps(p.get("effort", {})).items()
                                   if isinstance(v, (int, float))}
-    ss["active_by_term"][term] = {str(n): bool(v)
-                                  for n, v in (p.get("active", {}) or {}).items()}
+    # On/Off: each class's own map for the term. A backup written before the
+    # maps were per class holds one flat map; every class then takes the
+    # entries for the assignments it holds in this term.
+    flat_active = {str(n): bool(v) for n, v in (p.get("active", {}) or {}).items()}
+    by_class_active = p.get("active_by_class")
+    if not isinstance(ss.get("assignment_state"), dict):
+        ss["active_by_term"][term] = flat_active     # session not class-scoped
+    else:
+        restored_names: dict = {}
+        for a in backup_asgs:
+            restored_names.setdefault(
+                getattr(a, "class_name", ""), set()).add(a.name)
+        for cls in (set(restored_names) | set(live_names_by_class)
+                    | set(ss["assignment_state"]) | {ss.get("active_class", "")}):
+            if isinstance(by_class_active, dict):
+                mapping = {str(n): bool(v) for n, v
+                           in (by_class_active.get(cls) or {}).items()}
+            else:
+                mapping = {n: v for n, v in flat_active.items()
+                           if n in restored_names.get(cls, set())}
+            class_active_by_term(cls)[term] = mapping
     ss["calc_method_by_term"][term] = {str(s): m for s, m
                                        in (p.get("calc_method", {}) or {}).items()
                                        if m in CALCULATION_METHODS}
@@ -2469,6 +2705,8 @@ def ensure_class_context() -> None:
     # Alias the active class's roster + unit plan onto the flat keys.
     ss["roster"] = ss["rosters"].setdefault(ss["active_class"], [])
     ss["unit_plan"] = ss["unit_plans"].get(ss["active_class"])
+    # ... and its assignment settings (archive, date override, On/Off).
+    _bind_assignment_state()
 
 
 def create_class(name: str, grade: str, myp_year: str, subject: str = "",
@@ -2537,6 +2775,11 @@ def rename_class(old: str, new: str) -> bool:
     for store in ("rosters", "archived_students", "unit_plans", "exam_sessions"):
         if old in ss[store]:
             ss[store][new] = ss[store].pop(old)
+    scoped = ss.get("assignment_state")
+    if isinstance(scoped, dict) and old in scoped:
+        scoped[new] = scoped.pop(old)
+        if ss.get("assignment_state_bound") == old:
+            ss["assignment_state_bound"] = new
     for definition in ss.get("reporting_classes", []):
         for member in definition["members"]:
             if member["source_class"] == old:
@@ -2675,7 +2918,7 @@ def _watch_class_master(cls_name: str, ref: str) -> tuple:
         if adopt is not None:
             adopt.folder_ref = sub_ref
             known_refs.add(sub_ref)
-            term_active_map(current_term()).setdefault(sub_name, True)
+            class_active_map(cls_name).setdefault(sub_name, True)
             adopted += 1
             continue
         display = sub_name
@@ -2688,7 +2931,7 @@ def _watch_class_master(cls_name: str, ref: str) -> tuple:
             note="watched from class master directory",
             class_name=cls_name, term=current_term(), folder_ref=sub_ref))
         existing_names.add(display)
-        term_active_map(current_term()).setdefault(display, True)
+        class_active_map(cls_name).setdefault(display, True)
         created += 1
     if created or adopted:
         persist()
@@ -3256,7 +3499,8 @@ def term_active_map(term: str = "") -> dict:
 
 
 def _term_tag(name: str) -> str:
-    """The ingest term tag of an assignment (blank when unknown/legacy)."""
+    """The ingest term tag of an assignment (blank when unknown/legacy). The
+    active class's own assignment of that name wins over another class's."""
     cls = st.session_state.get("active_class", "")
     fallback = ""
     for a in gb().assignments:
@@ -3342,8 +3586,47 @@ def all_scores():
                 yield student, score
 
 
-def scores_for_assignment(name: str):
-    return [(s, sc) for s, sc in all_scores() if sc.assignment == name]
+def _other_class_sids(name: str, class_name: str) -> set:
+    """Students who belong to ANOTHER class that also has an assignment called
+    ``name`` (and not to ``class_name``).
+
+    A score records its assignment's name, not its class, so when two classes
+    share a name this is what tells their grades apart: a student's "Drawing"
+    score belongs to the class the student is in. Empty when no other class
+    uses the name, so an unshared name behaves exactly as before."""
+    others = {getattr(a, "class_name", "") for a in gb().assignments
+              if a.name == name and getattr(a, "class_name", "") != class_name}
+    if not others:
+        return set()
+    sids: set = set()
+    for other in others:
+        sids |= _class_sids(other)
+    return sids - _class_sids(class_name)
+
+
+def _shared_name_clash(name: str, class_name: str) -> str:
+    """The other class that already has an assignment called ``name`` AND shares
+    a student with ``class_name``, or "" when the name is free to use here.
+
+    Two classes may use the same name, but not when a student sits in both:
+    that student's two sets of grades could not be told apart."""
+    mine = _class_sids(class_name)
+    for a in gb().assignments:
+        other = getattr(a, "class_name", "")
+        if a.name == name and other != class_name and mine & _class_sids(other):
+            return other
+    return ""
+
+
+def scores_for_assignment(name: str, class_name: Optional[str] = None):
+    """``[(Student, CriterionScore)]`` for one class's assignment (default: the
+    active class), leaving out another class's students when it has an
+    assignment of the same name."""
+    cls = (st.session_state.get("active_class", "") if class_name is None
+           else class_name)
+    skip = _other_class_sids(name, cls)
+    return [(s, sc) for s, sc in all_scores()
+            if sc.assignment == name and s.student_id not in skip]
 
 
 def late_key(sid: str, assignment: str, crit: str) -> str:
@@ -3586,7 +3869,13 @@ def student_term_grades(student):
 def sync_active_into_scores() -> None:
     """Mirror the CURRENT term's per-assignment On checkboxes onto
     include_in_report, so the math/trend/prompt all follow the selected term."""
-    on = {a.name: assignment_on(a.name) and not a.is_draft for a in gb().assignments}
+    # Decided in the active class's context. Where another class has an
+    # assignment of the same name, the active class's own record wins.
+    cls = st.session_state.get("active_class", "")
+    on = {}
+    for a in sorted(gb().assignments,
+                    key=lambda a: getattr(a, "class_name", "") == cls):
+        on[a.name] = assignment_on(a.name) and not a.is_draft
     for _, score in all_scores():
         score.include_in_report = on.get(score.assignment, True)
 
@@ -3645,8 +3934,10 @@ def assignment_table():
         if is_exam:
             # A paper not finished in CAM2 isn't a number yet: leave it out
             # of the class average.
+            other_sids = _other_class_sids(asg.name, active_class)
             for s in gb():
-                if asg.name not in getattr(s, "exam_results", {}):
+                if (asg.name not in getattr(s, "exam_results", {})
+                        or s.student_id in other_sids):
                     continue
                 r = s.exam_results[asg.name]
                 if r.mode == "rubric":
@@ -3956,7 +4247,7 @@ def _sync_reconcile_late(path: str, fname: str, class_name: str) -> int:
     name = _rebind_import_name(
         clean_assignment_name(os.path.splitext(fname)[0]), class_name)
     changed = 0
-    for student, sc in scores_for_assignment(name):
+    for student, sc in scores_for_assignment(name, class_name):
         sid = str(student.student_id)
         if sid not in late_by_sid:
             continue
@@ -4186,7 +4477,7 @@ def _sync_one_csv(path: str, fname: str, class_name: str,
         tripwire_name = _rebind_import_name(
             clean_assignment_name(os.path.splitext(fname)[0]), class_name)
         late_before = sum(
-            1 for _, sc in scores_for_assignment(tripwire_name)
+            1 for _, sc in scores_for_assignment(tripwire_name, class_name)
             if getattr(sc, "late", False))
 
     n = _ingest_cloud_file(path, fname, class_name, replace_prior=is_update,
@@ -4211,7 +4502,7 @@ def _sync_one_csv(path: str, fname: str, class_name: str,
     if is_update:
         summary["updated"] += 1
         late_after = sum(
-            1 for _, sc in scores_for_assignment(tripwire_name)
+            1 for _, sc in scores_for_assignment(tripwire_name, class_name)
             if getattr(sc, "late", False))
         if late_before > 0 and late_after < late_before:
             summary["messages"].append(
@@ -4295,7 +4586,7 @@ def _ingest_cam2_session(class_name: str, exam: str, session, summary: dict) -> 
             name=exam, criteria=[], ingested_at=datetime.now()))
         asg.class_name = class_name
         asg.term = current_term()
-        st.session_state["active"].setdefault(exam, True)
+        class_active_map(class_name).setdefault(exam, True)
     asg.is_exam = True
     asg.source_file = session.folder
     asg.max_total = session.max_total
@@ -4991,17 +5282,18 @@ def _purge_assignment_in_class(name: str, class_name: str) -> None:
         a for a in gbk.assignments
         if not (a.name == name and getattr(a, "class_name", "") == class_name)
     ]
-    # If this assignment name still exists under another class, leave every
-    # student's scores alone; otherwise purge the now-orphaned scores.
-    still_used = any(a.name == name for a in gbk.assignments)
-    if not still_used:
-        for student in gbk:
-            for crit, bucket in list(student.scores.items()):
-                student.scores[crit] = [
-                    sc for sc in bucket if sc.assignment != name
-                ]
-            # Raw exam results ride along with their assignment.
-            getattr(student, "exam_results", {}).pop(name, None)
+    # Purge the scores it produced. Where another class also has an assignment
+    # of this name, that class's students keep theirs.
+    keep = _other_class_sids(name, class_name)
+    for student in gbk:
+        if student.student_id in keep:
+            continue
+        for crit, bucket in list(student.scores.items()):
+            student.scores[crit] = [
+                sc for sc in bucket if sc.assignment != name
+            ]
+        # Raw exam results ride along with their assignment.
+        getattr(student, "exam_results", {}).pop(name, None)
 
 
 def _ingest_cloud_file(path: str, fname: str, class_name: str,
@@ -5107,8 +5399,8 @@ def _ingest_cloud_file(path: str, fname: str, class_name: str,
         gb().assignments[-1].term = current_term()
         if prior_ref and not getattr(gb().assignments[-1], "folder_ref", ""):
             gb().assignments[-1].folder_ref = prior_ref
-    st.session_state["active"].setdefault(assignment, True)
-    st.session_state["archived"].discard(assignment)
+    class_active_map(class_name).setdefault(assignment, True)
+    class_archived(class_name).discard(assignment)
     return len(created)
 
 
@@ -5154,25 +5446,49 @@ def assign_work(class_name: str, assignment: str, csv_key: str,
     return True
 
 
+def assignment_name_problem(name: str, class_name: str) -> str:
+    """Why ``name`` can't be used for a new or renamed assignment in
+    ``class_name``, or "" when it can.
+
+    A name must be unique within its class. Another class may use the same
+    name (one exam sat by two classes), unless a student is in both classes."""
+    if any(a.name == name and getattr(a, "class_name", "") == class_name
+           for a in gb().assignments):
+        return f"'{name}' already exists in this class."
+    other = _shared_name_clash(name, class_name)
+    if other:
+        return (f"'{name}' is already used in {other}, and at least one student "
+                f"is in both classes, so their grades could not be told apart. "
+                f"Use a different name here.")
+    return ""
+
+
 def rename_assignment(old: str, new: str) -> bool:
     """Rename an assignment everywhere it is referenced (record + scores + state)."""
     new = new.strip()
     if not new or new == old:
         return False
-    if new in {a.name for a in gb().assignments}:
-        st.session_state["save_status"] = ("error", f"'{new}' already exists.")
+    cls = st.session_state.get("active_class", "")
+    problem = assignment_name_problem(new, cls)
+    if problem:
+        st.session_state["save_status"] = ("error", problem)
         return False
+    # Only the active class's assignment: another class holding an assignment
+    # of the same name keeps its record, its students' scores and its settings.
+    other_sids = _other_class_sids(old, cls)
     for a in gb().assignments:
-        if a.name == old:
+        if a.name == old and getattr(a, "class_name", "") == cls:
             a.name = new
-    for _, sc in all_scores():
-        if sc.assignment == old:
+    for student, sc in all_scores():
+        if sc.assignment == old and student.student_id not in other_sids:
             sc.assignment = new
             if sc.source.startswith("csv:"):
                 sc.source = f"csv:{new}"
             if sc.source == f"exam:{old}":
                 sc.source = f"exam:{new}"
     for student in gb():
+        if student.student_id in other_sids:
+            continue
         results = getattr(student, "exam_results", {})
         if old in results:
             r = results.pop(old)
@@ -5190,25 +5506,26 @@ def rename_assignment(old: str, new: str) -> bool:
     lf = st.session_state["late_flags"]
     for k in list(lf.keys()):
         parts = k.split("||")
-        if len(parts) == 3 and parts[1] == old:
+        if len(parts) == 3 and parts[1] == old and parts[0] not in other_sids:
             lf["||".join([parts[0], new, parts[2]])] = lf.pop(k)
     ef = st.session_state["excused_flags"]
     for k in list(ef.keys()):
         parts = k.split("||")
-        if len(parts) == 2 and parts[1] == old:
+        if len(parts) == 2 and parts[1] == old and parts[0] not in other_sids:
             ef["||".join([parts[0], new])] = ef.pop(k)
     if st.session_state["sel_assignment"] == old:
         st.session_state["sel_assignment"] = new
     # A CAM2 exam keeps its session folder; its record, 🧩 pool and Sync
     # registry row follow the new name.
-    for cls, metas in st.session_state["exam_sessions"].items():
-        if old in metas:
-            metas[new] = metas.pop(old)
-            pools = st.session_state["unmatched_works"].get(cls, {})
-            if old in pools:
-                pools[new] = pools.pop(old)
+    metas = st.session_state["exam_sessions"].get(cls, {})
+    if old in metas:
+        metas[new] = metas.pop(old)
+        pools = st.session_state["unmatched_works"].get(cls, {})
+        if old in pools:
+            pools[new] = pools.pop(old)
     for rec in st.session_state["ingested_files"].values():
-        if rec.get("kind") == "cam2" and rec.get("assignment") == old:
+        if (rec.get("kind") == "cam2" and rec.get("assignment") == old
+                and rec.get("class") == cls):
             rec["assignment"] = new
     persist()
     return True
@@ -5256,16 +5573,27 @@ def delete_assignment_permanent(name: str) -> None:
 
     For an **exam** this also moves its CAM2 session folder aside
     (:func:`_retire_cam2_sessions`)."""
-    # Remember which classes held this name before the records go, so the
-    # cloud-sync registry rows below can be scoped to them.
-    classes = {getattr(a, "class_name", "") for a in gb().assignments
-               if a.name == name}
+    # Only the active class's assignment: another class holding an assignment
+    # of the same name keeps its record, its students' scores and its settings.
+    cls = st.session_state.get("active_class", "")
+    mine = [a for a in gb().assignments
+            if a.name == name and getattr(a, "class_name", "") == cls]
+    if not mine:
+        # No record under the active class (old data filed under a blank or
+        # since-removed class): fall back to every record of that name.
+        mine = [a for a in gb().assignments if a.name == name]
+    # Which classes those records sit under, so the cloud-sync registry rows
+    # below can be scoped to them.
+    classes = {getattr(a, "class_name", "") for a in mine}
     # Whether this assignment is an exam (checked before the records are dropped)
     # decides if its CAM2 session is retired below.
-    is_exam = any(getattr(a, "is_exam", False)
-                  for a in gb().assignments if a.name == name)
-    gb().assignments = [a for a in gb().assignments if a.name != name]
+    is_exam = any(getattr(a, "is_exam", False) for a in mine)
+    other_sids = (_other_class_sids(name, cls) if classes == {cls} else set())
+    gb().assignments = [a for a in gb().assignments
+                        if not any(a is m for m in mine)]
     for student in gb():
+        if student.student_id in other_sids:
+            continue
         for crit, bucket in list(student.scores.items()):
             student.scores[crit] = [sc for sc in bucket if sc.assignment != name]
         getattr(student, "exam_results", {}).pop(name, None)
@@ -5276,12 +5604,12 @@ def delete_assignment_permanent(name: str) -> None:
     lf = st.session_state["late_flags"]
     for k in list(lf.keys()):
         parts = k.split("||")
-        if len(parts) == 3 and parts[1] == name:
+        if len(parts) == 3 and parts[1] == name and parts[0] not in other_sids:
             lf.pop(k)
     ef = st.session_state["excused_flags"]
     for k in list(ef.keys()):
         parts = k.split("||")
-        if len(parts) == 2 and parts[1] == name:
+        if len(parts) == 2 and parts[1] == name and parts[0] not in other_sids:
             ef.pop(k)
     if st.session_state["sel_assignment"] == name:
         st.session_state["sel_assignment"] = None
@@ -5340,21 +5668,31 @@ def delete_class(name: str) -> bool:
     gb().assignments = [a for a in gb().assignments
                         if getattr(a, "class_name", "") != name]
 
-    # Forget per-assignment UI state for the removed units.
+    # Forget this class's per-assignment settings for the removed units (its
+    # own archive / date / On-Off maps; another class's are separate).
+    settings = class_assignment_state(name)
     for nm in names:
-        for m in ss["active_by_term"].values():
+        for m in settings["active_by_term"].values():
             m.pop(nm, None)
-        ss["date_override"].pop(nm, None)
-        ss["archived"].discard(nm)
+        settings["date_override"].pop(nm, None)
+        settings["archived"].discard(nm)
+    scoped = ss.get("assignment_state")
+    if isinstance(scoped, dict):
+        scoped.pop(name, None)
+        if ss.get("assignment_state_bound") == name:
+            ss["assignment_state_bound"] = None
+    # Late / excused flags, scoped to its roster like the scores above.
     lf = ss["late_flags"]
     for k in list(lf.keys()):
         parts = k.split("||")
-        if len(parts) == 3 and parts[1] in names:
+        if (len(parts) == 3 and parts[1] in names
+                and (not roster_keys or parts[0] in roster_keys)):
             lf.pop(k)
     ef = ss["excused_flags"]
     for k in list(ef.keys()):
         parts = k.split("||")
-        if len(parts) == 2 and parts[1] in names:
+        if (len(parts) == 2 and parts[1] in names
+                and (not roster_keys or parts[0] in roster_keys)):
             ef.pop(k)
 
     # Forget cloud-sync registry rows for this class so a future re-sync of the
@@ -5403,6 +5741,8 @@ def wipe_database_full() -> None:
     ss["effort_by_term"] = {}
     ensure_term_context()   # re-point the active/llm_response aliases
     ss["archived"] = set()
+    ss["assignment_state"] = {}      # every class's assignment settings
+    ss["assignment_state_bound"] = None
     ss["ingested_sigs"] = set()
     ss["ingested_files"] = {}  # forget the cloud-sync registry -> full re-sync
     ss["work_aliases"] = {}    # Phase 3: durable alias map + unmatched pools
@@ -7323,8 +7663,10 @@ def add_assignment_dialog() -> None:
         if not name:
             st.error("Give the assignment/exam a name.")
             return
-        if name in {a.name for a in gb().assignments}:
-            st.error(f"'{name}' already exists.")
+        problem = assignment_name_problem(
+            name, st.session_state["active_class"])
+        if problem:
+            st.error(problem)
             return
         is_exam = kind == "Exam"
         is_draft = bool(draft) and not is_exam
@@ -7595,8 +7937,10 @@ def _class_exams():
 
 def _exam_results_for(name: str):
     """[(Student, ExamResult)] for one exam, roster-sorted."""
+    skip = _other_class_sids(name, st.session_state.get("active_class", ""))
     pairs = [(s, s.exam_results[name]) for s in gb()
-             if name in getattr(s, "exam_results", {})]
+             if name in getattr(s, "exam_results", {})
+             and s.student_id not in skip]
     return sorted(pairs, key=lambda p: student_label(p[0]).lower())
 
 
@@ -11103,6 +11447,10 @@ def _render_top_bar() -> None:
         st.session_state["active_class"] = sel
         st.session_state["_class_sel_synced"] = sel
         st.session_state["focus_sid"] = None
+        # Re-point the per-class aliases at the newly selected class now, so
+        # nothing later in this run reads the previous class's settings.
+        ensure_class_context()
+        ensure_term_context()
         persist()
         st.rerun()
     # Active term: newly-ingested work is tagged to it; earlier terms become

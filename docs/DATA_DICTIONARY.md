@@ -849,6 +849,53 @@ ownership indexes or class mirrors.
 An older CAM ignores this key and drops it on its next save; the next Sync
 writes it again (apart from `criteria`, which falls back to the name default).
 
+### C.9 `assignment_state_by_class` (persisted) — per-class assignment settings
+
+An assignment name is unique **within a class**, not across the database: 8A
+and 8B can both hold an exam called "Drawing". Three settings used to be stored
+once per name (`archived`, `date_override`, `active_by_term`), which made two
+classes share them. Each class now keeps its own:
+
+```jsonc
+"assignment_state_by_class": {
+  "8A": {
+    "archived": ["Drawing"],                       // soft-deleted in 8A only
+    "date_override": {"Still Life": "2026-05-09"}, // ISO dates
+    "active_by_term": {"Term 1": {"Drawing": false}}
+  },
+  "8B": {"archived": [], "date_override": {}, "active_by_term": {}}
+}
+```
+
+- **In memory** the app keeps this as `assignment_state` and points the flat
+  session keys `archived` / `date_override` / `active_by_term` (and `active`)
+  at the active class's entry (`_bind_assignment_state`, called from
+  `ensure_class_context`). Code that works on another class (Sync, Watch,
+  class delete, term backup) goes through `class_active_map` /
+  `class_archived` / `class_assignment_state`.
+- **The flat keys are still written**, flattened across classes, so an older
+  CAM can open the file. Where two classes disagree about a shared name the
+  bound class's value is written, then class order.
+- **Loading a database without the key** copies each name's flat setting to
+  every class holding that name (`expand_flat_assignment_state`), which is the
+  old behaviour. While the key says no more than the flat maps beside it, it is
+  left out of the content fingerprint, so opening an old database does not make
+  it dirty. The first save that adds the key keeps a verified
+  `acm_database.json.bak-pre-class-scoped-names-<stamp>` beside the file.
+- **Scores carry the assignment name, not the class.** When two classes share a
+  name, a student's score belongs to the class whose roster (live or archived)
+  holds the student (`_other_class_sids`). A student in both classes would be
+  ambiguous, so the Add and Rename dialogs refuse a shared name in that case
+  (`assignment_name_problem`).
+- Renaming a class moves its entry; deleting a class drops it. A term backup
+  stores the term's On/Off per class as `payload.active_by_class`, with the
+  flat `payload.active` kept beside it.
+
+An older CAM ignores this key and drops it on its next save. The settings then
+come back from the flat maps on the next load, so any difference between two
+classes sharing a name is lost (grades are not affected). Update every computer
+before giving two classes the same assignment name.
+
 ---
 
 ## Part D — `acm_database.json` envelope and concurrency metadata

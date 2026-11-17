@@ -6,6 +6,7 @@ or reimplementing grading policy. It exposes no Streamlit API or persistence API
 """
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import date
 from types import CodeType, FunctionType, SimpleNamespace
 from uuid import UUID
 import hashlib
@@ -131,6 +132,16 @@ def source_snapshot(session, gradebook, scope, source):
     """Detach all evidence, select source members, and normalize copied flags."""
     from .models import Student
     state = deepcopy(session)
+    # Assignment settings are per class: read the SOURCE group's own archive,
+    # date overrides and On/Off maps, not those of whichever class is on screen.
+    scoped = state.get('assignment_state_by_class')
+    if isinstance(scoped, dict):
+        own = scoped.get(source) or {}
+        state['archived'] = list(own.get('archived') or [])
+        state['date_override'] = {
+            name: (date.fromisoformat(value) if isinstance(value, str) else value)
+            for name, value in (own.get('date_override') or {}).items()}
+        state['active_by_term'] = own.get('active_by_term') or {}
     book = deepcopy(gradebook)
     book.assignments = [a for a in book.assignments if a.class_name == source]
     names = {a.name for a in book.assignments}
