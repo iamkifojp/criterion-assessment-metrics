@@ -441,6 +441,131 @@ class SyncTests(_AppBase):
         self.assertEqual(self.gb.assignments, [])
 
 
+class SameExamNameInTwoClassesTests(_AppBase):
+    """One exam sat by two classes under the same name: each class has its own
+    CAM2 session folder, results, record and Sync row, and what is done to the
+    exam in one class leaves the other's alone."""
+
+    OTHER = "Other MYP Class"
+    OTHER_ROSTER = [{"key": "200001", "name": "Chiba Yui"},
+                    {"key": "200002", "name": "Doi Sora"}]
+
+    def setUp(self):
+        super().setUp()
+        self.ss["classes"].append({"name": self.OTHER, "grade": "",
+                                   "myp_year": "", "subject": ""})
+        self.ss["rosters"][self.OTHER] = [dict(e) for e in self.OTHER_ROSTER]
+        self.other_dir = os.path.join(self.root, "db", self.OTHER)
+        self.folder_a = self.hosted(self.marks_session)
+        made = self.make_session(
+            "marks_other", mode="marks",
+            questions=_questions(("q1", "Q1", 5, None), ("q2", "Q2", 5, None)),
+            students=[("s001", "Chiba.pdf", "n001"), ("s002", "Doi.pdf", "n002")],
+            roster=[{"id": "n001", "name": "Chiba Yui", "external_id": "200001"},
+                    {"id": "n002", "name": "Doi Sora", "external_id": "200002"}],
+            grades=[("s001", "q1", 1), ("s001", "q2", 2),
+                    ("s002", "q1", 5), ("s002", "q2", 5)])
+        self.folder_b = os.path.join(self.other_dir, "exams", EXAM)
+        os.makedirs(os.path.dirname(self.folder_b))
+        os.rename(made, self.folder_b)
+
+    def sync_class(self, cls):
+        summary = {"found": 0, "ingested": 0, "updated": 0, "skipped": 0,
+                   "errors": 0, "scores": 0, "classes": set(), "messages": []}
+        app._sync_cam2_sessions(cls, self.ss["ingested_files"], summary)
+        return summary
+
+    def totals(self, cls):
+        self.ss["active_class"] = cls
+        with mock.patch.object(app, "student_label", lambda s: s.student_id):
+            return {s.student_id: r.total for s, r in app._exam_results_for(EXAM)}
+
+    def sync_both(self):
+        for cls in (CLASS, self.OTHER):
+            self.assertEqual(self.sync_class(cls)["ingested"], 1)
+
+    def test_each_class_files_its_own_results(self):
+        self.sync_both()
+        self.assertEqual(sorted((a.name, a.class_name) for a in self.gb.assignments),
+                         [(EXAM, self.OTHER), (EXAM, CLASS)])
+        self.assertEqual(self.totals(CLASS), {"100001": 7, "100002": 10})
+        self.assertEqual(self.totals(self.OTHER), {"200001": 3, "200002": 10})
+        self.assertEqual({cls: m[EXAM]["folder"] for cls, m
+                          in self.ss["exam_sessions"].items()},
+                         {CLASS: EXAM, self.OTHER: EXAM})
+        self.assertNotEqual(self.ss["exam_sessions"][CLASS][EXAM]["session_id"],
+                            self.ss["exam_sessions"][self.OTHER][EXAM]["session_id"])
+        self.assertEqual({rec["class"] for rec in self.ss["ingested_files"].values()},
+                         {CLASS, self.OTHER})
+        self.assertEqual(app.cam2_session_dir(CLASS, EXAM), self.folder_a)
+        self.assertEqual(app.cam2_session_dir(self.OTHER, EXAM), self.folder_b)
+        # The pooled, unmatched paper belongs to the class that scanned it.
+        self.assertIn(EXAM, self.ss["unmatched_works"][CLASS])
+        self.assertNotIn(EXAM, self.ss["unmatched_works"].get(self.OTHER, {}))
+
+    def test_resend_in_one_class_leaves_the_other(self):
+        self.sync_both()
+        session, config, grades = self.storage.open_session(self.folder_a)
+        self.gs.set_grade(config, grades, "s001", "q2", 5)
+        session.grades_file.save(grades)
+        self.assertEqual(self.sync_class(CLASS)["updated"], 1)
+        self.assertEqual(self.sync_class(self.OTHER)["skipped"], 1)
+        self.assertEqual(self.totals(CLASS), {"100001": 12, "100002": 10})
+        self.assertEqual(self.totals(self.OTHER), {"200001": 3, "200002": 10})
+
+    def test_rename_then_delete_in_one_class_leaves_the_other(self):
+        self.sync_both()
+        self.ss["active_class"] = CLASS
+        self.assertTrue(app.rename_assignment(EXAM, "Midterm 8A"))
+        self.assertEqual(sorted((a.name, a.class_name) for a in self.gb.assignments),
+                         [(EXAM, self.OTHER), ("Midterm 8A", CLASS)])
+        self.assertEqual(self.ss["exam_sessions"][CLASS]["Midterm 8A"]["folder"], EXAM)
+        self.assertIn(EXAM, self.ss["exam_sessions"][self.OTHER])
+        self.assertEqual(self.totals(self.OTHER), {"200001": 3, "200002": 10})
+        self.assertEqual(
+            {rec["assignment"] for rec in self.ss["ingested_files"].values()
+             if rec["class"] == self.OTHER}, {EXAM})
+        self.ss["active_class"] = CLASS
+        app.delete_assignment_permanent("Midterm 8A")
+        self.assertFalse(os.path.exists(self.folder_a))
+        self.assertTrue(os.path.isdir(self.folder_b))
+        self.assertEqual([(a.name, a.class_name) for a in self.gb.assignments],
+                         [(EXAM, self.OTHER)])
+        self.assertEqual(self.totals(self.OTHER), {"200001": 3, "200002": 10})
+        self.assertEqual(self.sync_class(self.OTHER)["skipped"], 1)
+
+    def test_delete_in_one_class_while_both_share_the_name(self):
+        self.sync_both()
+        self.ss["active_class"] = self.OTHER
+        app.delete_assignment_permanent(EXAM)
+        self.assertFalse(os.path.exists(self.folder_b))
+        self.assertTrue(os.path.isdir(self.folder_a))
+        self.assertEqual([(a.name, a.class_name) for a in self.gb.assignments],
+                         [(EXAM, CLASS)])
+        self.assertEqual(self.totals(CLASS), {"100001": 7, "100002": 10})
+        self.assertNotIn(EXAM, self.gb.students["200001"].exam_results)
+        self.assertEqual({rec["class"] for rec in self.ss["ingested_files"].values()},
+                         {CLASS})
+
+    def test_opening_the_exam_from_each_class_uses_its_own_folder(self):
+        handoffs = {}
+        for cls in (CLASS, self.OTHER):
+            self.ss["active_class"] = cls
+            started = {}
+            with mock.patch.object(app.subprocess, "Popen", lambda cmd, **kw: (
+                    started.update(cmd=cmd) or SimpleNamespace(poll=lambda: 0))):
+                self.assertIn("opened in CAM2", app.launch_exam_setup(EXAM))
+            handoffs[cls] = exam_bridge.cam2_module("host").load(started["cmd"][5])
+        self.assertEqual(os.path.normcase(handoffs[CLASS]["session_folder"]),
+                         os.path.normcase(self.folder_a))
+        self.assertEqual(os.path.normcase(handoffs[self.OTHER]["session_folder"]),
+                         os.path.normcase(self.folder_b))
+        self.assertEqual([r["external_id"] for r in handoffs[self.OTHER]["roster"]],
+                         ["200001", "200002"])
+        self.assertEqual(handoffs[CLASS]["class_name"], CLASS)
+        self.assertEqual(handoffs[self.OTHER]["class_name"], self.OTHER)
+
+
 class SendPickupTests(_AppBase):
     """CAM2 sends are found by comparing each exam folder with CAM's record,
     so nothing depends on CAM having been open, awake or on that class."""
